@@ -1,0 +1,73 @@
+{
+  "proxy": {
+    "type": "string",
+    "description": "代理地址",
+    "hint": "HTTP/SOCKS 代理地址，留空则不使用代理。例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
+    "default": ""
+  },
+  "default_interval": {
+    "type": "int",
+    "description": "默认监控间隔（分钟）",
+    "hint": "订阅未设置 interval 时使用",
+    "default": 10
+  },
+  "minimal_interval": {
+    "type": "int",
+    "description": "最小监控间隔（分钟）",
+    "hint": "用于限制命令/WebUI 设置 interval 的最小值",
+    "default": 1
+  },
+  "timeout": {
+    "type": "int",
+    "description": "请求超时（秒）",
+    "hint": "获取 RSS 源时的 HTTP 请求超时时间",
+    "default": 30
+  },
+  "download_image_before_send": {
+    "type": "bool",
+    "description": "先下载图片再发送",
+    "hint": "开启后会先下载媒体到本地再推送，避免部分平台对外链重定向导致发送失败",
+    "default": true
+  },
+  "webui": {
+    "description": "WebUI 管理界面配置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用 WebUI",
+        "type": "bool",
+        "default": false,
+        "hint": "⚠️ 开启后会启动 Web 服务器，如果与其他插件端口冲突请修改或关闭"
+      },
+      "host": {
+        "description": "监听地址",
+        "type": "string",
+        "default": "0.0.0.0",
+        "hint": "0.0.0.0=允许外部访问，127.0.0.1=仅本地访问"
+      },
+      "port": {
+        "description": "监听端口",
+        "type": "int",
+        "default": 9191
+      },
+      "auth_enabled": {
+        "description": "启用登录验证",
+        "type": "bool",
+        "default": true,
+        "hint": "✅ 开启：访问需登录（推荐）\n❌ 关闭：无需登录（仅建议内网使用）"
+      },
+      "password": {
+        "description": "访问密码",
+        "type": "string",
+        "default": "",
+        "hint": "仅在登录验证开启时生效。留空将自动生成 6 位随机密码"
+      },
+      "session_timeout": {
+        "description": "会话超时时间/秒",
+        "type": "int",
+        "default": 3600,
+        "hint": "登录会话有效时长，超时需重新登录"
+      }
+    }
+  }
+}

@@ -1,0 +1,150 @@
+:root {
+  --bg: #f6f7fb;
+  --panel: #ffffff;
+  --line: #e2e6ef;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --brand: #2f6feb;
+  --brand-dark: #2457ba;
+  --danger: #c92a2a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2f8 100%);
+  color: var(--text);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.container {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.header {
+  margin-bottom: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 6px 16px rgba(31, 41, 55, 0.06);
+}
+
+.auth-card {
+  margin-bottom: 14px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.row-compact {
+  flex-wrap: wrap;
+}
+
+.input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  width: 100%;
+  color: var(--text);
+  background: #fff;
+}
+
+.btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px 12px;
+  font-weight: 600;
+}
+
+.btn-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--brand-dark);
+}
+
+.btn-danger {
+  color: var(--danger);
+  border-color: #f0d0d0;
+  background: #fff7f7;
+}
+
+.status {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.status-error {
+  color: var(--danger);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.table th,
+.table td {
+  border: 1px solid var(--line);
+  padding: 8px;
+  vertical-align: top;
+}
+
+.table th {
+  background: #f3f6fd;
+  text-align: left;
+  font-size: 13px;
+}
+
+.feed-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.feed-link {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+@media (max-width: 900px) {
+  .container {
+    padding: 12px;
+  }
+
+  .table {
+    font-size: 12px;
+  }
+}

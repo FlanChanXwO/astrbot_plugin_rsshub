@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RSSHub Subscriptions</title>
+  <link rel="stylesheet" href="/static/webui.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <h1 class="title">RSSHub Subscriptions</h1>
+      <p class="subtitle">Manage AstrBot RSS subscriptions with a lightweight panel.</p>
+    </header>
+
+    <section class="card auth-card">
+      <div class="row row-compact">
+        <input id="pwd" class="input" placeholder="Password" />
+        <button class="btn btn-primary" onclick="login()">Login</button>
+        <button class="btn" onclick="loadSubs()">Refresh</button>
+      </div>
+      <div id="status" class="status">Not logged in</div>
+    </section>
+
+    <section class="card table-card">
+      <table id="t" class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Feed</th>
+            <th>User</th>
+            <th>Target</th>
+            <th>Interval</th>
+            <th>Notify</th>
+            <th>Ops</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    let token = "";
+
+    function setStatus(text, err = false) {
+      const el = document.getElementById("status");
+      el.textContent = text;
+      el.className = err ? "status status-error" : "status";
+    }
+
+    async function login() {
+      const password = document.getElementById("pwd").value;
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        token = data.token;
+        setStatus("Login success");
+      } else {
+        setStatus(data.error || "login failed", true);
+      }
+    }
+
+    function buildPayload(tr) {
+      const payload = {};
+      tr.querySelectorAll("input[data-k]").forEach((i) => {
+        payload[i.dataset.k] = i.value;
+      });
+      return payload;
+    }
+
+    async function loadSubs() {
+      const res = await fetch("/api/subscriptions", {
+        headers: { "X-RSS-Token": token },
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setStatus(data.error || "failed", true);
+        return;
+      }
+      const tbody = document.querySelector("#t tbody");
+      tbody.innerHTML = "";
+
+      for (const s of data.items) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${s.id}</td>
+          <td class="feed-cell"><div class="feed-title">${s.feed_title || ""}</div><div class="feed-link">${s.feed_link || ""}</div></td>
+          <td>${s.user_id}</td>
+          <td><input class="input" value="${s.target_session || ""}" data-k="target_session"/></td>
+          <td><input class="input" value="${s.interval ?? ""}" data-k="interval"/></td>
+          <td><input class="input" value="${s.notify}" data-k="notify"/></td>
+          <td>
+            <button class="btn btn-primary" data-op="save">Save</button>
+            <button class="btn btn-danger" data-op="del">Delete</button>
+          </td>
+        `;
+
+        tr.querySelector('[data-op="save"]').onclick = async () => {
+          const payload = buildPayload(tr);
+          const r = await fetch(`/api/subscriptions/${s.id}`, {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+              "X-RSS-Token": token,
+            },
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json();
+          setStatus(d.ok ? `Saved #${s.id}` : d.error || "save failed", !d.ok);
+        };
+
+        tr.querySelector('[data-op="del"]').onclick = async () => {
+          const r = await fetch(`/api/subscriptions/${s.id}`, {
+            method: "DELETE",
+            headers: { "X-RSS-Token": token },
+          });
+          const d = await r.json();
+          if (d.ok) {
+            setStatus(`Deleted #${s.id}`);
+            loadSubs();
+          } else {
+            setStatus(d.error || "delete failed", true);
+          }
+        };
+
+        tbody.appendChild(tr);
+      }
+      setStatus(`Loaded ${data.items.length} subscriptions`);
+    }
+  </script>
+</body>
+</html>

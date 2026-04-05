@@ -1,0 +1,586 @@
+# ruff: noqa: UP037
+"""RSS-to-AstrBot Database Models
+基于 RSS-to-Telegram-Bot 移植，使用 SQLModel 替代 tortoise-orm
+"""
+
+import os
+from datetime import datetime
+
+from sqlalchemy import JSON, Column
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import registry, selectinload
+from sqlmodel import Field, Relationship, SQLModel
+
+from astrbot.api import logger
+
+_plugin_registry = registry()
+
+
+class RSSHubModel(SQLModel, registry=_plugin_registry):
+    pass
+
+
+INHERIT_VALUE = -100
+EFFECTIVE_OPTION_KEYS = (
+    "notify",
+    "send_mode",
+    "length_limit",
+    "link_preview",
+    "display_author",
+    "display_via",
+    "display_title",
+    "display_entry_tags",
+    "style",
+    "display_media",
+)
+
+
+class User(RSSHubModel, table=True):
+    """用户模型，存储用户信息及其默认订阅选项。"""
+
+    __tablename__ = "rsshub_user"
+    id: int = Field(default=None, primary_key=True, description="用户ID")
+    state: int = Field(
+        default=0, description="用户状态: -1=封禁, 0=访客, 1=用户, 100=管理员"
+    )
+    lang: str = Field(default="zh-Hans", max_length=16, description="偏好语言")
+    sub_limit: int | None = Field(default=None, description="订阅数量限制")
+
+    interval: int | None = Field(default=None, description="监控间隔")
+    notify: int = Field(default=1, description="是否通知: 0=禁用, 1=启用")
+    send_mode: int = Field(
+        default=0, description="发送模式: -1=仅链接, 0=自动, 1=Telegraph, 2=直接消息"
+    )
+    length_limit: int = Field(default=0, description="长度限制")
+    link_preview: int = Field(default=0, description="链接预览: 0=自动, 1=强制启用")
+    display_author: int = Field(
+        default=0, description="显示作者: -1=禁用, 0=自动, 1=强制"
+    )
+    display_via: int = Field(
+        default=0, description="显示来源: -2=完全禁用, -1=仅链接, 0=自动, 1=强制"
+    )
+    display_title: int = Field(
+        default=0, description="显示标题: -1=禁用, 0=自动, 1=强制"
+    )
+    display_entry_tags: int = Field(default=-1, description="显示标签")
+    style: int = Field(default=0, description="样式: 0=RSStT, 1=flowerss")
+    display_media: int = Field(default=0, description="显示媒体: -1=禁用, 0=启用")
+    default_target_session: str | None = Field(
+        default=None,
+        max_length=255,
+        description="默认推送目标会话(unified_msg_origin)",
+    )
+    needs_binding_notice: int = Field(default=0, description="是否需要提示绑定推送目标")
+
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="创建时间"
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow},
+        description="更新时间",
+    )
+
+    subs: list["Sub"] = Relationship(back_populates="user")
+
+
+class Feed(RSSHubModel, table=True):
+    """Feed模型，存储RSS源信息。"""
+
+    __tablename__ = "rsshub_feed"
+    id: int | None = Field(default=None, primary_key=True)
+    state: int = Field(default=1, description="Feed状态: 0=停用, 1=启用")
+    link: str = Field(max_length=4096, unique=True, description="Feed链接")
+    title: str = Field(max_length=1024, description="Feed标题")
+    interval: int | None = Field(default=None, description="监控间隔")
+    entry_hashes: list[str] | None = Field(
+        default=None, sa_column=Column(JSON), description="条目哈希"
+    )
+    etag: str | None = Field(default=None, max_length=128, description="ETag")
+    last_modified: datetime | None = Field(default=None, description="最后修改时间")
+    error_count: int = Field(default=0, description="错误计数")
+    next_check_time: datetime | None = Field(default=None, description="下次检查时间")
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow},
+    )
+
+    subs: list["Sub"] = Relationship(back_populates="feed")
+
+
+class Sub(RSSHubModel, table=True):
+    """订阅模型，存储用户订阅信息。"""
+
+    __tablename__ = "rsshub_sub"
+    id: int | None = Field(default=None, primary_key=True)
+    state: int = Field(default=1, description="订阅状态: 0=停用, 1=启用")
+
+    user_id: int = Field(foreign_key="rsshub_user.id", description="用户ID")
+    feed_id: int = Field(foreign_key="rsshub_feed.id", description="FeedID")
+
+    title: str | None = Field(default=None, max_length=1024, description="订阅标题")
+    tags: str | None = Field(default=None, max_length=255, description="标签")
+    target_session: str | None = Field(
+        default=None,
+        max_length=255,
+        description="订阅推送目标会话(unified_msg_origin)",
+    )
+    platform_name: str | None = Field(
+        default=None,
+        max_length=64,
+        description="平台类型名(如 telegram, aiocqhttp)，用于选择最优发送策略",
+    )
+
+    interval: int | None = Field(default=None, description="监控间隔")
+    notify: int = Field(default=INHERIT_VALUE, description="是否通知")
+    send_mode: int = Field(default=INHERIT_VALUE, description="发送模式")
+    length_limit: int = Field(default=INHERIT_VALUE, description="长度限制")
+    link_preview: int = Field(default=INHERIT_VALUE, description="链接预览")
+    display_author: int = Field(default=INHERIT_VALUE, description="显示作者")
+    display_via: int = Field(default=INHERIT_VALUE, description="显示来源")
+    display_title: int = Field(default=INHERIT_VALUE, description="显示标题")
+    display_entry_tags: int = Field(default=INHERIT_VALUE, description="显示标签")
+    style: int = Field(default=INHERIT_VALUE, description="样式")
+    display_media: int = Field(default=INHERIT_VALUE, description="显示媒体")
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow},
+    )
+
+    user: "User" = Relationship(back_populates="subs")
+    feed: "Feed" = Relationship(back_populates="subs")
+
+
+class MonitorSchedule(RSSHubModel, table=True):
+    """Per-subscription monitor schedule state for interval-based polling."""
+
+    __tablename__ = "rsshub_monitor_schedule"
+    sub_id: int = Field(default=None, primary_key=True, description="Subscription ID")
+    next_check_time: datetime | None = Field(
+        default=None, description="Next check time"
+    )
+    error_count: int = Field(default=0, description="Consecutive error count")
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow},
+    )
+
+
+class Option(RSSHubModel, table=True):
+    """选项模型，存储管理员设置的选项。"""
+
+    __tablename__ = "rsshub_option"
+    id: int | None = Field(default=None, primary_key=True)
+    key: str = Field(max_length=255, unique=True, description="选项键")
+    value: str | None = Field(default=None, description="选项值")
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow},
+    )
+
+
+_engine = None
+_session_maker = None
+
+
+async def init_db(db_path: str) -> None:
+    """初始化数据库。"""
+    global _engine, _session_maker
+
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    _engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    _session_maker = async_sessionmaker(
+        _engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+    async with _engine.begin() as conn:
+        await conn.run_sync(RSSHubModel.metadata.create_all)
+        await _ensure_schema_compat(conn)
+
+    logger.info(f"RSS数据库初始化完成: {db_path}")
+
+
+async def close_db() -> None:
+    """关闭数据库连接。"""
+    global _engine
+    if _engine:
+        await _engine.dispose()
+        logger.info("RSS数据库连接已关闭")
+
+
+def get_session() -> AsyncSession:
+    """获取数据库会话。"""
+    if _session_maker is None:
+        raise RuntimeError("数据库未初始化")
+    return _session_maker()
+
+
+def resolve_effective_options(
+    sub: "Sub",
+    user: "User",
+) -> dict[str, int]:
+    """解析订阅生效选项：订阅值优先，-100 继承用户默认。"""
+    options: dict[str, int] = {}
+    for key in EFFECTIVE_OPTION_KEYS:
+        sub_val = getattr(sub, key)
+        options[key] = getattr(user, key) if sub_val == INHERIT_VALUE else sub_val
+    return options
+
+
+async def _ensure_schema_compat(conn) -> None:
+    """为旧数据库补齐迁移过程尚未纳入的新增列。"""
+
+    async def _has_column(table: str, column: str) -> bool:
+        rows = (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
+        return any(row[1] == column for row in rows)
+
+    if not await _has_column("rsshub_sub", "target_session"):
+        await conn.exec_driver_sql(
+            "ALTER TABLE rsshub_sub ADD COLUMN target_session TEXT"
+        )
+
+    if not await _has_column("rsshub_user", "default_target_session"):
+        await conn.exec_driver_sql(
+            "ALTER TABLE rsshub_user ADD COLUMN default_target_session TEXT"
+        )
+
+    if not await _has_column("rsshub_user", "needs_binding_notice"):
+        await conn.exec_driver_sql(
+            "ALTER TABLE rsshub_user ADD COLUMN needs_binding_notice INTEGER NOT NULL DEFAULT 0"
+        )
+
+    if not await _has_column("rsshub_sub", "platform_name"):
+        await conn.exec_driver_sql(
+            "ALTER TABLE rsshub_sub ADD COLUMN platform_name TEXT"
+        )
+
+
+class SubMethods:
+    """Sub辅助方法。"""
+
+    @staticmethod
+    async def create(
+        user_id: int,
+        feed_id: int,
+        target_session: str | None = None,
+        platform_name: str | None = None,
+    ) -> Sub:
+        async with get_session() as session:
+            sub = Sub(
+                user_id=user_id,
+                feed_id=feed_id,
+                target_session=target_session,
+                platform_name=platform_name,
+            )
+            session.add(sub)
+            await session.commit()
+            await session.refresh(sub)
+            return sub
+
+    @staticmethod
+    async def get_by_user(user_id: int) -> list[Sub]:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .where(Sub.user_id == user_id, Sub.state == 1)
+                .options(selectinload(Sub.feed))
+                .order_by(Sub.id.asc())
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_id(sub_id: int) -> Sub | None:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .where(Sub.id == sub_id, Sub.state == 1)
+                .options(selectinload(Sub.feed), selectinload(Sub.user))
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_id_and_user(sub_id: int, user_id: int) -> Sub | None:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = select(Sub).where(Sub.id == sub_id, Sub.user_id == user_id)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_user_and_link(
+        user_id: int,
+        feed_link: str,
+        target_session: str | None = None,
+    ) -> Sub | None:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .join(Feed)
+                .where(Sub.user_id == user_id, Feed.link == feed_link)
+            )
+            if target_session is not None:
+                stmt = stmt.where(Sub.target_session == target_session)
+            result = await session.execute(stmt)
+            sub = result.scalar_one_or_none()
+            if sub and sub.feed_id:
+                sub.feed = await session.get(Feed, sub.feed_id)
+            return sub
+
+    @staticmethod
+    async def delete(sub: Sub) -> None:
+        async with get_session() as session:
+            db_sub = await session.get(Sub, sub.id)
+            if db_sub:
+                await session.delete(db_sub)
+                if db_sub.id is not None:
+                    monitor = await session.get(MonitorSchedule, db_sub.id)
+                    if monitor is not None:
+                        await session.delete(monitor)
+                await session.commit()
+
+    @staticmethod
+    async def delete_all_by_user(user_id: int) -> int:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = select(Sub).where(Sub.user_id == user_id)
+            result = await session.execute(stmt)
+            subs = list(result.scalars().all())
+            count = len(subs)
+            for sub in subs:
+                await session.delete(sub)
+                if sub.id is not None:
+                    monitor = await session.get(MonitorSchedule, sub.id)
+                    if monitor is not None:
+                        await session.delete(monitor)
+            if count > 0:
+                await session.commit()
+            return count
+
+    @staticmethod
+    async def update_options(sub_id: int, user_id: int, **kwargs) -> Sub | None:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = select(Sub).where(Sub.id == sub_id, Sub.user_id == user_id)
+            result = await session.execute(stmt)
+            sub = result.scalar_one_or_none()
+            if not sub:
+                return None
+            for key, value in kwargs.items():
+                if hasattr(sub, key):
+                    setattr(sub, key, value)
+            session.add(sub)
+            await session.commit()
+            await session.refresh(sub)
+            return sub
+
+
+class UserMethods:
+    """User辅助方法。"""
+
+    @staticmethod
+    async def get_or_create(user_id: int) -> User:
+        async with get_session() as session:
+            user = await session.get(User, user_id)
+            if not user:
+                user = User(id=user_id)
+                session.add(user)
+                await session.commit()
+                await session.refresh(user)
+            return user
+
+    @staticmethod
+    async def update_defaults(user_id: int, **kwargs) -> User:
+        async with get_session() as session:
+            user = await session.get(User, user_id)
+            if not user:
+                user = User(id=user_id)
+            for key, value in kwargs.items():
+                if hasattr(user, key):
+                    setattr(user, key, value)
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            return user
+
+    @staticmethod
+    async def set_default_target(user_id: int, target_session: str) -> User:
+        return await UserMethods.update_defaults(
+            user_id,
+            default_target_session=target_session,
+            needs_binding_notice=0,
+        )
+
+    @staticmethod
+    async def mark_binding_notice(user_id: int) -> User:
+        return await UserMethods.update_defaults(user_id, needs_binding_notice=1)
+
+    @staticmethod
+    async def consume_binding_notice(user_id: int) -> bool:
+        async with get_session() as session:
+            user = await session.get(User, user_id)
+            if not user or user.needs_binding_notice == 0:
+                return False
+            user.needs_binding_notice = 0
+            session.add(user)
+            await session.commit()
+            return True
+
+
+class FeedMethods:
+    """Feed辅助方法。"""
+
+    @staticmethod
+    async def get_or_create(link: str, title: str = "") -> Feed:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = select(Feed).where(Feed.link == link)
+            result = await session.execute(stmt)
+            feed = result.scalar_one_or_none()
+
+            if not feed:
+                feed = Feed(link=link, title=title[:1024] if title else link)
+                session.add(feed)
+                await session.commit()
+                await session.refresh(feed)
+            return feed
+
+    @staticmethod
+    async def get_by_id(feed_id: int) -> Feed | None:
+        async with get_session() as session:
+            return await session.get(Feed, feed_id)
+
+
+class MonitorScheduleMethods:
+    """MonitorSchedule helper methods."""
+
+    @staticmethod
+    async def get(sub_id: int) -> MonitorSchedule | None:
+        async with get_session() as session:
+            return await session.get(MonitorSchedule, sub_id)
+
+    @staticmethod
+    async def get_or_create(sub_id: int) -> MonitorSchedule:
+        async with get_session() as session:
+            row = await session.get(MonitorSchedule, sub_id)
+            if row is None:
+                row = MonitorSchedule(sub_id=sub_id)
+                session.add(row)
+                await session.commit()
+                await session.refresh(row)
+            return row
+
+    @staticmethod
+    async def upsert(
+        sub_id: int,
+        *,
+        next_check_time: datetime | None,
+        error_count: int,
+    ) -> MonitorSchedule:
+        async with get_session() as session:
+            row = await session.get(MonitorSchedule, sub_id)
+            if row is None:
+                row = MonitorSchedule(sub_id=sub_id)
+            row.next_check_time = next_check_time
+            row.error_count = error_count
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            return row
+
+    @staticmethod
+    async def delete(sub_id: int) -> None:
+        async with get_session() as session:
+            row = await session.get(MonitorSchedule, sub_id)
+            if row is not None:
+                await session.delete(row)
+                await session.commit()
+
+
+class WebUIMethods:
+    """Helper methods used by plugin webui."""
+
+    @staticmethod
+    async def list_subscriptions(limit: int = 500) -> list[Sub]:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .where(Sub.state == 1)
+                .options(selectinload(Sub.feed), selectinload(Sub.user))
+                .order_by(Sub.id.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def get_subscription(sub_id: int) -> Sub | None:
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .where(Sub.id == sub_id, Sub.state == 1)
+                .options(selectinload(Sub.feed), selectinload(Sub.user))
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    async def delete_subscription(sub_id: int) -> bool:
+        async with get_session() as session:
+            row = await session.get(Sub, sub_id)
+            if row is None:
+                return False
+            await session.delete(row)
+            monitor = await session.get(MonitorSchedule, sub_id)
+            if monitor is not None:
+                await session.delete(monitor)
+            await session.commit()
+            return True
+
+
+User.get_or_create = staticmethod(UserMethods.get_or_create)
+User.update_defaults = staticmethod(UserMethods.update_defaults)
+User.set_default_target = staticmethod(UserMethods.set_default_target)
+User.mark_binding_notice = staticmethod(UserMethods.mark_binding_notice)
+User.consume_binding_notice = staticmethod(UserMethods.consume_binding_notice)
+Feed.get_or_create = staticmethod(FeedMethods.get_or_create)
+Feed.get_by_id = staticmethod(FeedMethods.get_by_id)
+Sub.create = staticmethod(SubMethods.create)
+Sub.get_by_user = staticmethod(SubMethods.get_by_user)
+Sub.get_by_id = staticmethod(SubMethods.get_by_id)
+Sub.get_by_id_and_user = staticmethod(SubMethods.get_by_id_and_user)
+Sub.get_by_user_and_link = staticmethod(SubMethods.get_by_user_and_link)
+Sub.delete = staticmethod(SubMethods.delete)
+Sub.delete_all_by_user = staticmethod(SubMethods.delete_all_by_user)
+Sub.update_options = staticmethod(SubMethods.update_options)
+Sub.resolve_effective_options = staticmethod(resolve_effective_options)
+Sub.list_for_webui = staticmethod(WebUIMethods.list_subscriptions)
+Sub.get_for_webui = staticmethod(WebUIMethods.get_subscription)
+Sub.delete_for_webui = staticmethod(WebUIMethods.delete_subscription)
+MonitorSchedule.get = staticmethod(MonitorScheduleMethods.get)
+MonitorSchedule.get_or_create = staticmethod(MonitorScheduleMethods.get_or_create)
+MonitorSchedule.upsert = staticmethod(MonitorScheduleMethods.upsert)
+MonitorSchedule.delete = staticmethod(MonitorScheduleMethods.delete)

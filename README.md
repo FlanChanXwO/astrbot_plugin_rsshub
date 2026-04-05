@@ -1,14 +1,65 @@
-# astrbot-plugin-helloworld
+# astrbot_plugin_rsshub
 
-AstrBot 插件模板 / A template plugin for AstrBot plugin feature
+AstrBot RSS 订阅插件，基于 `RSS-to-Telegram-Bot` 迁移并适配 AstrBot 多平台消息发送。
 
-> [!NOTE]
-> This repo is just a template of [AstrBot](https://github.com/AstrBotDevs/AstrBot) Plugin.
-> 
-> [AstrBot](https://github.com/AstrBotDevs/AstrBot) is an agentic assistant for both personal and group conversations. It can be deployed across dozens of mainstream instant messaging platforms, including QQ, Telegram, Feishu, DingTalk, Slack, LINE, Discord, Matrix, etc. In addition, it provides a reliable and extensible conversational AI infrastructure for individuals, developers, and teams. Whether you need a personal AI companion, an intelligent customer support agent, an automation assistant, or an enterprise knowledge base, AstrBot enables you to quickly build AI applications directly within your existing messaging workflows.
+## 当前能力
 
-# Supports
+- RSS/Atom 订阅、取消订阅、订阅列表
+- 订阅级/会话级 interval 调度（同一 feed 在不同会话可使用不同检查间隔）
+- 基于 HTML 结构解析内容（链接、图片、音频、视频、文件、At 组件等）
+- 订阅级与用户默认级的消息格式选项
+- 会话级默认配置（KV）
+- LLM 工具调用（除 `sub_test` 外）
+- 可选 aiohttp WebUI 管理界面
 
-- [AstrBot Repo](https://github.com/AstrBotDevs/AstrBot)
-- [AstrBot Plugin Development Docs (Chinese)](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [AstrBot Plugin Development Docs (English)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
+## 命令
+
+- `/sub <RSS链接> [目标]`: 新增订阅，目标可选 `private`/`group`/`current`/完整 session
+- `/sub_bind <目标>`: 绑定当前用户默认推送目标
+- `/unsub <订阅ID>`: 删除单个订阅
+- `/unsub_all yes`: 删除当前用户全部订阅
+- `/sub_list`: 查看当前用户订阅列表
+- `/sub_set <订阅ID> <选项> <值>`: 设置单个订阅选项（支持 `target_session`）
+- `/sub_set_default <选项> <值>`: 设置用户默认选项
+- `/sub_session_default_set <key> <value>`: 设置会话级订阅默认项（新订阅自动继承）
+- `/sub_session_default_get`: 查看当前会话默认项
+- `/rss_conf [key] [value]`: 查看/设置插件级配置（`proxy/default_interval/minimal_interval/timeout`）
+- `/sub_test <订阅ID> [...]`: 管理员手动触发测试推送
+- `/rsshelp`: 查看帮助
+
+## 可配置选项
+
+- 订阅级选项：`notify/send_mode/length_limit/link_preview/display_author/display_via/display_title/display_entry_tags/style/display_media/interval/title/tags/target_session`
+- 用户默认选项：`notify/send_mode/length_limit/link_preview/display_author/display_via/display_title/display_entry_tags/style/display_media/interval`
+- 会话默认选项：`notify/send_mode/length_limit/link_preview/display_author/display_via/display_title/display_entry_tags/style/display_media/interval/title/tags`
+
+## LLM 工具
+
+- `rss_subscribe`
+- `rss_unsubscribe`
+- `rss_unsubscribe_all`
+- `rss_list_subscriptions`
+- `rss_set_subscription_option`
+- `rss_set_user_default_option`
+- `rss_bind_default_target`
+- `rss_get_plugin_config`
+- `rss_set_plugin_config`
+- `rss_set_session_default_option`
+- `rss_get_session_defaults`
+
+## WebUI
+
+- 在插件配置 `webui.enabled=true` 后自动启动
+- 默认地址：`http://0.0.0.0:9191`
+- 主要接口：
+  - `GET /` 页面
+  - `POST /api/login`
+  - `GET /api/subscriptions`
+  - `PATCH /api/subscriptions/{sub_id}`
+  - `DELETE /api/subscriptions/{sub_id}`
+
+## 调度说明
+
+- 调度粒度是订阅（Sub），不是 Feed。
+- 同一 feed 可能有多个订阅，各订阅按自己的生效 interval 进入调度。
+- 同一分钟内同一 feed 的多个到期订阅只抓取一次，然后分发给对应订阅。

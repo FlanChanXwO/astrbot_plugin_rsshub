@@ -11,7 +11,7 @@ class AiocqhttpMessageSender(MessageSender):
 
     @classmethod
     def _build_node(cls, sender_id: str, nickname: str, chain: list):
-        return Node(content=chain,  name=nickname)
+        return Node(content=chain, name=nickname)
 
     @classmethod
     async def send_to_user(

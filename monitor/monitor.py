@@ -179,7 +179,9 @@ class RSSMonitor:
 
         feed_updated_fields: set[str] = set()
         # 调度操作延迟到 session commit 之后执行
-        schedule_action: tuple[str, str | None] | None = None  # ("success" | "error", reason)
+        schedule_action: tuple[str, str | None] | None = (
+            None  # ("success" | "error", reason)
+        )
 
         try:
             if wf.status == 304:
@@ -187,7 +189,10 @@ class RSSMonitor:
                 self._stat.cached()
 
             elif rss_d is None:
-                schedule_action = ("error", wf.error.error_name if wf.error else "未知错误")
+                schedule_action = (
+                    "error",
+                    wf.error.error_name if wf.error else "未知错误",
+                )
                 if self._all_subs_blocked(subs):
                     feed.state = 0
                     feed_updated_fields.add("state")
@@ -215,7 +220,8 @@ class RSSMonitor:
                 if not old_hashes:
                     feed.last_modified = wf.last_modified
                     feed.entry_hashes = (
-                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100))) or None
+                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
+                        or None
                     )
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
                     schedule_action = ("success", None)
@@ -227,10 +233,13 @@ class RSSMonitor:
                     self._stat.not_updated()
 
                 else:
-                    logger.info(f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)")
+                    logger.info(
+                        f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
+                    )
                     feed.last_modified = wf.last_modified
                     feed.entry_hashes = (
-                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100))) or None
+                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
+                        or None
                     )
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
 
@@ -242,7 +251,9 @@ class RSSMonitor:
                         timeout_seconds=self.config.timeout if self.config else 30,
                         proxy=self.config.proxy if self.config else "",
                         download_media_before_send=(
-                            self.config.download_image_before_send if self.config else True
+                            self.config.download_image_before_send
+                            if self.config
+                            else True
                         ),
                     ).notify_all()
                     schedule_action = ("success", None)

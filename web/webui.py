@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import secrets
 import time
@@ -104,11 +103,14 @@ class RSSHubWebUI:
         if not self._auth_enabled:
             return self._json_response({"ok": True, "token": "no-auth"})
 
-        data = await request.json()
+        try:
+            data = await request.json()
+        except Exception:
+            return self._json_response(
+                {"ok": False, "error": "invalid_json"}, status=400
+            )
         password = str(data.get("password", ""))
-        hashed_input = hashlib.sha256(password.encode()).hexdigest()
-        hashed_saved = hashlib.sha256(self._password.encode()).hexdigest()
-        if hashed_input != hashed_saved:
+        if not secrets.compare_digest(password, self._password):
             return self._json_response(
                 {"ok": False, "error": "invalid_password"},
                 status=401,
@@ -157,8 +159,20 @@ class RSSHubWebUI:
         if unauthorized:
             return unauthorized
 
-        sub_id = int(request.match_info["sub_id"])
-        data = await request.json()
+        try:
+            sub_id = int(request.match_info["sub_id"])
+        except (ValueError, KeyError):
+            return self._json_response(
+                {"ok": False, "error": "invalid_sub_id"}, status=400
+            )
+
+        try:
+            data = await request.json()
+        except Exception:
+            return self._json_response(
+                {"ok": False, "error": "invalid_json"}, status=400
+            )
+
         sub = await Sub.get_for_webui(sub_id)
         if not sub:
             return self._json_response(
@@ -182,12 +196,32 @@ class RSSHubWebUI:
         }
         str_keys = {"target_session", "tags", "title"}
 
+        plugin_config = getattr(self._plugin, "config", None)
+        minimal_interval = int(
+            getattr(plugin_config, "minimal_interval", 1) if plugin_config else 1
+        )
+
         for key, value in data.items():
             if key in int_keys:
                 if value in (None, ""):
                     patch[key] = None if key == "interval" else -100
                 else:
-                    patch[key] = int(value)
+                    try:
+                        int_value = int(value)
+                    except (ValueError, TypeError):
+                        return self._json_response(
+                            {"ok": False, "error": f"invalid_value for {key}"},
+                            status=400,
+                        )
+                    if key == "interval" and int_value < minimal_interval:
+                        return self._json_response(
+                            {
+                                "ok": False,
+                                "error": f"interval must be >= {minimal_interval}",
+                            },
+                            status=400,
+                        )
+                    patch[key] = int_value
             elif key in str_keys:
                 patch[key] = str(value) if value is not None else None
 

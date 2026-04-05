@@ -251,6 +251,7 @@ class MessageSender:
         message: str,
         media: list[tuple[str, str]] | None = None,
         prepared_media: list[PreparedMedia] | None = None,
+        context: object | None = None,
     ) -> SendResult:
         try:
             image_components = []

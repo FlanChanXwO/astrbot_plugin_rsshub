@@ -87,20 +87,73 @@
 
       for (const s of data.items) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${s.id}</td>
-          <td class="feed-cell"><div class="feed-title">${s.feed_title || ""}</div><div class="feed-link">${s.feed_link || ""}</div></td>
-          <td>${s.user_id}</td>
-          <td><input class="input" value="${s.target_session || ""}" data-k="target_session"/></td>
-          <td><input class="input" value="${s.interval ?? ""}" data-k="interval"/></td>
-          <td><input class="input" value="${s.notify}" data-k="notify"/></td>
-          <td>
-            <button class="btn btn-primary" data-op="save">Save</button>
-            <button class="btn btn-danger" data-op="del">Delete</button>
-          </td>
-        `;
 
-        tr.querySelector('[data-op="save"]').onclick = async () => {
+        // ID cell
+        const tdId = document.createElement("td");
+        tdId.textContent = s.id;
+
+        // Feed cell (untrusted: escape feed title/link)
+        const tdFeed = document.createElement("td");
+        tdFeed.className = "feed-cell";
+        const divTitle = document.createElement("div");
+        divTitle.className = "feed-title";
+        divTitle.textContent = s.feed_title || "";
+        const divLink = document.createElement("div");
+        divLink.className = "feed-link";
+        divLink.textContent = s.feed_link || "";
+        tdFeed.appendChild(divTitle);
+        tdFeed.appendChild(divLink);
+
+        // User cell
+        const tdUser = document.createElement("td");
+        tdUser.textContent = s.user_id;
+
+        // Target session input (value set via property, not innerHTML)
+        const tdTarget = document.createElement("td");
+        const inputTarget = document.createElement("input");
+        inputTarget.className = "input";
+        inputTarget.value = s.target_session || "";
+        inputTarget.dataset.k = "target_session";
+        tdTarget.appendChild(inputTarget);
+
+        // Interval input
+        const tdInterval = document.createElement("td");
+        const inputInterval = document.createElement("input");
+        inputInterval.className = "input";
+        inputInterval.value = s.interval ?? "";
+        inputInterval.dataset.k = "interval";
+        tdInterval.appendChild(inputInterval);
+
+        // Notify input
+        const tdNotify = document.createElement("td");
+        const inputNotify = document.createElement("input");
+        inputNotify.className = "input";
+        inputNotify.value = s.notify;
+        inputNotify.dataset.k = "notify";
+        tdNotify.appendChild(inputNotify);
+
+        // Action buttons
+        const tdOps = document.createElement("td");
+        const btnSave = document.createElement("button");
+        btnSave.className = "btn btn-primary";
+        btnSave.dataset.op = "save";
+        btnSave.textContent = "Save";
+        const btnDel = document.createElement("button");
+        btnDel.className = "btn btn-danger";
+        btnDel.dataset.op = "del";
+        btnDel.textContent = "Delete";
+        tdOps.appendChild(btnSave);
+        tdOps.appendChild(btnDel);
+
+        tr.appendChild(tdId);
+        tr.appendChild(tdFeed);
+        tr.appendChild(tdUser);
+        tr.appendChild(tdTarget);
+        tr.appendChild(tdInterval);
+        tr.appendChild(tdNotify);
+        tr.appendChild(tdOps);
+
+        btnSave.onclick = async () => {
           const payload = buildPayload(tr);
           const r = await fetch(`/api/subscriptions/${s.id}`, {
             method: "PATCH",
@@ -114,7 +167,7 @@
           setStatus(d.ok ? `Saved #${s.id}` : d.error || "save failed", !d.ok);
         };
 
-        tr.querySelector('[data-op="del"]').onclick = async () => {
+        btnDel.onclick = async () => {
           const r = await fetch(`/api/subscriptions/${s.id}`, {
             method: "DELETE",
             headers: { "X-RSS-Token": token },

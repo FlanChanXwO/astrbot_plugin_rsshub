@@ -13,6 +13,7 @@ from email.utils import format_datetime
 from itertools import chain, islice, repeat
 from typing import TYPE_CHECKING, Final
 
+from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from astrbot.api import logger
@@ -114,12 +115,20 @@ class RSSMonitor:
         """监控一批订阅，并对同一 feed 进行抓取复用。"""
         try:
             async with get_session() as session:
-                due_subs: list[Sub] = []
                 now = datetime.now(timezone.utc)
 
-                for sub_id in sub_ids:
-                    sub = await Sub.get_by_id(sub_id)
-                    if not sub or not sub.feed or sub.state != 1:
+                # Batch-fetch all subs with their feeds in a single query
+                stmt = (
+                    select(Sub)
+                    .where(Sub.id.in_(sub_ids), Sub.state == 1)
+                    .options(selectinload(Sub.feed))
+                )
+                result = await session.execute(stmt)
+                all_subs = list(result.scalars().all())
+
+                due_subs: list[Sub] = []
+                for sub in all_subs:
+                    if not sub.feed:
                         continue
                     if await self._is_sub_due(sub, now):
                         due_subs.append(sub)
@@ -135,8 +144,8 @@ class RSSMonitor:
                         continue
                     by_feed.setdefault(sub.feed_id, []).append(sub)
 
-                for feed_id, feed_subs in by_feed.items():
-                    feed = await Feed.get_by_id(feed_id)
+                for feed_subs in by_feed.values():
+                    feed = feed_subs[0].feed  # already loaded via selectinload
                     if not feed or feed.state != 1:
                         continue
                     await self._monitor_feed_with_subs(session, feed, feed_subs)
@@ -396,6 +405,3 @@ class MonitorStat:
                 f"RSS监控统计: 更新={self.updated_count}, 缓存={self.cached_count}, "
                 f"失败={self.failed_count}, 跳过={self.skipped_count}"
             )
-
-
-Monitor = RSSMonitor()

@@ -16,6 +16,7 @@ class TelegramMessageSender(MessageSender):
         message: str,
         media: list[tuple[str, str]] | None = None,
         prepared_media: list[PreparedMedia] | None = None,
+        context: object | None = None,
     ) -> SendResult:
         if not media and not prepared_media:
             return await super().send_to_user(session_id, message, media)

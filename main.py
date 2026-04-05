@@ -505,9 +505,14 @@ class RSSHubPlugin(Star):
         if caster is str:
             return value.strip()
         try:
-            return caster(value)
+            parsed = caster(value)
         except ValueError as ex:
             raise ValueError(f"选项 {key} 需要数字值") from ex
+        if key == "interval" and self.config is not None:
+            minimal = self.config.minimal_interval
+            if parsed < minimal:
+                raise ValueError(f"interval 不能小于 minimal_interval ({minimal})")
+        return parsed
 
     async def _get_session_defaults(self, session_id: str) -> dict[str, int | str]:
         raw = await self.get_kv_data(f"{SESSION_DEFAULT_KV_PREFIX}{session_id}", {})

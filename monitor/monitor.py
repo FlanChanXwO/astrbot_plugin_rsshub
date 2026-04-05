@@ -178,83 +178,99 @@ class RSSMonitor:
         rss_d = wf.rss_d
 
         feed_updated_fields: set[str] = set()
+        # 调度操作延迟到 session commit 之后执行
+        schedule_action: tuple[str, str | None] | None = (
+            None  # ("success" | "error", reason)
+        )
 
         try:
             if wf.status == 304:
-                await self._schedule_after_success(subs)
+                schedule_action = ("success", None)
                 self._stat.cached()
-                return
 
-            if rss_d is None:
-                await self._schedule_after_error(
-                    subs, wf.error.error_name if wf.error else "未知错误"
+            elif rss_d is None:
+                schedule_action = (
+                    "error",
+                    wf.error.error_name if wf.error else "未知错误",
                 )
                 if self._all_subs_blocked(subs):
                     feed.state = 0
                     feed_updated_fields.add("state")
                 self._stat.failed()
-                return
 
-            if (etag := wf.etag) != feed.etag:
-                feed.etag = etag
-                feed_updated_fields.add("etag")
-
-            if not rss_d.entries:
-                await self._schedule_after_success(subs)
+            elif not rss_d.entries:
+                schedule_action = ("success", None)
                 self._stat.empty()
-                return
 
-            title = rss_d.feed.get("title", "")
-            if title and title != feed.title:
-                feed.title = title[:1024]
-                feed_updated_fields.add("title")
+            else:
+                if (etag := wf.etag) != feed.etag:
+                    feed.etag = etag
+                    feed_updated_fields.add("etag")
 
-            old_hashes = feed.entry_hashes or []
-            new_hashes, updated_entries = self._calculate_update(
-                old_hashes, rss_d.entries
-            )
+                title = rss_d.feed.get("title", "")
+                if title and title != feed.title:
+                    feed.title = title[:1024]
+                    feed_updated_fields.add("title")
 
-            if not old_hashes:
-                feed.last_modified = wf.last_modified
-                feed.entry_hashes = (
-                    list(islice(new_hashes, max(len(rss_d.entries) * 2, 100))) or None
+                old_hashes = feed.entry_hashes or []
+                new_hashes, updated_entries = self._calculate_update(
+                    old_hashes, rss_d.entries
                 )
-                feed_updated_fields.update({"last_modified", "entry_hashes"})
-                await self._schedule_after_success(subs)
-                self._stat.not_updated()
-                logger.info(f"Feed首次初始化完成（不推送历史内容）: {feed.link}")
-                return
 
-            if not updated_entries:
-                await self._schedule_after_success(subs)
-                self._stat.not_updated()
-                return
+                if not old_hashes:
+                    feed.last_modified = wf.last_modified
+                    feed.entry_hashes = (
+                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
+                        or None
+                    )
+                    feed_updated_fields.update({"last_modified", "entry_hashes"})
+                    schedule_action = ("success", None)
+                    self._stat.not_updated()
+                    logger.info(f"Feed首次初始化完成（不推送历史内容）: {feed.link}")
 
-            logger.info(f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)")
-            feed.last_modified = wf.last_modified
-            feed.entry_hashes = (
-                list(islice(new_hashes, max(len(rss_d.entries) * 2, 100))) or None
-            )
-            feed_updated_fields.update({"last_modified", "entry_hashes"})
+                elif not updated_entries:
+                    schedule_action = ("success", None)
+                    self._stat.not_updated()
 
-            updated_entries.reverse()
-            await Notifier(
-                feed=feed,
-                subs=subs,
-                entries=updated_entries,
-                timeout_seconds=self.config.timeout if self.config else 30,
-                proxy=self.config.proxy if self.config else "",
-                download_media_before_send=(
-                    self.config.download_image_before_send if self.config else True
-                ),
-            ).notify_all()
-            await self._schedule_after_success(subs)
-            self._stat.updated()
+                else:
+                    logger.info(
+                        f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
+                    )
+                    feed.last_modified = wf.last_modified
+                    feed.entry_hashes = (
+                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
+                        or None
+                    )
+                    feed_updated_fields.update({"last_modified", "entry_hashes"})
+
+                    updated_entries.reverse()
+                    await Notifier(
+                        feed=feed,
+                        subs=subs,
+                        entries=updated_entries,
+                        timeout_seconds=self.config.timeout if self.config else 30,
+                        proxy=self.config.proxy if self.config else "",
+                        download_media_before_send=(
+                            self.config.download_image_before_send
+                            if self.config
+                            else True
+                        ),
+                    ).notify_all()
+                    schedule_action = ("success", None)
+                    self._stat.updated()
         finally:
             if feed_updated_fields:
                 session.add(feed)
                 await session.commit()
                 logger.debug(f"Feed {feed.id} 已更新字段: {feed_updated_fields}")
+
+        # 在 session commit 之后再执行调度操作，避免嵌套 session
+        if schedule_action:
+            action, reason = schedule_action
+            if action == "success":
+                await self._schedule_after_success(subs)
+            elif action == "error" and reason:
+                await self._schedule_after_error(subs, reason)
 
     @staticmethod
     def _all_subs_blocked(subs: list[Sub]) -> bool:

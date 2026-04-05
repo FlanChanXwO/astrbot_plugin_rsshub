@@ -117,11 +117,11 @@ class RSSMonitor:
             async with get_session() as session:
                 now = datetime.now(timezone.utc)
 
-                # Batch-fetch all subs with their feeds in a single query
+                # Batch-fetch all subs with their feeds and users in a single query
                 stmt = (
                     select(Sub)
                     .where(Sub.id.in_(sub_ids), Sub.state == 1)
-                    .options(selectinload(Sub.feed))
+                    .options(selectinload(Sub.feed), selectinload(Sub.user))
                 )
                 result = await session.execute(stmt)
                 all_subs = list(result.scalars().all())

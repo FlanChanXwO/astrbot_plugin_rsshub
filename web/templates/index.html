@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RSSHub Subscriptions</title>
+  <link rel="stylesheet" href="/static/webui.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <h1 class="title">RSSHub Subscriptions</h1>
+      <p class="subtitle">Manage AstrBot RSS subscriptions with a lightweight panel.</p>
+    </header>
+
+    <section class="card auth-card">
+      <div class="row row-compact">
+        <input id="pwd" class="input" placeholder="Password" />
+        <button class="btn btn-primary" onclick="login()">Login</button>
+        <button class="btn" onclick="loadSubs()">Refresh</button>
+      </div>
+      <div id="status" class="status">Not logged in</div>
+    </section>
+
+    <section class="card table-card">
+      <table id="t" class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Feed</th>
+            <th>User</th>
+            <th>Target</th>
+            <th>Interval</th>
+            <th>Notify</th>
+            <th>Ops</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    let token = "";
+
+    function setStatus(text, err = false) {
+      const el = document.getElementById("status");
+      el.textContent = text;
+      el.className = err ? "status status-error" : "status";
+    }
+
+    async function login() {
+      const password = document.getElementById("pwd").value;
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        token = data.token;
+        setStatus("Login success");
+      } else {
+        setStatus(data.error || "login failed", true);
+      }
+    }
+
+    function buildPayload(tr) {
+      const payload = {};
+      tr.querySelectorAll("input[data-k]").forEach((i) => {
+        payload[i.dataset.k] = i.value;
+      });
+      return payload;
+    }
+
+    async function loadSubs() {
+      const res = await fetch("/api/subscriptions", {
+        headers: { "X-RSS-Token": token },
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setStatus(data.error || "failed", true);
+        return;
+      }
+      const tbody = document.querySelector("#t tbody");
+      tbody.innerHTML = "";
+
+      for (const s of data.items) {
+        const tr = document.createElement("tr");
+
+        // ID cell
+        const tdId = document.createElement("td");
+        tdId.textContent = s.id;
+
+        // Feed cell (untrusted: escape feed title/link)
+        const tdFeed = document.createElement("td");
+        tdFeed.className = "feed-cell";
+        const divTitle = document.createElement("div");
+        divTitle.className = "feed-title";
+        divTitle.textContent = s.feed_title || "";
+        const divLink = document.createElement("div");
+        divLink.className = "feed-link";
+        divLink.textContent = s.feed_link || "";
+        tdFeed.appendChild(divTitle);
+        tdFeed.appendChild(divLink);
+
+        // User cell
+        const tdUser = document.createElement("td");
+        tdUser.textContent = s.user_id;
+
+        // Target session input (value set via property, not innerHTML)
+        const tdTarget = document.createElement("td");
+        const inputTarget = document.createElement("input");
+        inputTarget.className = "input";
+        inputTarget.value = s.target_session || "";
+        inputTarget.dataset.k = "target_session";
+        tdTarget.appendChild(inputTarget);
+
+        // Interval input
+        const tdInterval = document.createElement("td");
+        const inputInterval = document.createElement("input");
+        inputInterval.className = "input";
+        inputInterval.value = s.interval ?? "";
+        inputInterval.dataset.k = "interval";
+        tdInterval.appendChild(inputInterval);
+
+        // Notify input
+        const tdNotify = document.createElement("td");
+        const inputNotify = document.createElement("input");
+        inputNotify.className = "input";
+        inputNotify.value = s.notify;
+        inputNotify.dataset.k = "notify";
+        tdNotify.appendChild(inputNotify);
+
+        // Action buttons
+        const tdOps = document.createElement("td");
+        const btnSave = document.createElement("button");
+        btnSave.className = "btn btn-primary";
+        btnSave.dataset.op = "save";
+        btnSave.textContent = "Save";
+        const btnDel = document.createElement("button");
+        btnDel.className = "btn btn-danger";
+        btnDel.dataset.op = "del";
+        btnDel.textContent = "Delete";
+        tdOps.appendChild(btnSave);
+        tdOps.appendChild(btnDel);
+
+        tr.appendChild(tdId);
+        tr.appendChild(tdFeed);
+        tr.appendChild(tdUser);
+        tr.appendChild(tdTarget);
+        tr.appendChild(tdInterval);
+        tr.appendChild(tdNotify);
+        tr.appendChild(tdOps);
+
+        btnSave.onclick = async () => {
+          const payload = buildPayload(tr);
+          const r = await fetch(`/api/subscriptions/${s.id}`, {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+              "X-RSS-Token": token,
+            },
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json();
+          setStatus(d.ok ? `Saved #${s.id}` : d.error || "save failed", !d.ok);
+        };
+
+        btnDel.onclick = async () => {
+          const r = await fetch(`/api/subscriptions/${s.id}`, {
+            method: "DELETE",
+            headers: { "X-RSS-Token": token },
+          });
+          const d = await r.json();
+          if (d.ok) {
+            setStatus(`Deleted #${s.id}`);
+            loadSubs();
+          } else {
+            setStatus(d.error || "delete failed", true);
+          }
+        };
+
+        tbody.appendChild(tr);
+      }
+      setStatus(`Loaded ${data.items.length} subscriptions`);
+    }
+  </script>
+</body>
+</html>

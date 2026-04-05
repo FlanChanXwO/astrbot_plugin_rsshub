@@ -10,8 +10,8 @@ class AiocqhttpMessageSender(MessageSender):
     """OneBot sender: pack metadata and media into merged forward nodes."""
 
     @classmethod
-    def _build_node(cls, sender_id: str, nickname: str, chain: list):
-        return Node(content=chain,  name=nickname)
+    def _build_node(cls, nickname: str, chain: list):
+        return Node(content=chain, name=nickname)
 
     @classmethod
     async def send_to_user(
@@ -58,13 +58,13 @@ class AiocqhttpMessageSender(MessageSender):
         nodes = []
 
         header_chain = [Plain(message)] if message else [Plain("RSS update")]
-        nodes.append(cls._build_node(sender_id, nickname, header_chain))
+        nodes.append(cls._build_node(nickname, header_chain))
 
         for component in image_components:
-            nodes.append(cls._build_node(sender_id, nickname, [component]))
+            nodes.append(cls._build_node(nickname, [component]))
 
         for component in tail_components:
-            nodes.append(cls._build_node(sender_id, nickname, [component]))
+            nodes.append(cls._build_node(nickname, [component]))
 
         if not nodes:
             return SendResult(ok=False, detail="empty_message")

@@ -23,6 +23,44 @@
     "hint": "获取 RSS 源时的 HTTP 请求超时时间",
     "default": 30
   },
+  "hash_history_min": {
+    "type": "int",
+    "description": "去重历史最小保留数量",
+    "hint": "每个 Feed 至少保留多少条去重哈希记录，值越大越能避免历史回流重复推送，但会增加存储与比对开销",
+    "default": 200
+  },
+  "hash_history_multiplier": {
+    "type": "int",
+    "description": "去重历史增长倍数",
+    "hint": "按当前抓取条目数动态扩展历史窗口，实际窗口≈entries * 该倍数（再受最小值与硬上限约束）",
+    "default": 2
+  },
+  "hash_history_hard_limit": {
+    "type": "int",
+    "description": "去重历史硬上限",
+    "hint": "每个 Feed 最多保留的去重哈希数量，用于限制数据库行体积与监控循环内存/CPU开销",
+    "default": 5000
+  },
+  "tracking_query_params": {
+    "type": "list",
+    "description": "链接去重时忽略的查询参数",
+    "hint": "用于清理常见追踪参数（如 utm_source/gclid/fbclid）。仅建议填写明确的追踪参数名，避免误删业务语义参数",
+    "default": [
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "utm_id",
+      "gclid",
+      "fbclid",
+      "mc_cid",
+      "mc_eid",
+      "spm",
+      "ref",
+      "ref_src"
+    ]
+  },
   "download_image_before_send": {
     "type": "bool",
     "description": "先下载图片再发送",

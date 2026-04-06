@@ -6,12 +6,15 @@ RSS-to-AstrBot Monitor
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import zlib
+from calendar import timegm
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from email.utils import format_datetime
-from itertools import chain, islice, repeat
+from email.utils import format_datetime, parsedate_to_datetime
+from itertools import chain, repeat
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -20,6 +23,16 @@ from astrbot.api import logger
 
 from ..db import Feed, MonitorSchedule, Sub, User, get_session
 from ..notifier import Notifier
+from ..utils.monitor_helpers import (
+    looks_like_bare_domain_scheme,
+    normalize_config_positive_int,
+    normalize_identifier,
+    normalize_path,
+    normalize_query,
+    normalize_text,
+    resolve_hash_history_limit,
+    tracking_query_params_cache_key,
+)
 from ..web import feed_get
 
 
@@ -45,6 +58,25 @@ class RSSMonitor:
     """
 
     TIMEOUT: Final = 300
+    HASH_HISTORY_MIN: Final = 200
+    HASH_HISTORY_MULTIPLIER: Final = 2
+    HASH_HISTORY_HARD_LIMIT: Final = 5000
+    HASH_HISTORY_ABSOLUTE_MAX: Final = 20000
+    TRACKING_QUERY_PARAMS: Final = {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "utm_id",
+        "gclid",
+        "fbclid",
+        "mc_cid",
+        "mc_eid",
+        "spm",
+        "ref",
+        "ref_src",
+    }
 
     def __init__(self, config: PluginConfig | None = None):
         self.config = config
@@ -55,6 +87,25 @@ class RSSMonitor:
         )
         self._lock_up_period: int = 0
         self._running = False
+        self._cached_tracking_query_params: set[str] | None = None
+        self._cached_tracking_query_params_source: tuple[str, ...] | None = None
+
+    def _config_value(self, key: str, default=None):
+        """Read plugin config with attribute-first fallback to mapping style."""
+        if self.config is None:
+            return default
+
+        if hasattr(self.config, key):
+            value = getattr(self.config, key)
+            if value is not None:
+                return value
+
+        getter = getattr(self.config, "get", None)
+        if callable(getter):
+            value = getter(key, default)
+            return default if value is None else value
+
+        return default
 
     async def start(self):
         self._running = True
@@ -212,23 +263,28 @@ class RSSMonitor:
                     feed.title = title[:1024]
                     feed_updated_fields.add("title")
 
-                old_hashes = feed.entry_hashes or []
+                old_hashes = list(feed.entry_hashes or [])
                 new_hashes, updated_entries = self._calculate_update(
                     old_hashes, rss_d.entries
+                )
+                merged_hashes = self._merge_hash_history(
+                    old_hashes,
+                    new_hashes,
+                    len(rss_d.entries),
                 )
 
                 if not old_hashes:
                     feed.last_modified = wf.last_modified
-                    feed.entry_hashes = (
-                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
-                        or None
-                    )
+                    feed.entry_hashes = merged_hashes
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
                     schedule_action = ("success", None)
                     self._stat.not_updated()
                     logger.info(f"Feed首次初始化完成（不推送历史内容）: {feed.link}")
 
                 elif not updated_entries:
+                    if merged_hashes != old_hashes:
+                        feed.entry_hashes = merged_hashes
+                        feed_updated_fields.add("entry_hashes")
                     schedule_action = ("success", None)
                     self._stat.not_updated()
 
@@ -237,10 +293,7 @@ class RSSMonitor:
                         f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
                     )
                     feed.last_modified = wf.last_modified
-                    feed.entry_hashes = (
-                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
-                        or None
-                    )
+                    feed.entry_hashes = merged_hashes
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
 
                     updated_entries.reverse()
@@ -349,27 +402,245 @@ class RSSMonitor:
         plugin_default = self.config.default_interval if self.config else 10
         return max(1, int(plugin_default))
 
-    def _calculate_update(self, old_hashes: list[str], entries: list) -> tuple:
+    def _calculate_update(
+        self, old_hashes: list[str], entries: list
+    ) -> tuple[list[str], list]:
         """计算哪些条目是新的。"""
+        old_hashes_set = {h for h in old_hashes if h}
         new_hashes = []
+        new_hashes_seen: set[str] = set()
         updated_entries = []
 
         for entry in entries:
-            entry_hash = self._hash_entry(entry)
-            new_hashes.append(entry_hash)
-            if entry_hash not in old_hashes:
+            entry_hashes = self._hash_entry(entry)
+
+            if not any(entry_hash in old_hashes_set for entry_hash in entry_hashes):
                 updated_entries.append(entry)
+
+            for entry_hash in entry_hashes:
+                if entry_hash not in new_hashes_seen:
+                    new_hashes_seen.add(entry_hash)
+                    new_hashes.append(entry_hash)
 
         return new_hashes, updated_entries
 
-    def _hash_entry(self, entry) -> str:
-        """计算条目哈希。"""
+    @staticmethod
+    def _normalize_text(value: str, max_length: int = 1024) -> str:
+        return normalize_text(value, max_length=max_length)
+
+    @staticmethod
+    def _normalize_identifier(value: str, max_length: int = 1024) -> str:
+        return normalize_identifier(value, max_length=max_length)
+
+    @staticmethod
+    def _tracking_query_params_cache_key(raw) -> tuple[str, ...] | None:
+        return tracking_query_params_cache_key(raw)
+
+    def _tracking_query_params(self) -> set[str]:
+        raw = self._config_value("tracking_query_params")
+        source_key = self._tracking_query_params_cache_key(raw)
+
+        # Rebuild cache only when normalized input changes.
+        if (
+            self._cached_tracking_query_params is not None
+            and self._cached_tracking_query_params_source == source_key
+        ):
+            return self._cached_tracking_query_params
+
+        if source_key is not None:
+            normalized = set(source_key)
+            self._cached_tracking_query_params = normalized
+            self._cached_tracking_query_params_source = source_key
+            return normalized
+
+        default_key = tuple(sorted(self.TRACKING_QUERY_PARAMS))
+        if (
+            self._cached_tracking_query_params is not None
+            and self._cached_tracking_query_params_source == default_key
+        ):
+            return self._cached_tracking_query_params
+
+        self._cached_tracking_query_params = set(default_key)
+        self._cached_tracking_query_params_source = default_key
+        return self._cached_tracking_query_params
+
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        return normalize_path(path)
+
+    def _normalize_query(self, query: str) -> str:
+        return normalize_query(query, self._tracking_query_params())
+
+    @staticmethod
+    def _looks_like_bare_domain_scheme(parsed, trimmed_link: str) -> bool:
+        return looks_like_bare_domain_scheme(parsed, trimmed_link)
+
+    @staticmethod
+    def _normalize_config_positive_int(raw, key: str, default: int) -> int:
+        return normalize_config_positive_int(raw, key, default, logger)
+
+    def _normalize_link(self, link: str) -> str:
+        if not link:
+            return ""
+
+        trimmed_link = link.strip()
+        try:
+            parsed = urlsplit(trimmed_link)
+        except Exception:
+            return self._normalize_text(trimmed_link, max_length=2048)
+
+        path = self._normalize_path(parsed.path)
+        query = self._normalize_query(parsed.query)
+
+        # urlsplit may misclassify "example.com/post" as scheme="example.com".
+        if self._looks_like_bare_domain_scheme(parsed, trimmed_link):
+            return trimmed_link
+
+        # Non-hierarchical URLs (mailto:, tel:, magnet:) should preserve scheme.
+        if parsed.scheme and not parsed.netloc:
+            scheme = parsed.scheme.lower()
+            if scheme not in {"http", "https"}:
+                opaque = urlunsplit((scheme, "", path, query, ""))
+                return opaque or trimmed_link
+
+        # Relative links must remain relative; avoid forcing invalid http(s) forms.
+        if not parsed.netloc:
+            relative = urlunsplit(("", "", path, query, ""))
+            return relative or trimmed_link
+
+        scheme = (parsed.scheme or "").lower()
+        netloc = parsed.netloc.lower()
+        return urlunsplit((scheme, netloc, path, query, ""))
+
+    @staticmethod
+    def _format_entry_timestamp(entry) -> str:
+        parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
+        if parsed_time:
+            try:
+                return str(timegm(parsed_time))
+            except Exception:
+                pass
+
+        for field_name in ("published", "updated"):
+            raw_value = entry.get(field_name)
+            if not raw_value:
+                continue
+            try:
+                dt = parsedate_to_datetime(str(raw_value))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return str(int(dt.timestamp()))
+            except Exception:
+                continue
+
+        return ""
+
+    @staticmethod
+    def _sha256(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
+
+    @staticmethod
+    def _legacy_entry_crc32(entry) -> str:
+        """Legacy v1 fingerprint for backward compatibility with stored hashes."""
         hash_base = (
-            entry.get("link", "")
-            + entry.get("title", "")
+            str(entry.get("link", ""))
+            + str(entry.get("title", ""))
             + str(entry.get("published", ""))
         )
         return str(zlib.crc32(hash_base.encode()))
+
+    def _hash_entry(self, entry) -> list[str]:
+        """Calculate a robust dedupe fingerprint set for one entry."""
+        entry_id = self._normalize_identifier(
+            str(entry.get("id") or entry.get("guid") or "")
+        )
+        link = self._normalize_link(str(entry.get("link") or ""))
+        title = self._normalize_text(str(entry.get("title") or ""))
+        summary = self._normalize_text(
+            str(entry.get("summary") or entry.get("description") or ""),
+            max_length=2048,
+        )
+        published_ts = self._format_entry_timestamp(entry)
+
+        if entry_id:
+            stable_key = f"id={entry_id}"
+        elif link:
+            stable_key = f"link={link}"
+        elif title:
+            stable_key = f"title={title}"
+        else:
+            stable_key = f"summary={summary[:256]}"
+
+        # Primary fingerprint prefers stable identity fields and normalized timestamp.
+        primary_material = f"v2|{stable_key}|ts={published_ts}"
+
+        # Secondary fingerprint keeps content context to reduce false positives.
+        secondary_material = (
+            f"v2|title={title}|link={link}|summary={summary[:512]}|ts={published_ts}"
+        )
+
+        fingerprints = [self._sha256(primary_material)]
+        secondary_hash = self._sha256(secondary_material)
+        if secondary_hash != fingerprints[0]:
+            fingerprints.append(secondary_hash)
+
+        # Keep legacy v1 crc32 fingerprint to avoid full re-push after upgrading.
+        legacy_hash = self._legacy_entry_crc32(entry)
+        if legacy_hash and legacy_hash not in fingerprints:
+            fingerprints.append(legacy_hash)
+
+        return fingerprints
+
+    def _resolve_hash_history_limits(self, entry_count: int) -> int:
+        configured_min = self._config_value("hash_history_min")
+        configured_multiplier = self._config_value("hash_history_multiplier")
+        configured_hard_limit = self._config_value("hash_history_hard_limit")
+
+        min_limit = self._normalize_config_positive_int(
+            configured_min,
+            "hash_history_min",
+            self.HASH_HISTORY_MIN,
+        )
+        multiplier = self._normalize_config_positive_int(
+            configured_multiplier,
+            "hash_history_multiplier",
+            self.HASH_HISTORY_MULTIPLIER,
+        )
+        hard_limit = self._normalize_config_positive_int(
+            configured_hard_limit,
+            "hash_history_hard_limit",
+            self.HASH_HISTORY_HARD_LIMIT,
+        )
+
+        return resolve_hash_history_limit(
+            entry_count=entry_count,
+            min_limit=min_limit,
+            multiplier=multiplier,
+            hard_limit=hard_limit,
+            absolute_max=self.HASH_HISTORY_ABSOLUTE_MAX,
+            logger=logger,
+        )
+
+    def _merge_hash_history(
+        self,
+        old_hashes: list[str],
+        new_hashes: list[str],
+        entry_count: int,
+    ) -> list[str] | None:
+        history_limit = self._resolve_hash_history_limits(entry_count)
+
+        merged: list[str] = []
+        seen: set[str] = set()
+
+        for entry_hash in chain(new_hashes, old_hashes):
+            if not entry_hash or entry_hash in seen:
+                continue
+            seen.add(entry_hash)
+            merged.append(entry_hash)
+            if len(merged) >= history_limit:
+                break
+
+        return merged or None
 
 
 class TaskState:

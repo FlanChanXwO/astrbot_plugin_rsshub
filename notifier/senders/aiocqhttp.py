@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from astrbot.api import logger
 from astrbot.api.message_components import Node, Nodes, Plain
 
 from .base import MessageSender
+from .media_downloader import get_or_download_media_to_cache
 from .types import NotifierContext, PreparedMedia, SendResult
 
 
@@ -12,6 +14,53 @@ class AiocqhttpMessageSender(MessageSender):
     @classmethod
     def _build_node(cls, nickname: str, chain: list):
         return Node(content=chain, name=nickname)
+
+    @classmethod
+    async def _ensure_local_media_for_forward(
+        cls,
+        prepared_media: list[PreparedMedia],
+    ) -> list[PreparedMedia]:
+        """Ensure video/audio are local files for better OneBot forward compatibility."""
+        normalized: list[PreparedMedia] = []
+        for item in prepared_media:
+            if item.download_failed or item.local_path is not None:
+                normalized.append(item)
+                continue
+            if item.media_type not in {"video", "audio"}:
+                normalized.append(item)
+                continue
+
+            try:
+                local_path = await get_or_download_media_to_cache(
+                    url=item.original_url,
+                    timeout_seconds=cls._get_timeout_seconds(),
+                    proxy=cls._get_proxy(),
+                )
+                normalized.append(
+                    PreparedMedia(
+                        media_type=item.media_type,
+                        original_url=item.original_url,
+                        local_path=local_path,
+                        download_failed=False,
+                    )
+                )
+            except Exception as ex:
+                logger.warning(
+                    "Force local media for OneBot forward failed: type=%s, url=%s, err=%s",
+                    item.media_type,
+                    item.original_url,
+                    ex,
+                )
+                normalized.append(
+                    PreparedMedia(
+                        media_type=item.media_type,
+                        original_url=item.original_url,
+                        local_path=None,
+                        download_failed=True,
+                    )
+                )
+
+        return normalized
 
     @classmethod
     async def send_to_user(
@@ -31,37 +80,91 @@ class AiocqhttpMessageSender(MessageSender):
             prepared_media: 预处理的媒体
             context: 通知上下文，包含频道元信息和运行时信息
         """
-        effective_prepared = prepared_media
-        if effective_prepared is None and media:
-            effective_prepared = await cls.prepare_media(media)
+        logger.debug(
+            "Aiocqhttp sender strategy: merged-forward nodes, session=%s, has_media=%s, prepared_media=%s",
+            session_id,
+            bool(media),
+            bool(prepared_media),
+        )
+        try:
+            effective_prepared = prepared_media
+            if effective_prepared is None and media:
+                effective_prepared = await cls.prepare_media(media)
 
-        image_components = []
-        tail_components = []
-        if effective_prepared:
-            (
-                image_components,
-                tail_components,
-                failed_media_urls,
-            ) = await cls._build_media_components(effective_prepared)
-            message = cls._append_failed_media_links(message, failed_media_urls)
+            image_components = []
+            tail_components = []
+            if effective_prepared:
+                effective_prepared = await cls._ensure_local_media_for_forward(
+                    effective_prepared
+                )
+                (
+                    image_components,
+                    tail_components,
+                    failed_media_urls,
+                ) = await cls._build_media_components(effective_prepared)
+                message = cls._append_failed_media_links(message, failed_media_urls)
 
-        # 从 context 获取 nickname
-        if context:
-            nickname = context.channel.title if context.channel.title else "RSSHub"
-        else:
-            nickname = "RSSHub"
-        nodes = []
+            # 从 context 获取 nickname
+            if context:
+                nickname = context.channel.title if context.channel.title else "RSSHub"
+            else:
+                nickname = "RSSHub"
+            nodes = []
 
-        header_chain = [Plain(message)] if message else [Plain("RSS update")]
-        nodes.append(cls._build_node(nickname, header_chain))
+            header_chain = [Plain(message)] if message else [Plain("RSS update")]
+            nodes.append(cls._build_node(nickname, header_chain))
 
-        for component in image_components:
-            nodes.append(cls._build_node(nickname, [component]))
+            for component in image_components:
+                nodes.append(cls._build_node(nickname, [component]))
 
-        for component in tail_components:
-            nodes.append(cls._build_node(nickname, [component]))
+            for component in tail_components:
+                nodes.append(cls._build_node(nickname, [component]))
 
-        if not nodes:
-            return SendResult(ok=False, detail="empty_message")
+            if not nodes:
+                return SendResult(ok=False, detail="empty_message")
 
-        return await cls._send_chain(session_id, [Nodes(nodes)])
+            logger.debug(
+                "Aiocqhttp sender node summary: session=%s, header=1, images=%s, tail=%s, total_nodes=%s",
+                session_id,
+                len(image_components),
+                len(tail_components),
+                len(nodes),
+            )
+            return await cls._send_chain(session_id, [Nodes(nodes)])
+        except Exception as err:
+            logger.warning(
+                "Aiocqhttp merged-forward send failed, fallback to plain text: session=%s, err=%s",
+                session_id,
+                err,
+            )
+            # Preserve media URLs when large media upload is rejected by upstream.
+            fallback_urls: list[str] = []
+            if media:
+                fallback_urls.extend([url for _, url in media if url])
+            fallback_text = cls._append_failed_media_links(message, fallback_urls)
+
+            if not fallback_text:
+                return SendResult(
+                    ok=False,
+                    transient=cls._is_transient_network_error(err),
+                    detail=str(err),
+                )
+
+            try:
+                fallback_result = await cls._send_chain(
+                    session_id,
+                    [Plain(fallback_text)],
+                )
+                if fallback_result.ok:
+                    return SendResult(
+                        ok=True,
+                        transient=False,
+                        detail="merged_forward_failed_text_fallback",
+                    )
+                return fallback_result
+            except Exception as fallback_ex:
+                return SendResult(
+                    ok=False,
+                    transient=cls._is_transient_network_error(fallback_ex),
+                    detail=str(fallback_ex),
+                )

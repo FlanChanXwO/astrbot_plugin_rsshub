@@ -192,6 +192,14 @@ class Notifier:
             return
 
         sender = get_sender_for_platform_name(sub.platform_name)
+        logger.debug(
+            "Push strategy selected: platform=%s, sender=%s, has_media=%s, prepared_media=%s, session=%s",
+            sub.platform_name,
+            sender.__name__,
+            bool(media_items),
+            bool(prepared_media),
+            session_id,
+        )
         sender.configure_runtime(
             timeout_seconds=self.timeout_seconds,
             proxy=self.proxy,

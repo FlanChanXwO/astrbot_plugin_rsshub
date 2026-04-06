@@ -15,18 +15,34 @@ AstrBot RSS订阅插件
 
 import asyncio
 import json
+import os
 import re
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from urllib.parse import parse_qsl
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import File
 from astrbot.api.star import Context, Star
 from astrbot.core.provider.register import llm_tools
+from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
+from .api import close_shared_session
 from .db import Feed, Sub, User, close_db, init_db
 from .monitor import Monitor
 from .notifier import Notifier
 from .notifier.senders import set_bot_self_id_provider
+from .utils.command_helpers import (
+    apply_import_payload,
+    build_subscriptions_export_text,
+    delete_subscriptions,
+    select_subscriptions_for_scope,
+)
 from .utils.config import PluginConfig
+from .utils.rsshub_api import RSSHubRadarAPI, normalize_base_url
+from .utils.subscription_io import parse_subscriptions_toml
 from .web import RSSHubWebUI, feed_get, resolve_webui_config
 
 SUB_OPTION_CASTERS = {
@@ -66,6 +82,7 @@ PLUGIN_CONFIG_KEYS = {
     "minimal_interval",
     "timeout",
     "download_image_before_send",
+    "rsshub_base_url",
 }
 
 SESSION_DEFAULT_KV_PREFIX = "session_defaults::"
@@ -85,6 +102,9 @@ SESSION_DEFAULT_KEYS = {
     "tags",
 }
 
+IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
+IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
+
 
 class RSSHubPlugin(Star):
     """AstrBot RSS订阅插件主类"""
@@ -96,6 +116,13 @@ class RSSHubPlugin(Star):
         self.monitor: Monitor | None = None
         self._scheduler_task: asyncio.Task | None = None
         self._webui: RSSHubWebUI | None = None
+        self._rsshub_radar_api: RSSHubRadarAPI | None = None
+        self._rsshub_radar_api_settings: tuple[int, str] | None = None
+        # 导入会话状态管理（类似 deerpipe）
+        self._import_session_lock = asyncio.Lock()
+        self._import_sessions: dict[tuple[str, str], float] = {}
+        self._import_session_timeout = 300  # 5分钟超时
+        self._unsub_export_retention_seconds = 24 * 60 * 60
 
     def _select_test_entries(self, entries: list, granularity: str) -> tuple[list, str]:
         """根据测试粒度参数选择要推送的条目。"""
@@ -161,7 +188,46 @@ class RSSHubPlugin(Star):
         if normalized_key == "proxy":
             return raw_value
 
+        if normalized_key == "rsshub_base_url":
+            try:
+                return normalize_base_url(raw_value)
+            except ValueError as ex:
+                raise ValueError(f"rsshub_base_url 非法: {ex}") from ex
+
         raise ValueError(f"不支持的插件配置项: {normalized_key}")
+
+    @staticmethod
+    def _parse_llm_params_input(params: str) -> dict[str, str]:
+        """Parse LLM params input from JSON object or query-string form."""
+        raw = (params or "").strip()
+        if not raw:
+            return {}
+
+        try:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise ValueError("params_json 必须是 JSON 对象")
+            return {str(k): str(v) for k, v in parsed.items() if str(k).strip()}
+        except json.JSONDecodeError:
+            return {k: v for k, v in parse_qsl(raw, keep_blank_values=True) if k}
+
+    def _rsshub_api(self) -> RSSHubRadarAPI:
+        """Create/reuse API helper with current runtime timeout/proxy config."""
+        timeout = self.config.timeout if self.config else 30
+        proxy = self.config.proxy if self.config else ""
+        settings = (int(timeout), str(proxy))
+
+        if (
+            self._rsshub_radar_api is None
+            or self._rsshub_radar_api_settings != settings
+        ):
+            self._rsshub_radar_api = RSSHubRadarAPI(
+                timeout=settings[0],
+                proxy=settings[1],
+            )
+            self._rsshub_radar_api_settings = settings
+
+        return self._rsshub_radar_api
 
     async def initialize(self):
         """插件初始化"""
@@ -202,6 +268,10 @@ class RSSHubPlugin(Star):
                 await self._scheduler_task
             except asyncio.CancelledError:
                 pass
+
+        if self._rsshub_radar_api is not None:
+            await self._rsshub_radar_api.close()
+        await close_shared_session()
 
         await self._stop_webui_if_needed()
         await self._unregister_llm_tools()
@@ -369,6 +439,67 @@ class RSSHubPlugin(Star):
                 [],
                 "Get current session-level default options.",
             ),
+            (
+                "rsshub_search_routes",
+                self._llm_rsshub_search_routes,
+                [
+                    {
+                        "name": "query",
+                        "type": "string",
+                        "description": "Route search keywords, e.g. bilibili dynamic",
+                    },
+                    {
+                        "name": "top_k",
+                        "type": "string",
+                        "description": "Optional result limit (1-30), default 8",
+                    },
+                    {
+                        "name": "base_url",
+                        "type": "string",
+                        "description": "Optional RSSHub base URL override",
+                    },
+                ],
+                "Search RSSHub routes and return concise route summaries.",
+            ),
+            (
+                "rsshub_get_route_schema",
+                self._llm_rsshub_get_route_schema,
+                [
+                    {
+                        "name": "uri",
+                        "type": "string",
+                        "description": "Route URI like /bilibili/user/dynamic/:uid",
+                    },
+                    {
+                        "name": "base_url",
+                        "type": "string",
+                        "description": "Optional RSSHub base URL override",
+                    },
+                ],
+                "Get one RSSHub route schema with required/optional params.",
+            ),
+            (
+                "rsshub_build_subscribe_url",
+                self._llm_rsshub_build_subscribe_url,
+                [
+                    {
+                        "name": "uri",
+                        "type": "string",
+                        "description": "Route URI path to build final subscription URL",
+                    },
+                    {
+                        "name": "params_json",
+                        "type": "string",
+                        "description": "Optional JSON object or query-string params",
+                    },
+                    {
+                        "name": "base_url",
+                        "type": "string",
+                        "description": "Optional RSSHub base URL override",
+                    },
+                ],
+                "Build final RSSHub subscription URL from uri and params.",
+            ),
         ]
 
         for name, handler, args, desc in tools:
@@ -390,6 +521,9 @@ class RSSHubPlugin(Star):
             "rss_set_plugin_config",
             "rss_set_session_default_option",
             "rss_get_session_defaults",
+            "rsshub_search_routes",
+            "rsshub_get_route_schema",
+            "rsshub_build_subscribe_url",
         ]
         for name in tool_names:
             try:
@@ -425,7 +559,7 @@ class RSSHubPlugin(Star):
         return await self._run_command_and_collect(self.cmd_unsub(event, sub_id))
 
     async def _llm_unsubscribe_all(self, event: AstrMessageEvent) -> str:
-        return await self._run_command_and_collect(self.cmd_unsub_all(event, "yes"))
+        return await self._run_command_and_collect(self.cmd_unsub_all(event, "global"))
 
     async def _llm_list_subscriptions(self, event: AstrMessageEvent) -> str:
         return await self._run_command_and_collect(self.cmd_list(event))
@@ -480,6 +614,120 @@ class RSSHubPlugin(Star):
     async def _llm_get_session_defaults(self, event: AstrMessageEvent) -> str:
         return await self._run_command_and_collect(
             self.cmd_sub_session_default_get(event)
+        )
+
+    async def _llm_rsshub_search_routes(
+        self,
+        event: AstrMessageEvent,
+        query: str = "",
+        top_k: str = "",
+        base_url: str = "",
+    ) -> str:
+        del event
+        if self.config is None:
+            return "插件配置尚未初始化"
+
+        try:
+            limit = int(top_k) if (top_k or "").strip() else 8
+        except ValueError:
+            return "top_k 必须是整数"
+        limit = max(1, min(limit, 30))
+
+        try:
+            resolved_base_url, routes = await self._rsshub_api().search_routes(
+                query=query,
+                top_k=limit,
+                explicit_base_url=base_url,
+                default_base_url=self.config.rsshub_base_url,
+            )
+        except Exception as ex:
+            return f"RSSHub 路由检索失败: {ex}"
+
+        return json.dumps(
+            {
+                "resolved_base_url": resolved_base_url,
+                "count": len(routes),
+                "routes": routes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def _llm_rsshub_get_route_schema(
+        self,
+        event: AstrMessageEvent,
+        uri: str = "",
+        base_url: str = "",
+    ) -> str:
+        del event
+        if self.config is None:
+            return "插件配置尚未初始化"
+        if not (uri or "").strip():
+            return "请提供 uri，例如 /bilibili/user/dynamic/:uid"
+
+        try:
+            resolved_base_url, schema = await self._rsshub_api().get_route_schema(
+                uri=uri,
+                explicit_base_url=base_url,
+                default_base_url=self.config.rsshub_base_url,
+            )
+        except Exception as ex:
+            return f"获取路由参数失败: {ex}"
+
+        if schema is None:
+            return json.dumps(
+                {
+                    "resolved_base_url": resolved_base_url,
+                    "found": False,
+                    "message": "未找到指定 uri，请先调用 rsshub_search_routes",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        return json.dumps(
+            {
+                "resolved_base_url": resolved_base_url,
+                "found": True,
+                "schema": schema,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def _llm_rsshub_build_subscribe_url(
+        self,
+        event: AstrMessageEvent,
+        uri: str = "",
+        params_json: str = "",
+        base_url: str = "",
+    ) -> str:
+        del event
+        if self.config is None:
+            return "插件配置尚未初始化"
+        if not (uri or "").strip():
+            return "请提供 uri，例如 /bilibili/user/dynamic/12345"
+
+        try:
+            parsed_params = self._parse_llm_params_input(params_json)
+            resolved_base_url, subscribe_url = self._rsshub_api().build_subscribe_url(
+                uri=uri,
+                params=parsed_params,
+                explicit_base_url=base_url,
+                default_base_url=self.config.rsshub_base_url,
+            )
+        except Exception as ex:
+            return f"构建订阅链接失败: {ex}"
+
+        return json.dumps(
+            {
+                "resolved_base_url": resolved_base_url,
+                "uri": uri,
+                "params": parsed_params,
+                "subscribe_url": subscribe_url,
+            },
+            ensure_ascii=False,
+            indent=2,
         )
 
     def _start_scheduler_task(self):
@@ -592,6 +840,162 @@ class RSSHubPlugin(Star):
                 "请使用 /sub_bind <private|group|session> 重新绑定默认推送目标。"
             )
 
+    async def _cleanup_unsub_export_backups(self, temp_dir: Path) -> None:
+        """Best-effort cleanup for old unsub backup files under temp directory."""
+        now = time.time()
+        cutoff = now - self._unsub_export_retention_seconds
+
+        for path in temp_dir.glob("rsshub_subscriptions_*.toml"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            except OSError as ex:
+                logger.debug("Skip stale export cleanup for %s: %s", path, ex)
+
+    async def _read_uploaded_toml_content(
+        self,
+        event: AstrMessageEvent,
+        *,
+        max_file_size: int,
+    ) -> tuple[str | None, str | None, bool]:
+        """Read TOML content from uploaded file components.
+
+        Returns: (content, error, has_file_component)
+        """
+        has_file_component = False
+        file_messages = event.get_messages()
+        for component in file_messages:
+            if not isinstance(component, File):
+                continue
+
+            has_file_component = True
+            file_path = ""
+            try:
+                file_path = await component.get_file()
+                if not file_path:
+                    continue
+                candidate = Path(file_path)
+                if not candidate.is_file():
+                    continue
+                if candidate.stat().st_size > max_file_size:
+                    return (
+                        None,
+                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                        True,
+                    )
+                return candidate.read_text(encoding="utf-8-sig"), None, True
+            except OSError as ex:
+                return None, f"读取上传文件失败: {ex}", True
+            finally:
+                if file_path:
+                    try:
+                        os.unlink(file_path)
+                    except OSError:
+                        pass
+
+        return None, None, has_file_component
+
+    async def _read_import_toml_content(
+        self,
+        event: AstrMessageEvent,
+        import_path: str = "",
+    ) -> tuple[str | None, str | None, bool]:
+        """Read import TOML content from local path or uploaded file.
+
+        Returns: (content, error, should_wait_upload)
+        """
+        if import_path.strip():
+            if not event.is_admin():
+                return (
+                    None,
+                    "出于安全考虑，仅管理员可使用本地路径导入，请改为上传 TOML 文件。",
+                    False,
+                )
+            if self.config is None:
+                return None, "插件配置尚未初始化", False
+
+            path = Path(import_path.strip()).expanduser().resolve()
+            allowed_dir = self.config.local_imports_dir.resolve()
+            allowed_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                path.relative_to(allowed_dir)
+            except ValueError:
+                return (
+                    None,
+                    f"仅允许从导入目录读取文件: {allowed_dir}",
+                    False,
+                )
+
+            if not path.is_file():
+                return None, f"导入文件不存在: {path}", False
+            try:
+                if path.stat().st_size > IMPORT_MAX_FILE_SIZE_BYTES:
+                    return (
+                        None,
+                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                        False,
+                    )
+                return path.read_text(encoding="utf-8-sig"), None, False
+            except OSError as ex:
+                return None, f"读取导入文件失败: {ex}", False
+
+        content, read_err, has_file_component = await self._read_uploaded_toml_content(
+            event,
+            max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
+        )
+        if content:
+            return content, None, False
+        if read_err:
+            return None, read_err, False
+        if has_file_component:
+            return None, "读取上传文件失败", False
+
+        return None, None, True
+
+    def _validate_import_record_options(
+        self,
+        event: AstrMessageEvent,
+        options: dict[str, int | str],
+    ) -> tuple[dict[str, int | str], str | None]:
+        """Validate and normalize imported subscription options."""
+        validated: dict[str, int | str] = {}
+
+        for key, raw_value in options.items():
+            if key == "platform_name":
+                if isinstance(raw_value, str) and raw_value.strip():
+                    validated[key] = raw_value.strip()
+                continue
+
+            if key == "target_session":
+                if not isinstance(raw_value, str):
+                    return {}, "target_session 必须是字符串"
+                parsed_target, parse_err = self._parse_target_session(event, raw_value)
+                if parse_err:
+                    return {}, f"target_session 无效: {parse_err}"
+                if parsed_target:
+                    validated[key] = parsed_target
+                continue
+
+            if key in {"title", "tags"}:
+                if not isinstance(raw_value, str):
+                    return {}, f"{key} 必须是字符串"
+                normalized = raw_value.strip()
+                if normalized:
+                    validated[key] = normalized
+                continue
+
+            if key not in SUB_OPTION_CASTERS:
+                continue
+
+            try:
+                parsed_value = self._parse_option_value(key, str(raw_value))
+            except ValueError as ex:
+                return {}, str(ex)
+            validated[key] = parsed_value
+
+        return validated, None
+
     # ===== 命令处理 =====
 
     @filter.command("sub")
@@ -694,8 +1098,11 @@ class RSSHubPlugin(Star):
         yield event.plain_result(f"已取消订阅 (ID: {sub_id_int})")
 
     @filter.command("sub_list")
-    async def cmd_list(self, event: AstrMessageEvent):
-        """列出所有订阅"""
+    async def cmd_list(self, event: AstrMessageEvent, scope: str = ""):
+        """列出订阅列表。
+
+        Usage: /sub_list [all]
+        """
         user_id = event.get_sender_id()
 
         async for notice in self._emit_binding_notice_if_needed(event):
@@ -706,13 +1113,32 @@ class RSSHubPlugin(Star):
             yield event.plain_result("您还没有任何订阅")
             return
 
-        lines = ["您的订阅列表:"]
-        for idx, sub in enumerate(subs, 1):
+        show_all_sessions = scope.strip().lower() == "all" and event.is_admin()
+        current_session = event.unified_msg_origin
+
+        if show_all_sessions:
+            filtered_subs = subs
+            lines = ["您的订阅列表（所有会话）:"]
+        else:
+            filtered_subs = [
+                sub
+                for sub in subs
+                if (sub.target_session or current_session) == current_session
+            ]
+            if not filtered_subs:
+                yield event.plain_result(
+                    "当前会话没有订阅。\n"
+                    "可使用 /sub 添加订阅；管理员可用 /sub_list all 查看所有会话。"
+                )
+                return
+            lines = ["您的订阅列表（当前会话）:"]
+
+        for idx, sub in enumerate(filtered_subs, 1):
             feed_title = sub.feed.title if sub.feed else "未知"
             feed_link = sub.feed.link if sub.feed else ""
             custom_title = f" ({sub.title})" if sub.title else ""
             lines.append(f"{idx}. [{sub.id}] {feed_title}{custom_title}")
-            if sub.target_session:
+            if show_all_sessions and sub.target_session:
                 lines.append(f"    target: {sub.target_session}")
             if feed_link:
                 lines.append(f"    {feed_link}")
@@ -803,24 +1229,227 @@ class RSSHubPlugin(Star):
         )
 
     @filter.command("unsub_all")
-    async def cmd_unsub_all(self, event: AstrMessageEvent, confirm: str = ""):
-        """取消当前用户所有订阅
+    async def cmd_unsub_all(self, event: AstrMessageEvent, scope: str = ""):
+        """取消当前会话或所有订阅
 
-        Usage: /unsub_all yes
+        Usage: /unsub_all [global]
+        - 默认只清除当前会话的订阅
+        - global: 清除所有会话的订阅（需要管理员权限）
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
-        if confirm.lower() not in {"yes", "y", "确认"}:
-            yield event.plain_result("此操作会删除您所有订阅，请使用: /unsub_all yes")
+        user_id = event.get_sender_id()
+        current_session = event.unified_msg_origin
+        scope_value = scope.strip().lower()
+
+        if scope_value and scope_value != "global":
+            yield event.plain_result(
+                "参数无效。用法: /unsub_all [global]\n"
+                "不带参数表示删除当前会话；global 表示删除所有会话（管理员）。"
+            )
+            return
+
+        is_global = scope_value == "global"
+
+        # global 模式需要管理员权限
+        if is_global and not event.is_admin():
+            yield event.plain_result(
+                "清除所有会话订阅需要管理员权限。\n"
+                "说明: /unsub_all 默认仅删除当前会话；使用 /unsub_all global 删除所有会话。"
+            )
+            return
+
+        subscriptions = await Sub.get_by_user(user_id)
+        if not subscriptions:
+            yield event.plain_result("您当前没有可删除的订阅")
+            return
+
+        # 根据范围筛选订阅
+        to_delete, scope_desc = select_subscriptions_for_scope(
+            subscriptions,
+            current_session=current_session,
+            is_global=is_global,
+        )
+
+        if not to_delete:
+            yield event.plain_result(f"当前{scope_desc}没有订阅")
+            return
+
+        # 导出备份
+        export_text = build_subscriptions_export_text(
+            user_id=str(user_id),
+            subscriptions=to_delete,
+        )
+
+        temp_dir = Path(get_astrbot_temp_path())
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        await self._cleanup_unsub_export_backups(temp_dir)
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        export_filename = f"rsshub_subscriptions_{user_id}_{timestamp}.toml"
+        export_path = temp_dir / export_filename
+
+        try:
+            export_path.write_text(export_text, encoding="utf-8")
+            yield event.plain_result(
+                f"已自动导出{scope_desc}订阅备份，请先保存该文件，再确认删除结果。"
+            )
+            yield event.chain_result(
+                [File(name=export_filename, file=str(export_path))]
+            )
+        except OSError as ex:
+            logger.error("Failed to export subscriptions before unsub_all: %s", ex)
+            yield event.plain_result(f"备份导出失败，将继续删除订阅: {ex}")
+
+        # 删除订阅
+        deleted_count = await delete_subscriptions(to_delete)
+
+        yield event.plain_result(f"已取消{scope_desc}订阅，共删除 {deleted_count} 条")
+
+    @filter.command("sub_import", alias={"import"})
+    async def cmd_sub_import(self, event: AstrMessageEvent, import_path: str = ""):
+        """Import subscriptions from TOML file.
+
+        Usage: /sub_import [本地文件路径]
+        """
+        async for notice in self._emit_binding_notice_if_needed(event):
+            yield notice
+
+        # 先尝试直接读取（用户可能直接附带文件或提供路径）
+        content, read_err, should_wait_upload = await self._read_import_toml_content(
+            event,
+            import_path,
+        )
+
+        if content:
+            # 用户已提供文件，直接处理
+            async for result in self._process_import_toml(event, content):
+                yield result
+            return
+
+        if read_err:
+            yield event.plain_result(read_err)
+            return
+
+        if not should_wait_upload:
+            yield event.plain_result("未检测到可导入的文件")
+            return
+
+        # 没有提供文件，设置导入会话状态，等待用户发送文件
+        user_id = str(event.get_sender_id())
+        session_key = (user_id, event.unified_msg_origin)
+        now = time.monotonic()
+        async with self._import_session_lock:
+            # 清理超时会话
+            timeout_threshold = now - self._import_session_timeout
+            expired_keys = [
+                sid
+                for sid, start_time in self._import_sessions.items()
+                if start_time < timeout_threshold
+            ]
+            for sid in expired_keys:
+                del self._import_sessions[sid]
+            self._import_sessions[session_key] = now
+
+        yield event.plain_result(
+            "请在 5 分钟内发送 TOML 订阅文件。\n"
+            "注意：导入将添加新的订阅，重复的订阅会被跳过。\n"
+            "超时请重新执行 /sub_import 命令。"
+        )
+
+    async def _process_import_toml(self, event: AstrMessageEvent, content: str):
+        """处理 TOML 内容并导入订阅。"""
+        payload = parse_subscriptions_toml(content)
+        if payload.errors and not payload.records:
+            preview = "\n".join(payload.errors[:8])
+            yield event.plain_result(f"导入失败，文件校验未通过:\n{preview}")
             return
 
         user_id = event.get_sender_id()
-        deleted = await Sub.delete_all_by_user(user_id)
-        if deleted == 0:
-            yield event.plain_result("您当前没有可删除的订阅")
-            return
-        yield event.plain_result(f"已取消全部订阅，共删除 {deleted} 条")
+        # Ensure user exists before creating subscriptions for FK consistency.
+        user = await User.get_or_create(user_id)
+
+        result_stats = await apply_import_payload(
+            payload=payload,
+            user_id=user_id,
+            user_db_id=user.id,
+            current_session=event.unified_msg_origin,
+            default_platform_name=event.platform.name,
+            validate_options=lambda options: self._validate_import_record_options(
+                event,
+                options,
+            ),
+        )
+
+        details = list(result_stats.details)
+        if payload.warnings:
+            details.extend([f"警告: {item}" for item in payload.warnings[:3]])
+        if payload.errors:
+            details.extend([f"错误: {item}" for item in payload.errors[:5]])
+
+        result = (
+            "订阅导入完成\n"
+            f"- 成功导入: {result_stats.imported}\n"
+            f"- 跳过: {result_stats.skipped}\n"
+            f"- 失败: {result_stats.failed}"
+        )
+        if details:
+            result += "\n\n详情:\n" + "\n".join(details[:12])
+
+        yield event.plain_result(result)
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_file_message(self, event: AstrMessageEvent):
+        """监听文件消息以处理订阅导入.
+
+        当用户发送文件时，自动尝试解析并导入订阅。
+        需要满足以下条件才会处理：
+        1. 在执行导入命令后5分钟内
+        2. 发送者是发起导入命令的用户本人（会话隔离）
+        文件大小限制：与 IMPORT_MAX_FILE_SIZE_BYTES 一致
+        """
+        sender_id = str(event.get_sender_id())
+        session_key = (sender_id, event.unified_msg_origin)
+
+        # 检查是否有活跃的导入会话
+        async with self._import_session_lock:
+            session_start = self._import_sessions.get(session_key)
+            if session_start is None:
+                return
+
+            # 检查会话是否超时
+            now = time.monotonic()
+            if now - session_start > self._import_session_timeout:
+                del self._import_sessions[session_key]
+                return
+
+        has_file = False
+
+        try:
+            content, read_err, has_file = await self._read_uploaded_toml_content(
+                event,
+                max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
+            )
+            if not has_file:
+                return
+            if read_err:
+                yield event.plain_result(read_err)
+                return
+            if not content:
+                yield event.plain_result("读取上传文件失败")
+                return
+
+            async for result in self._process_import_toml(event, content):
+                yield result
+
+        except OSError as e:
+            logger.error(f"导入文件处理失败: {e}")
+            yield event.plain_result(f"文件处理失败: {e}")
+        finally:
+            # 仅在本次消息包含文件并触发导入流程时，才清理导入会话
+            if has_file:
+                async with self._import_session_lock:
+                    self._import_sessions.pop(session_key, None)
 
     @filter.command("sub_set")
     async def cmd_set_sub_option(
@@ -1000,6 +1629,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(
                 "当前 RSS 插件配置:\n"
                 f"proxy = {self.config.proxy or '(empty)'}\n"
+                f"rsshub_base_url = {self.config.rsshub_base_url}\n"
                 f"default_interval = {self.config.default_interval}\n"
                 f"minimal_interval = {self.config.minimal_interval}\n"
                 f"timeout = {self.config.timeout}\n"
@@ -1011,7 +1641,7 @@ class RSSHubPlugin(Star):
         if normalized_key not in PLUGIN_CONFIG_KEYS:
             yield event.plain_result(
                 "不支持的配置项。可用项: "
-                "proxy/default_interval/minimal_interval/timeout/download_image_before_send"
+                "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/download_image_before_send"
             )
             return
 
@@ -1036,14 +1666,15 @@ class RSSHubPlugin(Star):
         command_lines = [
             "订阅: /sub <RSS链接> [目标]",
             "取消订阅: /unsub <订阅ID>",
-            "取消全部: /unsub_all yes",
-            "订阅列表: /sub_list",
+            "取消订阅: /unsub_all [global]  # 默认当前会话，global=所有会话(管理员)",
+            "订阅列表: /sub_list [all]",
             "设置订阅选项: /sub_set <订阅ID> <选项> <值>",
             "设置默认选项: /sub_set_default <选项> <值>",
             "设置推送目标: /sub_bind <目标>",
             "会话默认配置: /sub_session_default_set <key> <value>",
             "查看会话默认配置: /sub_session_default_get",
             "插件配置: /rss_conf [key] [value]",
+            "导入订阅: /sub_import [本地文件路径]",
         ]
         if event.is_admin():
             command_lines.append(
@@ -1063,7 +1694,7 @@ class RSSHubPlugin(Star):
             + "- display_media: -1/0\n"
             + "- target_session: private/group/current 或完整 session\n\n"
             + "插件配置项:\n"
-            + "- proxy/default_interval/minimal_interval/timeout/download_image_before_send\n\n"
+            + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/download_image_before_send\n\n"
             + "会话级默认配置项:\n"
             + "- notify/send_mode/length_limit/link_preview/display_author/display_via/display_title/display_entry_tags/style/display_media/interval/title/tags\n\n"
             + "目标绑定:\n"

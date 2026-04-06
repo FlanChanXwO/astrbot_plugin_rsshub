@@ -11,6 +11,12 @@ from .monitor_helpers import (
     resolve_hash_history_limit,
     tracking_query_params_cache_key,
 )
+from .subscription_io import (
+    EXPORT_FORMAT,
+    EXPORT_VERSION,
+    parse_subscriptions_toml,
+    serialize_subscriptions_to_toml,
+)
 
 __all__ = [
     "PluginConfig",
@@ -22,4 +28,8 @@ __all__ = [
     "looks_like_bare_domain_scheme",
     "normalize_config_positive_int",
     "resolve_hash_history_limit",
+    "EXPORT_FORMAT",
+    "EXPORT_VERSION",
+    "serialize_subscriptions_to_toml",
+    "parse_subscriptions_toml",
 ]

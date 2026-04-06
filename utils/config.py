@@ -8,6 +8,9 @@ from typing import Any
 from astrbot.api import AstrBotConfig, logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
+DEFAULT_RSSHUB_BASE_URL = "https://rsshub.app"
+DEFAULT_LOCAL_IMPORTS_DIRNAME = "imports"
+
 
 @dataclass
 class PluginConfig:
@@ -18,6 +21,8 @@ class PluginConfig:
     minimal_interval: int = 1
     timeout: int = 30
     proxy: str = ""
+    rsshub_base_url: str = DEFAULT_RSSHUB_BASE_URL
+    local_imports_dirname: str = DEFAULT_LOCAL_IMPORTS_DIRNAME
     download_image_before_send: bool = True
     db_file: str = "rsshub.db"
     astrbot_config: AstrBotConfig | None = None
@@ -40,6 +45,10 @@ class PluginConfig:
             config.minimal_interval = int(astrbot_config.get("minimal_interval", 1))
             config.timeout = int(astrbot_config.get("timeout", 30))
             config.proxy = str(astrbot_config.get("proxy", "") or "")
+            config.rsshub_base_url = str(
+                astrbot_config.get("rsshub_base_url", DEFAULT_RSSHUB_BASE_URL)
+                or DEFAULT_RSSHUB_BASE_URL
+            )
             config.download_image_before_send = bool(
                 astrbot_config.get("download_image_before_send", True)
             )
@@ -53,6 +62,10 @@ class PluginConfig:
                 config.minimal_interval = int(data.get("minimal_interval", 1))
                 config.timeout = int(data.get("timeout", 30))
                 config.proxy = str(data.get("proxy", "") or "")
+                config.rsshub_base_url = str(
+                    data.get("rsshub_base_url", DEFAULT_RSSHUB_BASE_URL)
+                    or DEFAULT_RSSHUB_BASE_URL
+                )
                 config.download_image_before_send = bool(
                     data.get("download_image_before_send", True)
                 )
@@ -71,10 +84,16 @@ class PluginConfig:
         self.astrbot_config["minimal_interval"] = int(self.minimal_interval)
         self.astrbot_config["timeout"] = int(self.timeout)
         self.astrbot_config["proxy"] = str(self.proxy)
+        self.astrbot_config["rsshub_base_url"] = str(self.rsshub_base_url)
         self.astrbot_config["download_image_before_send"] = bool(
             self.download_image_before_send
         )
         self.astrbot_config.save_config()
+
+    @property
+    def local_imports_dir(self) -> Path:
+        """Return directory for admin local-path import files."""
+        return self.data_dir / self.local_imports_dirname
 
     @property
     def db_path(self) -> str:

@@ -668,7 +668,7 @@ class RSSHubPlugin(Star):
                 default_base_url=self.config.rsshub_base_url,
             )
         except Exception as ex:
-            return f"获��路由参数失败: {ex}"
+            return f"获取路由参数失败: {ex}"
 
         if schema is None:
             return json.dumps(
@@ -1173,7 +1173,7 @@ class RSSHubPlugin(Star):
             target_session = user.default_target_session
         if not target_session:
             yield event.plain_result(
-                "该订阅尚未绑定推送目标，请先让订阅用户执行 /sub_bind 绑定目标"
+                "该订阅��未绑定推送目标，请先让订阅用户执行 /sub_bind 绑定目标"
             )
             return
 
@@ -1230,7 +1230,15 @@ class RSSHubPlugin(Star):
         user_id = event.get_sender_id()
         current_session = event.unified_msg_origin
         scope_value = scope.strip().lower()
-        is_global = scope_value in {"global"}
+
+        if scope_value and scope_value != "global":
+            yield event.plain_result(
+                "参数无效。用法: /unsub_all [global]\n"
+                "不带参数表示删除当前会话；global 表示删除所有会话（管理员）。"
+            )
+            return
+
+        is_global = scope_value == "global"
 
         # global 模式需要管理员权限
         if is_global and not event.is_admin():
@@ -1559,7 +1567,7 @@ class RSSHubPlugin(Star):
 
         user_id = event.get_sender_id()
         await User.update_defaults(user_id, **{option_key: parsed_value})
-        yield event.plain_result(f"默认选项已���新: {option_key} = {parsed_value}")
+        yield event.plain_result(f"默认选项已更新: {option_key} = {parsed_value}")
 
     @filter.command("sub_bind")
     async def cmd_sub_bind(self, event: AstrMessageEvent, target: str = ""):
@@ -1692,7 +1700,7 @@ class RSSHubPlugin(Star):
         command_lines = [
             "订阅: /sub <RSS链接> [目标]",
             "取消订阅: /unsub <订阅ID>",
-            "取消订阅: /unsub_all [global|yes]  # 默认当前会话，global/yes=所有会话(管理员)",
+            "取消订阅: /unsub_all [global]  # 默认当前会话，global=所有会话(管理员)",
             "订阅列表: /sub_list [all]",
             "设置订阅选项: /sub_set <订阅ID> <选项> <值>",
             "设置默认选项: /sub_set_default <选项> <值>",

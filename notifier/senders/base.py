@@ -195,22 +195,26 @@ class MessageSender:
                     failed_media_urls.append(media_url)
                     continue
 
-            file_value = str(local_path.resolve()) if local_path else media_url
+            local_file_path = str(local_path.resolve()) if local_path else ""
+            local_file_uri = local_path.resolve().as_uri() if local_path else ""
+            media_file_value = local_file_uri if local_path else media_url
 
             if media_type == "image":
                 if image_count >= 9:
                     continue
-                image_components.append(Image(file=file_value, url=media_url))
+                image_components.append(Image(file=media_file_value, url=media_url))
                 image_count += 1
             elif media_type == "audio":
-                tail_components.append(Record(file=file_value, text="audio"))
+                tail_components.append(Record(file=media_file_value, text="audio"))
             elif media_type == "video":
-                tail_components.append(Video(file=file_value))
+                tail_components.append(Video(file=media_file_value))
             elif media_type == "file":
                 parsed = urlparse(media_url)
                 filename = unquote(parsed.path.rsplit("/", 1)[-1]) or "attachment"
                 tail_components.append(
-                    File(name=filename, file=file_value, url=media_url)
+                    File(
+                        name=filename, file=local_file_path or media_url, url=media_url
+                    )
                 )
 
         return image_components, tail_components, failed_media_urls

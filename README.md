@@ -20,7 +20,7 @@ AstrBot RSS 订阅插件，基于 `RSS-to-Telegram-Bot` 迁移并适配 AstrBot 
 - `/sub <RSS链接> [目标]`: 新增订阅，目标可选 `private`/`group`/`current`/完整 session
 - `/sub_bind <目标>`: 绑定当前用户默认推送目标
 - `/unsub <订阅ID>`: 删除单个订阅
-- `/unsub_all [global|yes]`: 删除订阅；默认仅清除当前会话，`global/yes` 清除所有会话（需管理员）
+- `/unsub_all [global]`: 删除订阅；默认仅清除当前会话，`global` 清除所有会话（需管理员）
 - `/sub_list`: 查看当前用户订阅列表
 - `/sub_set <订阅ID> <选项> <值>`: 设置单个订阅选项（支持 `target_session`）
 - `/sub_set_default <选项> <值>`: 设置用户默认选项

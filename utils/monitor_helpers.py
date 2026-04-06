@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import numbers
 import re
 from html import unescape
 from urllib.parse import parse_qsl, urlencode
@@ -74,11 +76,32 @@ def normalize_config_positive_int(raw, key: str, default: int, logger) -> int:
     if isinstance(raw, bool):
         logger.warning("Invalid %s=%r; expected positive integer", key, raw)
         return default
-    if isinstance(raw, int):
+
+    # Accept any integral numeric type (excluding bool, handled above)
+    if isinstance(raw, numbers.Integral):
         if raw > 0:
-            return raw
+            return int(raw)
         logger.warning("Invalid %s=%r; expected positive integer", key, raw)
         return default
+
+    # Handle non-integral real types (e.g. float, Decimal) explicitly
+    if isinstance(raw, numbers.Real):
+        if math.isfinite(float(raw)) and raw > 0 and float(raw).is_integer():
+            coerced = int(raw)
+            logger.info(
+                "Coerced %s=%r (non-integral type) to positive integer %d",
+                key,
+                raw,
+                coerced,
+            )
+            return coerced
+        logger.warning(
+            "Invalid %s=%r; expected positive integer (got non-integral numeric type)",
+            key,
+            raw,
+        )
+        return default
+
     if isinstance(raw, str):
         stripped = raw.strip()
         if not stripped:
@@ -88,6 +111,7 @@ def normalize_config_positive_int(raw, key: str, default: int, logger) -> int:
             return parsed if parsed > 0 else default
         logger.warning("Invalid %s=%r; expected positive integer", key, raw)
         return default
+
     return default
 
 

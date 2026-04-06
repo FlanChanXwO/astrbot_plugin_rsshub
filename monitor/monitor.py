@@ -80,6 +80,7 @@ class RSSMonitor:
         self._lock_up_period: int = 0
         self._running = False
         self._cached_tracking_query_params: set[str] | None = None
+        self._cached_tracking_query_params_source: str | None = None
 
     def _config_value(self, key: str, default=None):
         """Read plugin config with attribute-first fallback to mapping style."""
@@ -427,19 +428,35 @@ class RSSMonitor:
         return (value or "").strip()[:max_length]
 
     def _tracking_query_params(self) -> set[str]:
-        if self._cached_tracking_query_params is not None:
+        raw = self._config_value("tracking_query_params")
+        source = repr(raw)
+
+        # Rebuild cache if runtime config changed.
+        if (
+            self._cached_tracking_query_params is not None
+            and self._cached_tracking_query_params_source == source
+        ):
             return self._cached_tracking_query_params
 
-        raw = self._config_value("tracking_query_params")
-        if isinstance(raw, (list, tuple, set)):
+        items = None
+        if isinstance(raw, str):
+            # Support comma/whitespace separated strings in config.
+            tokens = re.split(r"[,\s]+", raw)
+            items = [token for token in tokens if token]
+        elif isinstance(raw, (list, tuple, set)):
+            items = raw
+
+        if items:
             normalized = {
-                str(item).strip().lower() for item in raw if str(item).strip()
+                str(item).strip().lower() for item in items if str(item).strip()
             }
             if normalized:
                 self._cached_tracking_query_params = normalized
+                self._cached_tracking_query_params_source = source
                 return normalized
 
         self._cached_tracking_query_params = set(self.TRACKING_QUERY_PARAMS)
+        self._cached_tracking_query_params_source = source
         return self._cached_tracking_query_params
 
     def _normalize_link(self, link: str) -> str:

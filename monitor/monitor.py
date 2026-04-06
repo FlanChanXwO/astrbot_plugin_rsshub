@@ -427,36 +427,44 @@ class RSSMonitor:
         """Treat identifiers as opaque tokens: keep case and inner whitespace."""
         return (value or "").strip()[:max_length]
 
-    def _tracking_query_params(self) -> set[str]:
-        raw = self._config_value("tracking_query_params")
-        source = repr(raw)
-
-        # Rebuild cache if runtime config changed.
-        if (
-            self._cached_tracking_query_params is not None
-            and self._cached_tracking_query_params_source == source
-        ):
-            return self._cached_tracking_query_params
-
+    @staticmethod
+    def _tracking_query_params_cache_key(raw) -> tuple[str, ...] | None:
+        """Build a deterministic cache key for tracking_query_params config."""
         items = None
         if isinstance(raw, str):
-            # Support comma/whitespace separated strings in config.
             tokens = re.split(r"[,\s]+", raw)
             items = [token for token in tokens if token]
         elif isinstance(raw, (list, tuple, set)):
             items = raw
 
-        if items:
-            normalized = {
-                str(item).strip().lower() for item in items if str(item).strip()
-            }
-            if normalized:
-                self._cached_tracking_query_params = normalized
-                self._cached_tracking_query_params_source = source
-                return normalized
+        if not items:
+            return None
 
-        self._cached_tracking_query_params = set(self.TRACKING_QUERY_PARAMS)
-        self._cached_tracking_query_params_source = source
+        normalized = sorted(
+            {str(item).strip().lower() for item in items if str(item).strip()}
+        )
+        return tuple(normalized) if normalized else None
+
+    def _tracking_query_params(self) -> set[str]:
+        raw = self._config_value("tracking_query_params")
+        source_key = self._tracking_query_params_cache_key(raw)
+
+        # Rebuild cache only when normalized input changes.
+        if (
+            self._cached_tracking_query_params is not None
+            and self._cached_tracking_query_params_source == repr(source_key)
+        ):
+            return self._cached_tracking_query_params
+
+        if source_key is not None:
+            normalized = set(source_key)
+            self._cached_tracking_query_params = normalized
+            self._cached_tracking_query_params_source = repr(source_key)
+            return normalized
+
+        default_key = tuple(sorted(self.TRACKING_QUERY_PARAMS))
+        self._cached_tracking_query_params = set(default_key)
+        self._cached_tracking_query_params_source = repr(default_key)
         return self._cached_tracking_query_params
 
     def _normalize_link(self, link: str) -> str:
@@ -483,11 +491,13 @@ class RSSMonitor:
         query_pairs.sort()
         query = urlencode(query_pairs, doseq=True)
 
-        # For non-hierarchical URLs (mailto:, tel:, magnet:), keep their scheme
-        # even when netloc is empty; they are not relative links.
-        if parsed.scheme and not parsed.netloc:
+        # Guard against bare-domain-like inputs such as "example.com/post":
+        # urlsplit may parse them as scheme="example.com", netloc="", path="post".
+        if parsed.scheme and not parsed.netloc and not trimmed_link.startswith("//"):
             scheme = parsed.scheme.lower()
-            if scheme not in {"http", "https"}:
+            if "." in scheme and not trimmed_link.startswith(f"{scheme}:"):
+                return trimmed_link
+            if scheme not in {"http", "https"} and "." not in scheme:
                 opaque = urlunsplit((scheme, "", path, query, ""))
                 return opaque or trimmed_link
 
@@ -580,12 +590,7 @@ class RSSMonitor:
 
         return fingerprints
 
-    def _merge_hash_history(
-        self,
-        old_hashes: list[str],
-        new_hashes: list[str],
-        entry_count: int,
-    ) -> list[str] | None:
+    def _resolve_hash_history_limits(self, entry_count: int) -> int:
         configured_min = self._config_value("hash_history_min")
         configured_multiplier = self._config_value("hash_history_multiplier")
         configured_hard_limit = self._config_value("hash_history_hard_limit")
@@ -635,7 +640,15 @@ class RSSMonitor:
             hard_limit = min_limit
 
         growth_limit = max(entry_count, 1) * multiplier
-        history_limit = min(max(min_limit, growth_limit), hard_limit)
+        return min(max(min_limit, growth_limit), hard_limit)
+
+    def _merge_hash_history(
+        self,
+        old_hashes: list[str],
+        new_hashes: list[str],
+        entry_count: int,
+    ) -> list[str] | None:
+        history_limit = self._resolve_hash_history_limits(entry_count)
 
         merged: list[str] = []
         seen: set[str] = set()

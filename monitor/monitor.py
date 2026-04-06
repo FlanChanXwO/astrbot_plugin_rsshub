@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import zlib
 from calendar import timegm
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -77,6 +78,23 @@ class RSSMonitor:
         )
         self._lock_up_period: int = 0
         self._running = False
+
+    def _config_value(self, key: str, default=None):
+        """Read plugin config with attribute-first fallback to mapping style."""
+        if self.config is None:
+            return default
+
+        if hasattr(self.config, key):
+            value = getattr(self.config, key)
+            if value is not None:
+                return value
+
+        getter = getattr(self.config, "get", None)
+        if callable(getter):
+            value = getter(key, default)
+            return default if value is None else value
+
+        return default
 
     async def start(self):
         self._running = True
@@ -384,10 +402,6 @@ class RSSMonitor:
 
         for entry in entries:
             entry_hashes = self._hash_entry(entry)
-            if not entry_hashes:
-                logger.debug("Feed entry has no dedupe fingerprint; treated as updated")
-                updated_entries.append(entry)
-                continue
 
             if not any(entry_hash in old_hashes_set for entry_hash in entry_hashes):
                 updated_entries.append(entry)
@@ -406,7 +420,7 @@ class RSSMonitor:
         return text[:max_length]
 
     def _tracking_query_params(self) -> set[str]:
-        raw = self.config.get("tracking_query_params") if self.config else None
+        raw = self._config_value("tracking_query_params")
         if isinstance(raw, (list, tuple, set)):
             normalized = {
                 str(item).strip().lower() for item in raw if str(item).strip()
@@ -476,6 +490,16 @@ class RSSMonitor:
     def _sha256(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
 
+    @staticmethod
+    def _legacy_entry_crc32(entry) -> str:
+        """Legacy v1 fingerprint for backward compatibility with stored hashes."""
+        hash_base = (
+            str(entry.get("link", ""))
+            + str(entry.get("title", ""))
+            + str(entry.get("published", ""))
+        )
+        return str(zlib.crc32(hash_base.encode()))
+
     def _hash_entry(self, entry) -> list[str]:
         """Calculate a robust dedupe fingerprint set for one entry."""
         entry_id = self._normalize_text(str(entry.get("id") or entry.get("guid") or ""))
@@ -508,6 +532,12 @@ class RSSMonitor:
         secondary_hash = self._sha256(secondary_material)
         if secondary_hash != fingerprints[0]:
             fingerprints.append(secondary_hash)
+
+        # Keep legacy v1 crc32 fingerprint to avoid full re-push after upgrading.
+        legacy_hash = self._legacy_entry_crc32(entry)
+        if legacy_hash and legacy_hash not in fingerprints:
+            fingerprints.append(legacy_hash)
+
         return fingerprints
 
     def _merge_hash_history(
@@ -516,13 +546,9 @@ class RSSMonitor:
         new_hashes: list[str],
         entry_count: int,
     ) -> list[str] | None:
-        configured_min = self.config.get("hash_history_min") if self.config else None
-        configured_multiplier = (
-            self.config.get("hash_history_multiplier") if self.config else None
-        )
-        configured_hard_limit = (
-            self.config.get("hash_history_hard_limit") if self.config else None
-        )
+        configured_min = self._config_value("hash_history_min")
+        configured_multiplier = self._config_value("hash_history_multiplier")
+        configured_hard_limit = self._config_value("hash_history_hard_limit")
 
         min_limit = self.HASH_HISTORY_MIN
         multiplier = self.HASH_HISTORY_MULTIPLIER

@@ -171,21 +171,41 @@ class MessageSender:
                 failed_media_urls.append(media_url)
                 continue
 
+            # Cache file may be pruned externally; refresh just-in-time to avoid ENOENT.
+            if local_path is not None and not local_path.exists():
+                logger.warning(
+                    "Cached media missing before send, re-download: type=%s, url=%s, path=%s",
+                    media_type,
+                    media_url,
+                    local_path,
+                )
+                try:
+                    local_path = await get_or_download_media_to_cache(
+                        url=media_url,
+                        timeout_seconds=cls._get_timeout_seconds(),
+                        proxy=cls._get_proxy(),
+                    )
+                except Exception as ex:
+                    logger.warning(
+                        "Re-download missing media failed: type=%s, url=%s, err=%s",
+                        media_type,
+                        media_url,
+                        ex,
+                    )
+                    failed_media_urls.append(media_url)
+                    continue
+
             file_value = str(local_path.resolve()) if local_path else media_url
-            if local_path:
-                file_value_uri = local_path.resolve().as_uri()
-            else:
-                file_value_uri = media_url
 
             if media_type == "image":
                 if image_count >= 9:
                     continue
-                image_components.append(Image(file=file_value_uri, url=media_url))
+                image_components.append(Image(file=file_value, url=media_url))
                 image_count += 1
             elif media_type == "audio":
-                tail_components.append(Record(file=file_value_uri, text="audio"))
+                tail_components.append(Record(file=file_value, text="audio"))
             elif media_type == "video":
-                tail_components.append(Video(file=file_value_uri))
+                tail_components.append(Video(file=file_value))
             elif media_type == "file":
                 parsed = urlparse(media_url)
                 filename = unquote(parsed.path.rsplit("/", 1)[-1]) or "attachment"

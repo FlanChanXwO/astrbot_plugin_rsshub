@@ -29,6 +29,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.provider.register import llm_tools
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
+from .api import close_shared_session
 from .db import Feed, Sub, User, close_db, init_db
 from .monitor import Monitor
 from .notifier import Notifier
@@ -261,6 +262,10 @@ class RSSHubPlugin(Star):
                 await self._scheduler_task
             except asyncio.CancelledError:
                 pass
+
+        if self._rsshub_radar_api is not None:
+            await self._rsshub_radar_api.close()
+        await close_shared_session()
 
         await self._stop_webui_if_needed()
         await self._unregister_llm_tools()
@@ -884,36 +889,36 @@ class RSSHubPlugin(Star):
         self,
         event: AstrMessageEvent,
         import_path: str = "",
-    ) -> tuple[str | None, str | None]:
-        """Read import TOML content from local path or uploaded file."""
+    ) -> tuple[str | None, str | None, bool]:
+        """Read import TOML content from local path or uploaded file.
+
+        Returns: (content, error, should_wait_upload)
+        """
         max_file_size = 5 * 1024 * 1024
 
         if import_path.strip():
             path = Path(import_path.strip()).expanduser()
             if not path.is_file():
-                return None, f"导入文件不存在: {path}"
+                return None, f"导入文件不存在: {path}", False
             try:
                 if path.stat().st_size > max_file_size:
-                    return None, "导入文件过大，请控制在 5MB 以内"
-                return path.read_text(encoding="utf-8-sig"), None
+                    return None, "导入文件过大，请控制在 5MB 以内", False
+                return path.read_text(encoding="utf-8-sig"), None, False
             except OSError as ex:
-                return None, f"读取导入文件失败: {ex}"
+                return None, f"读取导入文件失败: {ex}", False
 
         content, read_err, has_file_component = await self._read_uploaded_toml_content(
             event,
             max_file_size=max_file_size,
         )
         if content:
-            return content, None
+            return content, None, False
         if read_err:
-            return None, read_err
+            return None, read_err, False
         if has_file_component:
-            return None, "读取上传文件失败"
+            return None, "读取上传文件失败", False
 
-        return (
-            None,
-            "请在命令消息中附带 TOML 文件，或使用 /sub_import <本地文件路径>",
-        )
+        return None, None, True
 
     def _validate_import_record_options(
         self,
@@ -1278,7 +1283,10 @@ class RSSHubPlugin(Star):
             yield notice
 
         # 先尝试直接读取（用户可能直接附带文件或提供路径）
-        content, read_err = await self._read_import_toml_content(event, import_path)
+        content, read_err, should_wait_upload = await self._read_import_toml_content(
+            event,
+            import_path,
+        )
 
         if content:
             # 用户已提供文件，直接处理
@@ -1286,9 +1294,12 @@ class RSSHubPlugin(Star):
                 yield result
             return
 
-        if read_err and "请在命令消息中附带 TOML 文件" not in read_err:
-            # 读取失败但不是因为没有文件，返回错误
+        if read_err:
             yield event.plain_result(read_err)
+            return
+
+        if not should_wait_upload:
+            yield event.plain_result("未检测到可导入的文件")
             return
 
         # 没有提供文件，设置导入会话状态，等待用户发送文件
@@ -1322,6 +1333,7 @@ class RSSHubPlugin(Star):
             return
 
         user_id = event.get_sender_id()
+        # Ensure user exists before creating subscriptions for FK consistency.
         user = await User.get_or_create(user_id)
         imported = 0
         skipped = 0

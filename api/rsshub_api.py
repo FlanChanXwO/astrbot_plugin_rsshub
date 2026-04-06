@@ -48,11 +48,28 @@ def normalize_uri(uri: str) -> str:
 class RSSHubRadarAPI:
     """Fetch and index RSSHub radar rules with a small in-memory cache."""
 
-    def __init__(self, timeout: int = 30, proxy: str = "") -> None:
+    def __init__(
+        self,
+        timeout: int = 30,
+        proxy: str = "",
+        session: aiohttp.ClientSession | None = None,
+    ) -> None:
         self.timeout = max(1, int(timeout or 30))
         self.proxy = (proxy or "").strip()
         self._cache_ttl = 300
         self._rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._session = session
+
+    async def close(self) -> None:
+        """Close owned aiohttp session if this instance created it."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     def resolve_base_url(self, explicit_base_url: str, default_base_url: str) -> str:
         """Resolve base URL with explicit override support."""
@@ -163,18 +180,18 @@ class RSSHubRadarAPI:
             return cached[1]
 
         rules_url = f"{resolved_base_url}/api/radar/rules"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                rules_url,
-                timeout=self.timeout,
-                proxy=self.proxy or None,
-                headers={"Accept": "application/json"},
-            ) as resp:
-                if resp.status != 200:
-                    raise RuntimeError(
-                        f"获取 RSSHub 路由失败: HTTP {resp.status} {resp.reason or ''}".strip()
-                    )
-                payload = await resp.json(content_type=None)
+        session = await self._get_session()
+        async with session.get(
+            rules_url,
+            timeout=self.timeout,
+            proxy=self.proxy or None,
+            headers={"Accept": "application/json"},
+        ) as resp:
+            if resp.status != 200:
+                raise RuntimeError(
+                    f"获取 RSSHub 路由失败: HTTP {resp.status} {resp.reason or ''}".strip()
+                )
+            payload = await resp.json(content_type=None)
 
         rules = self._normalize_rules(payload)
         self._rules_cache[resolved_base_url] = (now, rules)

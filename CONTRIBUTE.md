@@ -144,7 +144,7 @@ sequenceDiagram
 
 ### 6.1 环境与依赖
 
-- Python 3.10+
+- Python 3.12+
 - 推荐使用 `uv`
 
 ```powershell

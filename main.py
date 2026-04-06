@@ -1173,7 +1173,7 @@ class RSSHubPlugin(Star):
             target_session = user.default_target_session
         if not target_session:
             yield event.plain_result(
-                "该订阅��未绑定推送目标，请先让订阅用户执行 /sub_bind 绑定目标"
+                "该订阅尚未绑定推送目标，请先让订阅用户执行 /sub_bind 绑定目标"
             )
             return
 

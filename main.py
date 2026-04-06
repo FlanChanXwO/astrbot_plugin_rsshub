@@ -100,6 +100,9 @@ SESSION_DEFAULT_KEYS = {
 }
 
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
+IMPORT_MAX_FILE_SIZE_DISPLAY = (
+    f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
+)
 
 
 class RSSHubPlugin(Star):
@@ -874,7 +877,11 @@ class RSSHubPlugin(Star):
                 if not candidate.is_file():
                     continue
                 if candidate.stat().st_size > max_file_size:
-                    return None, "导入文件过大，请控制在 5MB 以内", True
+                    return (
+                        None,
+                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                        True,
+                    )
                 return candidate.read_text(encoding="utf-8-sig"), None, True
             except OSError as ex:
                 return None, f"读取上传文件失败: {ex}", True
@@ -923,7 +930,11 @@ class RSSHubPlugin(Star):
                 return None, f"导入文件不存在: {path}", False
             try:
                 if path.stat().st_size > IMPORT_MAX_FILE_SIZE_BYTES:
-                    return None, "导入文件过大，请控制在 5MB 以内", False
+                    return (
+                        None,
+                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                        False,
+                    )
                 return path.read_text(encoding="utf-8-sig"), None, False
             except OSError as ex:
                 return None, f"读取导入文件失败: {ex}", False
@@ -1332,7 +1343,7 @@ class RSSHubPlugin(Star):
             return
 
         # 没有提供文件，设置导入会话状态，等待用户发送文件
-        user_id = event.get_sender_id()
+        user_id = str(event.get_sender_id())
         session_key = (user_id, event.unified_msg_origin)
         now = time.monotonic()
         async with self._import_session_lock:
@@ -1440,9 +1451,9 @@ class RSSHubPlugin(Star):
         需要满足以下条件才会处理：
         1. 在执行导入命令后5分钟内
         2. 发送者是发起导入命令的用户本人（会话隔离）
-        文件大小限制：5MB
+        文件大小限制：与 IMPORT_MAX_FILE_SIZE_BYTES 一致
         """
-        sender_id = event.get_sender_id()
+        sender_id = str(event.get_sender_id())
         session_key = (sender_id, event.unified_msg_origin)
 
         # 检查是否有活跃的导入会话

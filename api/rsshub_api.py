@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -187,17 +188,36 @@ class RSSHubRadarAPI:
 
         rules_url = f"{resolved_base_url}/api/radar/rules"
         session = await self._get_session()
-        async with session.get(
-            rules_url,
-            timeout=self.timeout,
-            proxy=self.proxy or None,
-            headers={"Accept": "application/json"},
-        ) as resp:
-            if resp.status != 200:
-                raise RuntimeError(
-                    f"获取 RSSHub 路由失败: HTTP {resp.status} {resp.reason or ''}".strip()
-                )
-            payload = await resp.json(content_type=None)
+
+        try:
+            async with session.get(
+                rules_url,
+                timeout=self.timeout,
+                proxy=self.proxy or None,
+                headers={"Accept": "application/json"},
+            ) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(
+                        "获取 RSSHub 路由失败: "
+                        f"base_url={resolved_base_url}, url={rules_url}, "
+                        f"HTTP {resp.status} {resp.reason or ''}".strip()
+                    )
+                try:
+                    payload = await resp.json(content_type=None)
+                except Exception as ex:
+                    raise RuntimeError(
+                        "解析 RSSHub 路由 JSON 失败: "
+                        f"base_url={resolved_base_url}, url={rules_url}, "
+                        f"error={type(ex).__name__}: {ex}"
+                    ) from ex
+        except RuntimeError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as ex:
+            raise RuntimeError(
+                "请求 RSSHub 路由失败: "
+                f"base_url={resolved_base_url}, url={rules_url}, "
+                f"error={type(ex).__name__}: {ex}"
+            ) from ex
 
         rules = self._normalize_rules(payload)
         self._rules_cache[resolved_base_url] = (now, rules)

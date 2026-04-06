@@ -2,6 +2,8 @@
 
 AstrBot RSS 订阅插件，基于 `RSS-to-Telegram-Bot` 迁移并适配 AstrBot 多平台消息发送。
 
+> 新开发者请先阅读贡献指南：[`CONTRIBUTE.md`](./CONTRIBUTE.md)
+
 ## 当前能力
 
 - RSS/Atom 订阅、取消订阅、订阅列表

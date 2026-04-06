@@ -7,16 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import re
 import zlib
 from calendar import timegm
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime, parsedate_to_datetime
-from html import unescape
 from itertools import chain, repeat
 from typing import TYPE_CHECKING, Final
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -25,6 +23,16 @@ from astrbot.api import logger
 
 from ..db import Feed, MonitorSchedule, Sub, User, get_session
 from ..notifier import Notifier
+from ..utils.monitor_helpers import (
+    looks_like_bare_domain_scheme,
+    normalize_config_positive_int,
+    normalize_identifier,
+    normalize_path,
+    normalize_query,
+    normalize_text,
+    resolve_hash_history_limit,
+    tracking_query_params_cache_key,
+)
 from ..web import feed_get
 
 
@@ -418,32 +426,15 @@ class RSSMonitor:
 
     @staticmethod
     def _normalize_text(value: str, max_length: int = 1024) -> str:
-        text = unescape(value or "")
-        text = re.sub(r"\s+", " ", text).strip().lower()
-        return text[:max_length]
+        return normalize_text(value, max_length=max_length)
 
     @staticmethod
     def _normalize_identifier(value: str, max_length: int = 1024) -> str:
-        """Treat identifiers as opaque tokens: keep case and inner whitespace."""
-        return (value or "").strip()[:max_length]
+        return normalize_identifier(value, max_length=max_length)
 
     @staticmethod
     def _tracking_query_params_cache_key(raw) -> tuple[str, ...] | None:
-        """Build a deterministic cache key for tracking_query_params config."""
-        items = None
-        if isinstance(raw, str):
-            tokens = re.split(r"[,\s]+", raw)
-            items = [token for token in tokens if token]
-        elif isinstance(raw, (list, tuple, set)):
-            items = raw
-
-        if not items:
-            return None
-
-        normalized = sorted(
-            {str(item).strip().lower() for item in items if str(item).strip()}
-        )
-        return tuple(normalized) if normalized else None
+        return tracking_query_params_cache_key(raw)
 
     def _tracking_query_params(self) -> set[str]:
         raw = self._config_value("tracking_query_params")
@@ -467,6 +458,21 @@ class RSSMonitor:
         self._cached_tracking_query_params_source = repr(default_key)
         return self._cached_tracking_query_params
 
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        return normalize_path(path)
+
+    def _normalize_query(self, query: str) -> str:
+        return normalize_query(query, self._tracking_query_params())
+
+    @staticmethod
+    def _looks_like_bare_domain_scheme(parsed, trimmed_link: str) -> bool:
+        return looks_like_bare_domain_scheme(parsed, trimmed_link)
+
+    @staticmethod
+    def _normalize_config_positive_int(raw, key: str, default: int) -> int:
+        return normalize_config_positive_int(raw, key, default, logger)
+
     def _normalize_link(self, link: str) -> str:
         if not link:
             return ""
@@ -477,32 +483,21 @@ class RSSMonitor:
         except Exception:
             return self._normalize_text(trimmed_link, max_length=2048)
 
-        path = parsed.path or ""
-        if path != "/":
-            path = path.rstrip("/")
+        path = self._normalize_path(parsed.path)
+        query = self._normalize_query(parsed.query)
 
-        tracking_query_params = self._tracking_query_params()
-        query_pairs = []
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-            normalized_key = key.lower()
-            if normalized_key in tracking_query_params:
-                continue
-            query_pairs.append((normalized_key, value))
-        query_pairs.sort()
-        query = urlencode(query_pairs, doseq=True)
+        # urlsplit may misclassify "example.com/post" as scheme="example.com".
+        if self._looks_like_bare_domain_scheme(parsed, trimmed_link):
+            return trimmed_link
 
-        # Guard against bare-domain-like inputs such as "example.com/post":
-        # urlsplit may parse them as scheme="example.com", netloc="", path="post".
-        if parsed.scheme and not parsed.netloc and not trimmed_link.startswith("//"):
+        # Non-hierarchical URLs (mailto:, tel:, magnet:) should preserve scheme.
+        if parsed.scheme and not parsed.netloc:
             scheme = parsed.scheme.lower()
-            if "." in scheme and not trimmed_link.startswith(f"{scheme}:"):
-                return trimmed_link
-            if scheme not in {"http", "https"} and "." not in scheme:
+            if scheme not in {"http", "https"}:
                 opaque = urlunsplit((scheme, "", path, query, ""))
                 return opaque or trimmed_link
 
-        # Relative links must stay relative. Forcing a scheme here would create
-        # invalid forms like https:///post/1 and break fingerprint stability.
+        # Relative links must remain relative; avoid forcing invalid http(s) forms.
         if not parsed.netloc:
             relative = urlunsplit(("", "", path, query, ""))
             return relative or trimmed_link
@@ -595,52 +590,30 @@ class RSSMonitor:
         configured_multiplier = self._config_value("hash_history_multiplier")
         configured_hard_limit = self._config_value("hash_history_hard_limit")
 
-        min_limit = self.HASH_HISTORY_MIN
-        multiplier = self.HASH_HISTORY_MULTIPLIER
-        hard_limit = self.HASH_HISTORY_HARD_LIMIT
+        min_limit = self._normalize_config_positive_int(
+            configured_min,
+            "hash_history_min",
+            self.HASH_HISTORY_MIN,
+        )
+        multiplier = self._normalize_config_positive_int(
+            configured_multiplier,
+            "hash_history_multiplier",
+            self.HASH_HISTORY_MULTIPLIER,
+        )
+        hard_limit = self._normalize_config_positive_int(
+            configured_hard_limit,
+            "hash_history_hard_limit",
+            self.HASH_HISTORY_HARD_LIMIT,
+        )
 
-        if isinstance(configured_min, int) and configured_min > 0:
-            min_limit = configured_min
-        if isinstance(configured_multiplier, int) and configured_multiplier > 0:
-            multiplier = configured_multiplier
-        if isinstance(configured_hard_limit, int) and configured_hard_limit > 0:
-            hard_limit = configured_hard_limit
-
-        if min_limit > self.HASH_HISTORY_ABSOLUTE_MAX:
-            logger.warning(
-                "hash_history_min=%s is too large; capped to %s",
-                min_limit,
-                self.HASH_HISTORY_ABSOLUTE_MAX,
-            )
-            min_limit = self.HASH_HISTORY_ABSOLUTE_MAX
-
-        if multiplier > self.HASH_HISTORY_ABSOLUTE_MAX:
-            logger.warning(
-                "hash_history_multiplier=%s is too large; capped to %s",
-                multiplier,
-                self.HASH_HISTORY_ABSOLUTE_MAX,
-            )
-            multiplier = self.HASH_HISTORY_ABSOLUTE_MAX
-
-        if hard_limit > self.HASH_HISTORY_ABSOLUTE_MAX:
-            logger.warning(
-                "hash_history_hard_limit=%s is too large; capped to %s",
-                hard_limit,
-                self.HASH_HISTORY_ABSOLUTE_MAX,
-            )
-            hard_limit = self.HASH_HISTORY_ABSOLUTE_MAX
-
-        if hard_limit < min_limit:
-            logger.warning(
-                "hash_history_hard_limit=%s is smaller than hash_history_min=%s; "
-                "using min as effective hard limit",
-                hard_limit,
-                min_limit,
-            )
-            hard_limit = min_limit
-
-        growth_limit = max(entry_count, 1) * multiplier
-        return min(max(min_limit, growth_limit), hard_limit)
+        return resolve_hash_history_limit(
+            entry_count=entry_count,
+            min_limit=min_limit,
+            multiplier=multiplier,
+            hard_limit=hard_limit,
+            absolute_max=self.HASH_HISTORY_ABSOLUTE_MAX,
+            logger=logger,
+        )
 
     def _merge_hash_history(
         self,

@@ -439,7 +439,7 @@ class RSSHubPlugin(Star):
         return await self._run_command_and_collect(self.cmd_unsub(event, sub_id))
 
     async def _llm_unsubscribe_all(self, event: AstrMessageEvent) -> str:
-        return await self._run_command_and_collect(self.cmd_unsub_all(event, "yes"))
+        return await self._run_command_and_collect(self.cmd_unsub_all(event, "global"))
 
     async def _llm_list_subscriptions(self, event: AstrMessageEvent) -> str:
         return await self._run_command_and_collect(self.cmd_list(event))
@@ -839,7 +839,7 @@ class RSSHubPlugin(Star):
             feed_title = sub.feed.title if sub.feed else "未知"
             feed_link = sub.feed.link if sub.feed else ""
             custom_title = f" ({sub.title})" if sub.title else ""
-            lines.append(f"{idx}. {feed_title}{custom_title}")
+            lines.append(f"{idx}. [{sub.id}] {feed_title}{custom_title}")
             if show_all_sessions and sub.target_session:
                 lines.append(f"    target: {sub.target_session}")
             if feed_link:
@@ -931,27 +931,50 @@ class RSSHubPlugin(Star):
         )
 
     @filter.command("unsub_all")
-    async def cmd_unsub_all(self, event: AstrMessageEvent, confirm: str = ""):
-        """取消当前用户所有订阅
+    async def cmd_unsub_all(self, event: AstrMessageEvent, scope: str = ""):
+        """取消当前会话或所有订阅
 
-        Usage: /unsub_all yes
+        Usage: /unsub_all [global]
+        - 默认只清除当前会话的订阅
+        - global: 清除所有会话的订阅（需要管理员权限）
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
-        if confirm.lower() not in {"yes", "y", "确认"}:
-            yield event.plain_result("此操作会删除您所有订阅，请使用: /unsub_all yes")
+        user_id = event.get_sender_id()
+        current_session = event.unified_msg_origin
+        is_global = scope.strip().lower() == "global"
+
+        # global 模式需要管理员权限
+        if is_global and not event.is_admin():
+            yield event.plain_result("清除所有会话订阅需要管理员权限，请使用 /unsub_all 或 /unsub_all global")
             return
 
-        user_id = event.get_sender_id()
         subscriptions = await Sub.get_by_user(user_id)
         if not subscriptions:
             yield event.plain_result("您当前没有可删除的订阅")
             return
 
+        # 根据范围筛选订阅
+        if is_global:
+            to_delete = subscriptions
+            scope_desc = "所有会话"
+        else:
+            to_delete = [
+                sub
+                for sub in subscriptions
+                if (sub.target_session or current_session) == current_session
+            ]
+            scope_desc = "当前会话"
+
+        if not to_delete:
+            yield event.plain_result(f"当前{scope_desc}没有订阅")
+            return
+
+        # 导出备份
         export_text = serialize_subscriptions_to_toml(
             user_id=str(user_id),
-            subscriptions=subscriptions,
+            subscriptions=to_delete,
         )
 
         temp_dir = Path(get_astrbot_temp_path())
@@ -963,7 +986,7 @@ class RSSHubPlugin(Star):
         try:
             export_path.write_text(export_text, encoding="utf-8")
             yield event.plain_result(
-                "已自动导出当前订阅备份，请先保存该文件，再确认删除结果。"
+                f"已自动导出{scope_desc}订阅备份，请先保存该文件，再确认删除结果。"
             )
             yield event.chain_result(
                 [File(name=export_filename, file=str(export_path))]
@@ -978,8 +1001,13 @@ class RSSHubPlugin(Star):
             except OSError:
                 pass
 
-        deleted = await Sub.delete_all_by_user(user_id)
-        yield event.plain_result(f"已取消全部订阅，共删除 {deleted} 条")
+        # 删除订阅
+        deleted_count = 0
+        for sub in to_delete:
+            await Sub.delete(sub)
+            deleted_count += 1
+
+        yield event.plain_result(f"已取消{scope_desc}订阅，共删除 {deleted_count} 条")
 
     @filter.command("sub_import", alias={"import"})
     async def cmd_sub_import(self, event: AstrMessageEvent, import_path: str = ""):
@@ -1408,7 +1436,7 @@ class RSSHubPlugin(Star):
         command_lines = [
             "订阅: /sub <RSS链接> [目标]",
             "取消订阅: /unsub <订阅ID>",
-            "取消全部: /unsub_all yes",
+            "取消订阅(当前会话): /unsub_all [global]",
             "订阅列表: /sub_list [all]",
             "设置订阅选项: /sub_set <订阅ID> <选项> <值>",
             "设置默认选项: /sub_set_default <选项> <值>",
@@ -1416,7 +1444,7 @@ class RSSHubPlugin(Star):
             "会话默认配置: /sub_session_default_set <key> <value>",
             "查看会话默认配置: /sub_session_default_get",
             "插件配置: /rss_conf [key] [value]",
-            "导入订阅: /sub_import [本地文件路径]（或随命令附 TOML 文件）",
+            "导入订阅: /sub_import [本地文件路径]",
         ]
         if event.is_admin():
             command_lines.append(

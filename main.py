@@ -99,6 +99,8 @@ SESSION_DEFAULT_KEYS = {
     "tags",
 }
 
+IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
+
 
 class RSSHubPlugin(Star):
     """AstrBot RSS订阅插件主类"""
@@ -894,14 +896,33 @@ class RSSHubPlugin(Star):
 
         Returns: (content, error, should_wait_upload)
         """
-        max_file_size = 5 * 1024 * 1024
-
         if import_path.strip():
-            path = Path(import_path.strip()).expanduser()
+            if not event.is_admin():
+                return (
+                    None,
+                    "出于安全考虑，仅管理员可使用本地路径导入，请改为上传 TOML 文件。",
+                    False,
+                )
+            if self.config is None:
+                return None, "插件配置尚未初始化", False
+
+            path = Path(import_path.strip()).expanduser().resolve()
+            allowed_dir = (self.config.data_dir / "imports").resolve()
+            allowed_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                path.relative_to(allowed_dir)
+            except ValueError:
+                return (
+                    None,
+                    f"仅允许从导入目录读取文件: {allowed_dir}",
+                    False,
+                )
+
             if not path.is_file():
                 return None, f"导入文件不存在: {path}", False
             try:
-                if path.stat().st_size > max_file_size:
+                if path.stat().st_size > IMPORT_MAX_FILE_SIZE_BYTES:
                     return None, "导入文件过大，请控制在 5MB 以内", False
                 return path.read_text(encoding="utf-8-sig"), None, False
             except OSError as ex:
@@ -909,7 +930,7 @@ class RSSHubPlugin(Star):
 
         content, read_err, has_file_component = await self._read_uploaded_toml_content(
             event,
-            max_file_size=max_file_size,
+            max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
         )
         if content:
             return content, None, False
@@ -1433,7 +1454,7 @@ class RSSHubPlugin(Star):
         try:
             content, read_err, has_file = await self._read_uploaded_toml_content(
                 event,
-                max_file_size=5 * 1024 * 1024,
+                max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
             )
             if not has_file:
                 return

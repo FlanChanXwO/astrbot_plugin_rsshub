@@ -133,7 +133,7 @@ sequenceDiagram
 1. Fork 或创建功能分支：`feat/<topic>` / `fix/<topic>`
 2. 小步提交，单个 commit 只做一件事情
 3. 本地完成格式化 + lint + 最小运行验证
-4. 补充文档（README/CONTRIBUTE.md/_conf_schema）
+4. 补充文档（README/CONTRIBUTE.md/_conf_schema.json）
 5. 提交 PR，描述：
    - 背景问题
    - 变更内容

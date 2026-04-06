@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from astrbot.api import logger
 from astrbot.api.message_components import Node, Nodes, Plain
 
 from .base import MessageSender
+from .media_downloader import get_or_download_media_to_cache
 from .types import NotifierContext, PreparedMedia, SendResult
 
 
@@ -12,6 +14,53 @@ class AiocqhttpMessageSender(MessageSender):
     @classmethod
     def _build_node(cls, nickname: str, chain: list):
         return Node(content=chain, name=nickname)
+
+    @classmethod
+    async def _ensure_local_media_for_forward(
+        cls,
+        prepared_media: list[PreparedMedia],
+    ) -> list[PreparedMedia]:
+        """Ensure video/audio are local files for better OneBot forward compatibility."""
+        normalized: list[PreparedMedia] = []
+        for item in prepared_media:
+            if item.download_failed or item.local_path is not None:
+                normalized.append(item)
+                continue
+            if item.media_type not in {"video", "audio"}:
+                normalized.append(item)
+                continue
+
+            try:
+                local_path = await get_or_download_media_to_cache(
+                    url=item.original_url,
+                    timeout_seconds=cls._get_timeout_seconds(),
+                    proxy=cls._get_proxy(),
+                )
+                normalized.append(
+                    PreparedMedia(
+                        media_type=item.media_type,
+                        original_url=item.original_url,
+                        local_path=local_path,
+                        download_failed=False,
+                    )
+                )
+            except Exception as ex:
+                logger.warning(
+                    "Force local media for OneBot forward failed: type=%s, url=%s, err=%s",
+                    item.media_type,
+                    item.original_url,
+                    ex,
+                )
+                normalized.append(
+                    PreparedMedia(
+                        media_type=item.media_type,
+                        original_url=item.original_url,
+                        local_path=None,
+                        download_failed=True,
+                    )
+                )
+
+        return normalized
 
     @classmethod
     async def send_to_user(
@@ -38,6 +87,9 @@ class AiocqhttpMessageSender(MessageSender):
         image_components = []
         tail_components = []
         if effective_prepared:
+            effective_prepared = await cls._ensure_local_media_for_forward(
+                effective_prepared
+            )
             (
                 image_components,
                 tail_components,

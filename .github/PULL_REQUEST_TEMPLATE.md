@@ -36,9 +36,9 @@ uv run python -m py_compile data/plugins/astrbot_plugin_rsshub/main.py
 ### Checklist / 检查清单
 
 <!--If merged, your code will serve tens of thousands of users! Please double-check the following items before submitting.-->
-<!--如果分支被合并，您的代码将服务于数万名用户！在提交前，请核查一下几点内容。-->
+<!--如果分支被合并，您的代码将服务于众多用户！在提交前，请核查一下几点内容。-->
 
-- [ ] 😊 If there are new features added in the PR, I have discussed it with the authors through issues/emails, etc.
+- [ ] 😊 If there are new features added in the PR, I have discussed them with the authors through issues/emails, etc.
   / 如果 PR 中有新加入的功能，已经通过 Issue / 邮件等方式和作者讨论过。
 
 - [ ] 👀 My changes have been well-tested, **and "Verification Steps" and "Screenshots" have been provided above**.

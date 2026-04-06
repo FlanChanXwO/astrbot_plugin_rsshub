@@ -109,10 +109,13 @@ class RSSHubPlugin(Star):
         self.monitor: Monitor | None = None
         self._scheduler_task: asyncio.Task | None = None
         self._webui: RSSHubWebUI | None = None
+        self._rsshub_radar_api: RSSHubRadarAPI | None = None
+        self._rsshub_radar_api_settings: tuple[int, str] | None = None
         # 导入会话状态管理（类似 deerpipe）
         self._import_session_lock = asyncio.Lock()
-        self._import_sessions: dict[str, float] = {}
+        self._import_sessions: dict[tuple[str, str], float] = {}
         self._import_session_timeout = 300  # 5分钟超时
+        self._unsub_export_retention_seconds = 24 * 60 * 60
 
     def _select_test_entries(self, entries: list, granularity: str) -> tuple[list, str]:
         """根据测试粒度参数选择要推送的条目。"""
@@ -202,10 +205,22 @@ class RSSHubPlugin(Star):
             return {k: v for k, v in parse_qsl(raw, keep_blank_values=True) if k}
 
     def _rsshub_api(self) -> RSSHubRadarAPI:
-        """Create API helper with current runtime timeout/proxy config."""
+        """Create/reuse API helper with current runtime timeout/proxy config."""
         timeout = self.config.timeout if self.config else 30
         proxy = self.config.proxy if self.config else ""
-        return RSSHubRadarAPI(timeout=timeout, proxy=proxy)
+        settings = (int(timeout), str(proxy))
+
+        if (
+            self._rsshub_radar_api is None
+            or self._rsshub_radar_api_settings != settings
+        ):
+            self._rsshub_radar_api = RSSHubRadarAPI(
+                timeout=settings[0],
+                proxy=settings[1],
+            )
+            self._rsshub_radar_api_settings = settings
+
+        return self._rsshub_radar_api
 
     async def initialize(self):
         """插件初始化"""
@@ -814,6 +829,57 @@ class RSSHubPlugin(Star):
                 "请使用 /sub_bind <private|group|session> 重新绑定默认推送目标。"
             )
 
+    async def _cleanup_unsub_export_backups(self, temp_dir: Path) -> None:
+        """Best-effort cleanup for old unsub backup files under temp directory."""
+        now = time.time()
+        cutoff = now - self._unsub_export_retention_seconds
+
+        for path in temp_dir.glob("rsshub_subscriptions_*.toml"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            except OSError as ex:
+                logger.debug("Skip stale export cleanup for %s: %s", path, ex)
+
+    async def _read_uploaded_toml_content(
+        self,
+        event: AstrMessageEvent,
+        *,
+        max_file_size: int,
+    ) -> tuple[str | None, str | None, bool]:
+        """Read TOML content from uploaded file components.
+
+        Returns: (content, error, has_file_component)
+        """
+        has_file_component = False
+        file_messages = event.get_messages()
+        for component in file_messages:
+            if not isinstance(component, File):
+                continue
+
+            has_file_component = True
+            file_path = ""
+            try:
+                file_path = await component.get_file()
+                if not file_path:
+                    continue
+                candidate = Path(file_path)
+                if not candidate.is_file():
+                    continue
+                if candidate.stat().st_size > max_file_size:
+                    return None, "导入文件过大，请控制在 5MB 以内", True
+                return candidate.read_text(encoding="utf-8-sig"), None, True
+            except OSError as ex:
+                return None, f"读取上传文件失败: {ex}", True
+            finally:
+                if file_path:
+                    try:
+                        os.unlink(file_path)
+                    except OSError:
+                        pass
+
+        return None, None, has_file_component
+
     async def _read_import_toml_content(
         self,
         event: AstrMessageEvent,
@@ -833,30 +899,16 @@ class RSSHubPlugin(Star):
             except OSError as ex:
                 return None, f"读取导入文件失败: {ex}"
 
-        file_messages = event.get_messages()
-        for component in file_messages:
-            if not isinstance(component, File):
-                continue
-
-            file_path = ""
-            try:
-                file_path = await component.get_file()
-                if not file_path:
-                    continue
-                candidate = Path(file_path)
-                if not candidate.is_file():
-                    continue
-                if candidate.stat().st_size > max_file_size:
-                    return None, "导入文件过大，请控制在 5MB 以内"
-                return candidate.read_text(encoding="utf-8-sig"), None
-            except OSError as ex:
-                return None, f"读取上传文件失败: {ex}"
-            finally:
-                if file_path:
-                    try:
-                        os.unlink(file_path)
-                    except OSError:
-                        pass
+        content, read_err, has_file_component = await self._read_uploaded_toml_content(
+            event,
+            max_file_size=max_file_size,
+        )
+        if content:
+            return content, None
+        if read_err:
+            return None, read_err
+        if has_file_component:
+            return None, "读取上传文件失败"
 
         return (
             None,
@@ -1191,6 +1243,7 @@ class RSSHubPlugin(Star):
 
         temp_dir = Path(get_astrbot_temp_path())
         temp_dir.mkdir(parents=True, exist_ok=True)
+        await self._cleanup_unsub_export_backups(temp_dir)
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         export_filename = f"rsshub_subscriptions_{user_id}_{timestamp}.toml"
         export_path = temp_dir / export_filename
@@ -1240,6 +1293,7 @@ class RSSHubPlugin(Star):
 
         # 没有提供文件，设置导入会话状态，等待用户发送文件
         user_id = event.get_sender_id()
+        session_key = (user_id, event.unified_msg_origin)
         now = time.monotonic()
         async with self._import_session_lock:
             # 清理超时会话
@@ -1251,7 +1305,7 @@ class RSSHubPlugin(Star):
             ]
             for sid in expired_keys:
                 del self._import_sessions[sid]
-            self._import_sessions[user_id] = now
+            self._import_sessions[session_key] = now
 
         yield event.plain_result(
             "请在 5 分钟内发送 TOML 订阅文件。\n"
@@ -1348,66 +1402,38 @@ class RSSHubPlugin(Star):
         文件大小限制：5MB
         """
         sender_id = event.get_sender_id()
+        session_key = (sender_id, event.unified_msg_origin)
 
         # 检查是否有活跃的导入会话
         async with self._import_session_lock:
-            session_start = self._import_sessions.get(sender_id)
+            session_start = self._import_sessions.get(session_key)
             if session_start is None:
                 return
 
             # 检查会话是否超时
             now = time.monotonic()
             if now - session_start > self._import_session_timeout:
-                del self._import_sessions[sender_id]
+                del self._import_sessions[session_key]
                 return
 
-        temp_file_path: str | None = None
         has_file = False
 
         try:
-            # 检查消息中是否有文件
-            messages = event.get_messages()
-            for comp in messages:
-                if isinstance(comp, File):
-                    has_file = True
-                    break
+            content, read_err, has_file = await self._read_uploaded_toml_content(
+                event,
+                max_file_size=5 * 1024 * 1024,
+            )
             if not has_file:
                 return
+            if read_err:
+                yield event.plain_result(read_err)
+                return
+            if not content:
+                yield event.plain_result("读取上传文件失败")
+                return
 
-            # 处理文件导入
-            for comp in messages:
-                if isinstance(comp, File):
-                    # 获取文件内容
-                    file_path = await comp.get_file()
-                    if not file_path:
-                        continue
-                    temp_file_path = file_path
-
-                    # 检查文件大小（限制5MB）
-                    try:
-                        file_size = os.path.getsize(file_path)
-                        max_size = 5 * 1024 * 1024  # 5MB
-                        if file_size > max_size:
-                            yield event.plain_result(
-                                f"文件过大 ({file_size / 1024 / 1024:.2f}MB > 5MB)，请压缩后重新上传。"
-                            )
-                            return
-                    except OSError:
-                        pass  # 如果无法获取大小，继续尝试处理
-
-                    # 读取文件内容
-                    try:
-                        with open(file_path, encoding="utf-8-sig") as f:
-                            file_content = f.read()
-                    except OSError as e:
-                        logger.error(f"读取导入文件失败: {e}")
-                        yield event.plain_result(f"读取文件失败: {e}")
-                        return
-
-                    # 处理导入
-                    async for result in self._process_import_toml(event, file_content):
-                        yield result
-                    return
+            async for result in self._process_import_toml(event, content):
+                yield result
 
         except OSError as e:
             logger.error(f"导入文件处理失败: {e}")
@@ -1416,12 +1442,7 @@ class RSSHubPlugin(Star):
             # 仅在本次消息包含文件并触发导入流程时，才清理导入会话
             if has_file:
                 async with self._import_session_lock:
-                    self._import_sessions.pop(sender_id, None)
-            if temp_file_path:
-                try:
-                    os.unlink(temp_file_path)
-                except (OSError, FileNotFoundError) as e:
-                    logger.warning(f"删除临时导入文件失败: {e}")
+                    self._import_sessions.pop(session_key, None)
 
     @filter.command("sub_set")
     async def cmd_set_sub_option(

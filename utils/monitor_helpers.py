@@ -44,13 +44,19 @@ def normalize_path(path: str) -> str:
 
 
 def normalize_query(query: str, tracking_query_params: set[str]) -> str:
+    """Normalize query while removing tracking params case-insensitively.
+
+    Original key casing is preserved for non-tracking parameters.
+    """
+    tracking_lower = {param.lower() for param in tracking_query_params}
+
     query_pairs = []
     for key, value in parse_qsl(query, keep_blank_values=True):
-        normalized_key = key.lower()
-        if normalized_key in tracking_query_params:
+        if key.lower() in tracking_lower:
             continue
-        query_pairs.append((normalized_key, value))
-    query_pairs.sort()
+        query_pairs.append((key, value))
+
+    query_pairs.sort(key=lambda item: item[0].lower())
     return urlencode(query_pairs, doseq=True)
 
 
@@ -66,9 +72,13 @@ def looks_like_bare_domain_scheme(parsed, trimmed_link: str) -> bool:
 
 def normalize_config_positive_int(raw, key: str, default: int, logger) -> int:
     if isinstance(raw, bool):
+        logger.warning("Invalid %s=%r; expected positive integer", key, raw)
         return default
     if isinstance(raw, int):
-        return raw if raw > 0 else default
+        if raw > 0:
+            return raw
+        logger.warning("Invalid %s=%r; expected positive integer", key, raw)
+        return default
     if isinstance(raw, str):
         stripped = raw.strip()
         if not stripped:

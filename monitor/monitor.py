@@ -88,7 +88,7 @@ class RSSMonitor:
         self._lock_up_period: int = 0
         self._running = False
         self._cached_tracking_query_params: set[str] | None = None
-        self._cached_tracking_query_params_source: str | None = None
+        self._cached_tracking_query_params_source: tuple[str, ...] | None = None
 
     def _config_value(self, key: str, default=None):
         """Read plugin config with attribute-first fallback to mapping style."""
@@ -443,19 +443,25 @@ class RSSMonitor:
         # Rebuild cache only when normalized input changes.
         if (
             self._cached_tracking_query_params is not None
-            and self._cached_tracking_query_params_source == repr(source_key)
+            and self._cached_tracking_query_params_source == source_key
         ):
             return self._cached_tracking_query_params
 
         if source_key is not None:
             normalized = set(source_key)
             self._cached_tracking_query_params = normalized
-            self._cached_tracking_query_params_source = repr(source_key)
+            self._cached_tracking_query_params_source = source_key
             return normalized
 
         default_key = tuple(sorted(self.TRACKING_QUERY_PARAMS))
+        if (
+            self._cached_tracking_query_params is not None
+            and self._cached_tracking_query_params_source == default_key
+        ):
+            return self._cached_tracking_query_params
+
         self._cached_tracking_query_params = set(default_key)
-        self._cached_tracking_query_params_source = repr(default_key)
+        self._cached_tracking_query_params_source = default_key
         return self._cached_tracking_query_params
 
     @staticmethod

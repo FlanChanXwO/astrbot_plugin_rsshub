@@ -15,18 +15,28 @@ AstrBot RSS订阅插件
 
 import asyncio
 import json
+import os
 import re
+import time
+from datetime import UTC, datetime
+from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import File
 from astrbot.api.star import Context, Star
 from astrbot.core.provider.register import llm_tools
+from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from .db import Feed, Sub, User, close_db, init_db
 from .monitor import Monitor
 from .notifier import Notifier
 from .notifier.senders import set_bot_self_id_provider
 from .utils.config import PluginConfig
+from .utils.subscription_io import (
+    parse_subscriptions_toml,
+    serialize_subscriptions_to_toml,
+)
 from .web import RSSHubWebUI, feed_get, resolve_webui_config
 
 SUB_OPTION_CASTERS = {
@@ -96,6 +106,10 @@ class RSSHubPlugin(Star):
         self.monitor: Monitor | None = None
         self._scheduler_task: asyncio.Task | None = None
         self._webui: RSSHubWebUI | None = None
+        # 导入会话状态管理（类似 deerpipe）
+        self._import_session_lock = asyncio.Lock()
+        self._import_sessions: dict[str, float] = {}
+        self._import_session_timeout = 300  # 5分钟超时
 
     def _select_test_entries(self, entries: list, granularity: str) -> tuple[list, str]:
         """根据测试粒度参数选择要推送的条目。"""
@@ -592,6 +606,98 @@ class RSSHubPlugin(Star):
                 "请使用 /sub_bind <private|group|session> 重新绑定默认推送目标。"
             )
 
+    async def _read_import_toml_content(
+        self,
+        event: AstrMessageEvent,
+        import_path: str = "",
+    ) -> tuple[str | None, str | None]:
+        """Read import TOML content from local path or uploaded file."""
+        max_file_size = 5 * 1024 * 1024
+
+        if import_path.strip():
+            path = Path(import_path.strip()).expanduser()
+            if not path.is_file():
+                return None, f"导入文件不存在: {path}"
+            try:
+                if path.stat().st_size > max_file_size:
+                    return None, "导入文件过大，请控制在 5MB 以内"
+                return path.read_text(encoding="utf-8-sig"), None
+            except OSError as ex:
+                return None, f"读取导入文件失败: {ex}"
+
+        file_messages = event.get_messages()
+        for component in file_messages:
+            if not isinstance(component, File):
+                continue
+
+            file_path = ""
+            try:
+                file_path = await component.get_file()
+                if not file_path:
+                    continue
+                candidate = Path(file_path)
+                if not candidate.is_file():
+                    continue
+                if candidate.stat().st_size > max_file_size:
+                    return None, "导入文件过大，请控制在 5MB 以内"
+                return candidate.read_text(encoding="utf-8-sig"), None
+            except OSError as ex:
+                return None, f"读取上传文件失败: {ex}"
+            finally:
+                if file_path:
+                    try:
+                        os.unlink(file_path)
+                    except OSError:
+                        pass
+
+        return (
+            None,
+            "请在命令消息中附带 TOML 文件，或使用 /sub_import <本地文件路径>",
+        )
+
+    def _validate_import_record_options(
+        self,
+        event: AstrMessageEvent,
+        options: dict[str, int | str],
+    ) -> tuple[dict[str, int | str], str | None]:
+        """Validate and normalize imported subscription options."""
+        validated: dict[str, int | str] = {}
+
+        for key, raw_value in options.items():
+            if key == "platform_name":
+                if isinstance(raw_value, str) and raw_value.strip():
+                    validated[key] = raw_value.strip()
+                continue
+
+            if key == "target_session":
+                if not isinstance(raw_value, str):
+                    return {}, "target_session 必须是字符串"
+                parsed_target, parse_err = self._parse_target_session(event, raw_value)
+                if parse_err:
+                    return {}, f"target_session 无效: {parse_err}"
+                if parsed_target:
+                    validated[key] = parsed_target
+                continue
+
+            if key in {"title", "tags"}:
+                if not isinstance(raw_value, str):
+                    return {}, f"{key} 必须是字符串"
+                normalized = raw_value.strip()
+                if normalized:
+                    validated[key] = normalized
+                continue
+
+            if key not in SUB_OPTION_CASTERS:
+                continue
+
+            try:
+                parsed_value = self._parse_option_value(key, str(raw_value))
+            except ValueError as ex:
+                return {}, str(ex)
+            validated[key] = parsed_value
+
+        return validated, None
+
     # ===== 命令处理 =====
 
     @filter.command("sub")
@@ -694,8 +800,11 @@ class RSSHubPlugin(Star):
         yield event.plain_result(f"已取消订阅 (ID: {sub_id_int})")
 
     @filter.command("sub_list")
-    async def cmd_list(self, event: AstrMessageEvent):
-        """列出所有订阅"""
+    async def cmd_list(self, event: AstrMessageEvent, scope: str = ""):
+        """列出订阅列表。
+
+        Usage: /sub_list [all]
+        """
         user_id = event.get_sender_id()
 
         async for notice in self._emit_binding_notice_if_needed(event):
@@ -706,13 +815,32 @@ class RSSHubPlugin(Star):
             yield event.plain_result("您还没有任何订阅")
             return
 
-        lines = ["您的订阅列表:"]
-        for idx, sub in enumerate(subs, 1):
+        show_all_sessions = scope.strip().lower() == "all" and event.is_admin()
+        current_session = event.unified_msg_origin
+
+        if show_all_sessions:
+            filtered_subs = subs
+            lines = ["您的订阅列表（所有会话）:"]
+        else:
+            filtered_subs = [
+                sub
+                for sub in subs
+                if (sub.target_session or current_session) == current_session
+            ]
+            if not filtered_subs:
+                yield event.plain_result(
+                    "当前会话没有订阅。\n"
+                    "可使用 /sub 添加订阅；管理员可用 /sub_list all 查看所有会话。"
+                )
+                return
+            lines = ["您的订阅列表（当前会话）:"]
+
+        for idx, sub in enumerate(filtered_subs, 1):
             feed_title = sub.feed.title if sub.feed else "未知"
             feed_link = sub.feed.link if sub.feed else ""
             custom_title = f" ({sub.title})" if sub.title else ""
-            lines.append(f"{idx}. [{sub.id}] {feed_title}{custom_title}")
-            if sub.target_session:
+            lines.append(f"{idx}. {feed_title}{custom_title}")
+            if show_all_sessions and sub.target_session:
                 lines.append(f"    target: {sub.target_session}")
             if feed_link:
                 lines.append(f"    {feed_link}")
@@ -816,11 +944,255 @@ class RSSHubPlugin(Star):
             return
 
         user_id = event.get_sender_id()
-        deleted = await Sub.delete_all_by_user(user_id)
-        if deleted == 0:
+        subscriptions = await Sub.get_by_user(user_id)
+        if not subscriptions:
             yield event.plain_result("您当前没有可删除的订阅")
             return
+
+        export_text = serialize_subscriptions_to_toml(
+            user_id=str(user_id),
+            subscriptions=subscriptions,
+        )
+
+        temp_dir = Path(get_astrbot_temp_path())
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        export_filename = f"rsshub_subscriptions_{user_id}_{timestamp}.toml"
+        export_path = temp_dir / export_filename
+
+        try:
+            export_path.write_text(export_text, encoding="utf-8")
+            yield event.plain_result(
+                "已自动导出当前订阅备份，请先保存该文件，再确认删除结果。"
+            )
+            yield event.chain_result(
+                [File(name=export_filename, file=str(export_path))]
+            )
+        except OSError as ex:
+            logger.error("Failed to export subscriptions before unsub_all: %s", ex)
+            yield event.plain_result(f"备份导出失败，将继续删除订阅: {ex}")
+        finally:
+            try:
+                if export_path.exists():
+                    os.unlink(export_path)
+            except OSError:
+                pass
+
+        deleted = await Sub.delete_all_by_user(user_id)
         yield event.plain_result(f"已取消全部订阅，共删除 {deleted} 条")
+
+    @filter.command("sub_import", alias={"import"})
+    async def cmd_sub_import(self, event: AstrMessageEvent, import_path: str = ""):
+        """Import subscriptions from TOML file.
+
+        Usage: /sub_import [本地文件路径]
+        """
+        async for notice in self._emit_binding_notice_if_needed(event):
+            yield notice
+
+        # 先尝试直接读取（用户可能直接附带文件或提供路径）
+        content, read_err = await self._read_import_toml_content(
+            event, import_path
+        )
+
+        if content:
+            # 用户已提供文件，直接处理
+            async for result in self._process_import_toml(event, content):
+                yield result
+            return
+
+        if read_err and "请在命令消息中附带 TOML 文件" not in read_err:
+            # 读取失败但不是因为没有文件，返回错误
+            yield event.plain_result(read_err)
+            return
+
+        # 没有提供文件，设置导入会话状态，等待用户发送文件
+        user_id = event.get_sender_id()
+        now = time.monotonic()
+        async with self._import_session_lock:
+            # 清理超时会话
+            timeout_threshold = now - self._import_session_timeout
+            expired_keys = [
+                sid
+                for sid, start_time in self._import_sessions.items()
+                if start_time < timeout_threshold
+            ]
+            for sid in expired_keys:
+                del self._import_sessions[sid]
+            self._import_sessions[user_id] = now
+
+        yield event.plain_result(
+            "请在 5 分钟内发送 TOML 订阅文件。\n"
+            "注意：导入将添加新的订阅，重复的订阅会被跳过。\n"
+            "超时请重新执行 /sub_import 命令。"
+        )
+
+    async def _process_import_toml(
+        self, event: AstrMessageEvent, content: str
+    ):
+        """处理 TOML 内容并导入订阅。"""
+        payload = parse_subscriptions_toml(content)
+        if payload.errors and not payload.records:
+            preview = "\n".join(payload.errors[:8])
+            yield event.plain_result(f"导入失败，文件校验未通过:\n{preview}")
+            return
+
+        user_id = event.get_sender_id()
+        user = await User.get_or_create(user_id)
+        imported = 0
+        skipped = 0
+        failed = 0
+        details: list[str] = []
+        seen_pairs: set[tuple[str, str]] = set()
+
+        for index, record in enumerate(payload.records, start=1):
+            options = dict(record.options)
+            validated, option_err = self._validate_import_record_options(
+                event, options
+            )
+            if option_err:
+                failed += 1
+                details.append(f"[{index}] 选项校验失败: {option_err}")
+                continue
+
+            target_session = str(
+                validated.get("target_session") or event.unified_msg_origin
+            )
+            pair = (record.link, target_session)
+            if pair in seen_pairs:
+                skipped += 1
+                details.append(f"[{index}] 文件内重复订阅，已跳过: {record.link}")
+                continue
+            seen_pairs.add(pair)
+
+            exists = await Sub.get_by_user_and_link(
+                user_id, record.link, target_session
+            )
+            if exists:
+                skipped += 1
+                continue
+
+            feed = await Feed.get_or_create(
+                link=record.link,
+                title=(record.feed_title or record.link),
+            )
+            platform_name = str(
+                validated.pop("platform_name", "") or event.platform.name
+            )
+            sub = await Sub.create(
+                user_id=user.id,
+                feed_id=feed.id,
+                target_session=target_session,
+                platform_name=platform_name,
+            )
+
+            validated.pop("target_session", None)
+            if validated:
+                updated = await Sub.update_options(sub.id, user_id, **validated)
+                if not updated:
+                    failed += 1
+                    details.append(f"[{index}] 导入后写入选项失败: {record.link}")
+                    continue
+
+            imported += 1
+
+        if payload.warnings:
+            details.extend([f"警告: {item}" for item in payload.warnings[:3]])
+        if payload.errors:
+            details.extend([f"错误: {item}" for item in payload.errors[:5]])
+
+        result = (
+            f"订阅导入完成\n- 成功导入: {imported}\n- 跳过: {skipped}\n- 失败: {failed}"
+        )
+        if details:
+            result += "\n\n详情:\n" + "\n".join(details[:12])
+
+        yield event.plain_result(result)
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_file_message(self, event: AstrMessageEvent):
+        """监听文件消息以处理订阅导入.
+
+        当用户发送文件时，自动尝试解析并导入订阅。
+        需要满足以下条件才会处理：
+        1. 在执行导入命令后5分钟内
+        2. 发送者是发起导入命令的用户本人（会话隔离）
+        文件大小限制：5MB
+        """
+        sender_id = event.get_sender_id()
+
+        # 检查是否有活跃的导入会话
+        async with self._import_session_lock:
+            session_start = self._import_sessions.get(sender_id)
+            if session_start is None:
+                return
+
+            # 检查会话是否超时
+            now = time.monotonic()
+            if now - session_start > self._import_session_timeout:
+                del self._import_sessions[sender_id]
+                return
+
+        temp_file_path: str | None = None
+
+        try:
+            # 检查消息中是否有文件
+            messages = event.get_messages()
+            has_file = False
+            for comp in messages:
+                if isinstance(comp, File):
+                    has_file = True
+                    break
+            if not has_file:
+                return
+
+            # 处理文件导入
+            for comp in messages:
+                if isinstance(comp, File):
+                    # 获取文件内容
+                    file_path = await comp.get_file()
+                    if not file_path:
+                        continue
+                    temp_file_path = file_path
+
+                    # 检查文件大小（限制5MB）
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        max_size = 5 * 1024 * 1024  # 5MB
+                        if file_size > max_size:
+                            yield event.plain_result(
+                                f"文件过大 ({file_size / 1024 / 1024:.2f}MB > 5MB)，请压缩后重新上传。"
+                            )
+                            return
+                    except OSError:
+                        pass  # 如果无法获取大小，继续尝试处理
+
+                    # 读取文件内容
+                    try:
+                        with open(file_path, encoding="utf-8-sig") as f:
+                            file_content = f.read()
+                    except OSError as e:
+                        logger.error(f"读取导入文件失败: {e}")
+                        yield event.plain_result(f"读取文件失败: {e}")
+                        return
+
+                    # 处理导入
+                    async for result in self._process_import_toml(event, file_content):
+                        yield result
+                    return
+
+        except OSError as e:
+            logger.error(f"导入文件处理失败: {e}")
+            yield event.plain_result(f"文件处理失败: {e}")
+        finally:
+            # 统一清理临时文件和会话状态
+            async with self._import_session_lock:
+                self._import_sessions.pop(sender_id, None)
+            if temp_file_path:
+                try:
+                    os.unlink(temp_file_path)
+                except (OSError, FileNotFoundError) as e:
+                    logger.warning(f"删除临时导入文件失败: {e}")
 
     @filter.command("sub_set")
     async def cmd_set_sub_option(
@@ -1037,13 +1409,14 @@ class RSSHubPlugin(Star):
             "订阅: /sub <RSS链接> [目标]",
             "取消订阅: /unsub <订阅ID>",
             "取消全部: /unsub_all yes",
-            "订阅列表: /sub_list",
+            "订阅列表: /sub_list [all]",
             "设置订阅选项: /sub_set <订阅ID> <选项> <值>",
             "设置默认选项: /sub_set_default <选项> <值>",
             "设置推送目标: /sub_bind <目标>",
             "会话默认配置: /sub_session_default_set <key> <value>",
             "查看会话默认配置: /sub_session_default_get",
             "插件配置: /rss_conf [key] [value]",
+            "导入订阅: /sub_import [本地文件路径]（或随命令附 TOML 文件）",
         ]
         if event.is_admin():
             command_lines.append(

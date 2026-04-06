@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import OrderedDict
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -58,7 +59,10 @@ class RSSHubRadarAPI:
         self.timeout = max(1, int(timeout or 30))
         self.proxy = (proxy or "").strip()
         self._cache_ttl = 300
-        self._rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._cache_max_entries = 16
+        self._rules_cache: OrderedDict[str, tuple[float, list[dict[str, Any]]]] = (
+            OrderedDict()
+        )
         self._session = session
         self._owns_session = session is None
 
@@ -184,7 +188,10 @@ class RSSHubRadarAPI:
         now = time.monotonic()
         cached = self._rules_cache.get(resolved_base_url)
         if cached and (now - cached[0] < self._cache_ttl):
+            self._rules_cache.move_to_end(resolved_base_url)
             return cached[1]
+        if cached is not None:
+            self._rules_cache.pop(resolved_base_url, None)
 
         rules_url = f"{resolved_base_url}/api/radar/rules"
         session = await self._get_session()
@@ -221,6 +228,9 @@ class RSSHubRadarAPI:
 
         rules = self._normalize_rules(payload)
         self._rules_cache[resolved_base_url] = (now, rules)
+        self._rules_cache.move_to_end(resolved_base_url)
+        while len(self._rules_cache) > self._cache_max_entries:
+            self._rules_cache.popitem(last=False)
         return rules
 
     def _normalize_rules(self, payload: Any) -> list[dict[str, Any]]:

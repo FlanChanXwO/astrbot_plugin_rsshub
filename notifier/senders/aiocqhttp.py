@@ -158,7 +158,7 @@ class AiocqhttpMessageSender(MessageSender):
                 if fallback_result.ok:
                     return SendResult(
                         ok=True,
-                        transient=True,
+                        transient=False,
                         detail="merged_forward_failed_text_fallback",
                     )
                 return fallback_result

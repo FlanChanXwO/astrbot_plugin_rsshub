@@ -34,12 +34,15 @@ from .db import Feed, Sub, User, close_db, init_db
 from .monitor import Monitor
 from .notifier import Notifier
 from .notifier.senders import set_bot_self_id_provider
+from .utils.command_helpers import (
+    apply_import_payload,
+    build_subscriptions_export_text,
+    delete_subscriptions,
+    select_subscriptions_for_scope,
+)
 from .utils.config import PluginConfig
 from .utils.rsshub_api import RSSHubRadarAPI, normalize_base_url
-from .utils.subscription_io import (
-    parse_subscriptions_toml,
-    serialize_subscriptions_to_toml,
-)
+from .utils.subscription_io import parse_subscriptions_toml
 from .web import RSSHubWebUI, feed_get, resolve_webui_config
 
 SUB_OPTION_CASTERS = {
@@ -100,9 +103,7 @@ SESSION_DEFAULT_KEYS = {
 }
 
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
-IMPORT_MAX_FILE_SIZE_DISPLAY = (
-    f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
-)
+IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
 
 
 class RSSHubPlugin(Star):
@@ -1265,23 +1266,18 @@ class RSSHubPlugin(Star):
             return
 
         # 根据范围筛选订阅
-        if is_global:
-            to_delete = subscriptions
-            scope_desc = "所有会话"
-        else:
-            to_delete = [
-                sub
-                for sub in subscriptions
-                if (sub.target_session or current_session) == current_session
-            ]
-            scope_desc = "当前会话"
+        to_delete, scope_desc = select_subscriptions_for_scope(
+            subscriptions,
+            current_session=current_session,
+            is_global=is_global,
+        )
 
         if not to_delete:
             yield event.plain_result(f"当前{scope_desc}没有订阅")
             return
 
         # 导出备份
-        export_text = serialize_subscriptions_to_toml(
+        export_text = build_subscriptions_export_text(
             user_id=str(user_id),
             subscriptions=to_delete,
         )
@@ -1306,10 +1302,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(f"备份导出失败，将继续删除订阅: {ex}")
 
         # 删除订阅
-        deleted_count = 0
-        for sub in to_delete:
-            await Sub.delete(sub)
-            deleted_count += 1
+        deleted_count = await delete_subscriptions(to_delete)
 
         yield event.plain_result(f"已取消{scope_desc}订阅，共删除 {deleted_count} 条")
 
@@ -1375,68 +1368,30 @@ class RSSHubPlugin(Star):
         user_id = event.get_sender_id()
         # Ensure user exists before creating subscriptions for FK consistency.
         user = await User.get_or_create(user_id)
-        imported = 0
-        skipped = 0
-        failed = 0
-        details: list[str] = []
-        seen_pairs: set[tuple[str, str]] = set()
 
-        for index, record in enumerate(payload.records, start=1):
-            options = dict(record.options)
-            validated, option_err = self._validate_import_record_options(event, options)
-            if option_err:
-                failed += 1
-                details.append(f"[{index}] 选项校验失败: {option_err}")
-                continue
+        result_stats = await apply_import_payload(
+            payload=payload,
+            user_id=user_id,
+            user_db_id=user.id,
+            current_session=event.unified_msg_origin,
+            default_platform_name=event.platform.name,
+            validate_options=lambda options: self._validate_import_record_options(
+                event,
+                options,
+            ),
+        )
 
-            target_session = str(
-                validated.get("target_session") or event.unified_msg_origin
-            )
-            pair = (record.link, target_session)
-            if pair in seen_pairs:
-                skipped += 1
-                details.append(f"[{index}] 文件内重复订阅，已跳过: {record.link}")
-                continue
-            seen_pairs.add(pair)
-
-            exists = await Sub.get_by_user_and_link(
-                user_id, record.link, target_session
-            )
-            if exists:
-                skipped += 1
-                continue
-
-            feed = await Feed.get_or_create(
-                link=record.link,
-                title=(record.feed_title or record.link),
-            )
-            platform_name = str(
-                validated.pop("platform_name", "") or event.platform.name
-            )
-            sub = await Sub.create(
-                user_id=user.id,
-                feed_id=feed.id,
-                target_session=target_session,
-                platform_name=platform_name,
-            )
-
-            validated.pop("target_session", None)
-            if validated:
-                updated = await Sub.update_options(sub.id, user_id, **validated)
-                if not updated:
-                    failed += 1
-                    details.append(f"[{index}] 导入后写入选项失败: {record.link}")
-                    continue
-
-            imported += 1
-
+        details = list(result_stats.details)
         if payload.warnings:
             details.extend([f"警告: {item}" for item in payload.warnings[:3]])
         if payload.errors:
             details.extend([f"错误: {item}" for item in payload.errors[:5]])
 
         result = (
-            f"订阅导入完成\n- 成功导入: {imported}\n- 跳过: {skipped}\n- 失败: {failed}"
+            "订阅导入完成\n"
+            f"- 成功导入: {result_stats.imported}\n"
+            f"- 跳过: {result_stats.skipped}\n"
+            f"- 失败: {result_stats.failed}"
         )
         if details:
             result += "\n\n详情:\n" + "\n".join(details[:12])

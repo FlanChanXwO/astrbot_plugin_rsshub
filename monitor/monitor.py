@@ -53,6 +53,7 @@ class RSSMonitor:
     HASH_HISTORY_MIN: Final = 200
     HASH_HISTORY_MULTIPLIER: Final = 2
     HASH_HISTORY_HARD_LIMIT: Final = 5000
+    HASH_HISTORY_ABSOLUTE_MAX: Final = 20000
     TRACKING_QUERY_PARAMS: Final = {
         "utm_source",
         "utm_medium",
@@ -78,6 +79,7 @@ class RSSMonitor:
         )
         self._lock_up_period: int = 0
         self._running = False
+        self._cached_tracking_query_params: set[str] | None = None
 
     def _config_value(self, key: str, default=None):
         """Read plugin config with attribute-first fallback to mapping style."""
@@ -419,15 +421,26 @@ class RSSMonitor:
         text = re.sub(r"\s+", " ", text).strip().lower()
         return text[:max_length]
 
+    @staticmethod
+    def _normalize_identifier(value: str, max_length: int = 1024) -> str:
+        """Treat identifiers as opaque tokens: keep case and inner whitespace."""
+        return (value or "").strip()[:max_length]
+
     def _tracking_query_params(self) -> set[str]:
+        if self._cached_tracking_query_params is not None:
+            return self._cached_tracking_query_params
+
         raw = self._config_value("tracking_query_params")
         if isinstance(raw, (list, tuple, set)):
             normalized = {
                 str(item).strip().lower() for item in raw if str(item).strip()
             }
             if normalized:
+                self._cached_tracking_query_params = normalized
                 return normalized
-        return set(self.TRACKING_QUERY_PARAMS)
+
+        self._cached_tracking_query_params = set(self.TRACKING_QUERY_PARAMS)
+        return self._cached_tracking_query_params
 
     def _normalize_link(self, link: str) -> str:
         if not link:
@@ -502,7 +515,9 @@ class RSSMonitor:
 
     def _hash_entry(self, entry) -> list[str]:
         """Calculate a robust dedupe fingerprint set for one entry."""
-        entry_id = self._normalize_text(str(entry.get("id") or entry.get("guid") or ""))
+        entry_id = self._normalize_identifier(
+            str(entry.get("id") or entry.get("guid") or "")
+        )
         link = self._normalize_link(str(entry.get("link") or ""))
         title = self._normalize_text(str(entry.get("title") or ""))
         summary = self._normalize_text(
@@ -560,6 +575,39 @@ class RSSMonitor:
             multiplier = configured_multiplier
         if isinstance(configured_hard_limit, int) and configured_hard_limit > 0:
             hard_limit = configured_hard_limit
+
+        if min_limit > self.HASH_HISTORY_ABSOLUTE_MAX:
+            logger.warning(
+                "hash_history_min=%s is too large; capped to %s",
+                min_limit,
+                self.HASH_HISTORY_ABSOLUTE_MAX,
+            )
+            min_limit = self.HASH_HISTORY_ABSOLUTE_MAX
+
+        if multiplier > self.HASH_HISTORY_ABSOLUTE_MAX:
+            logger.warning(
+                "hash_history_multiplier=%s is too large; capped to %s",
+                multiplier,
+                self.HASH_HISTORY_ABSOLUTE_MAX,
+            )
+            multiplier = self.HASH_HISTORY_ABSOLUTE_MAX
+
+        if hard_limit > self.HASH_HISTORY_ABSOLUTE_MAX:
+            logger.warning(
+                "hash_history_hard_limit=%s is too large; capped to %s",
+                hard_limit,
+                self.HASH_HISTORY_ABSOLUTE_MAX,
+            )
+            hard_limit = self.HASH_HISTORY_ABSOLUTE_MAX
+
+        if hard_limit < min_limit:
+            logger.warning(
+                "hash_history_hard_limit=%s is smaller than hash_history_min=%s; "
+                "using min as effective hard limit",
+                hard_limit,
+                min_limit,
+            )
+            hard_limit = min_limit
 
         growth_limit = max(entry_count, 1) * multiplier
         history_limit = min(max(min_limit, growth_limit), hard_limit)

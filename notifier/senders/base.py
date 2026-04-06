@@ -274,6 +274,13 @@ class MessageSender:
         context: object | None = None,
     ) -> SendResult:
         try:
+            logger.debug(
+                "Default sender path: session=%s, media=%s, prepared_media=%s, context=%s",
+                session_id,
+                bool(media),
+                bool(prepared_media),
+                context is not None,
+            )
             image_components = []
             tail_components = []
             failed_media_urls: list[str] = []
@@ -290,6 +297,12 @@ class MessageSender:
                 message = cls._append_failed_media_links(message, failed_media_urls)
 
             if image_components or tail_components:
+                logger.debug(
+                    "Default sender trying single-chain: session=%s, images=%s, tail=%s",
+                    session_id,
+                    len(image_components),
+                    len(tail_components),
+                )
                 single_chain_result = await cls._send_single_chain(
                     session_id,
                     image_components,
@@ -297,6 +310,9 @@ class MessageSender:
                     tail_components,
                 )
                 if single_chain_result.ok:
+                    logger.debug(
+                        "Default sender single-chain success: session=%s", session_id
+                    )
                     return single_chain_result
 
                 logger.warning(

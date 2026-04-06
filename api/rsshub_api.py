@@ -59,16 +59,22 @@ class RSSHubRadarAPI:
         self._cache_ttl = 300
         self._rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._session = session
+        self._owns_session = session is None
 
     async def close(self) -> None:
-        """Close owned aiohttp session if this instance created it."""
-        if self._session is not None and not self._session.closed:
+        """Close internal aiohttp session when owned by this helper."""
+        if (
+            self._owns_session
+            and self._session is not None
+            and not self._session.closed
+        ):
             await self._session.close()
         self._session = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
+            self._owns_session = True
         return self._session
 
     def resolve_base_url(self, explicit_base_url: str, default_base_url: str) -> str:

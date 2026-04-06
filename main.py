@@ -668,7 +668,7 @@ class RSSHubPlugin(Star):
                 default_base_url=self.config.rsshub_base_url,
             )
         except Exception as ex:
-            return f"获取路由参数失败: {ex}"
+            return f"获��路由参数失败: {ex}"
 
         if schema is None:
             return json.dumps(
@@ -907,7 +907,7 @@ class RSSHubPlugin(Star):
                 return None, "插件配置尚未初始化", False
 
             path = Path(import_path.strip()).expanduser().resolve()
-            allowed_dir = (self.config.data_dir / "imports").resolve()
+            allowed_dir = self.config.local_imports_dir.resolve()
             allowed_dir.mkdir(parents=True, exist_ok=True)
 
             try:
@@ -1220,9 +1220,9 @@ class RSSHubPlugin(Star):
     async def cmd_unsub_all(self, event: AstrMessageEvent, scope: str = ""):
         """取消当前会话或所有订阅
 
-        Usage: /unsub_all [global|yes]
+        Usage: /unsub_all [global]
         - 默认只清除当前会话的订阅
-        - global / yes: 清除所有会话的订阅（需要管理员权限）
+        - global: 清除所有会话的订阅（需要管理员权限）
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
@@ -1230,13 +1230,13 @@ class RSSHubPlugin(Star):
         user_id = event.get_sender_id()
         current_session = event.unified_msg_origin
         scope_value = scope.strip().lower()
-        is_global = scope_value in {"global", "yes"}
+        is_global = scope_value in {"global"}
 
         # global 模式需要管理员权限
         if is_global and not event.is_admin():
             yield event.plain_result(
                 "清除所有会话订阅需要管理员权限。\n"
-                "说明: /unsub_all 默认仅删除当前会话；使用 /unsub_all global(或 yes) 删除所有会话。"
+                "说明: /unsub_all 默认仅删除当前会话；使用 /unsub_all global 删除所有会话。"
             )
             return
 
@@ -1559,7 +1559,7 @@ class RSSHubPlugin(Star):
 
         user_id = event.get_sender_id()
         await User.update_defaults(user_id, **{option_key: parsed_value})
-        yield event.plain_result(f"默认选项已更新: {option_key} = {parsed_value}")
+        yield event.plain_result(f"默认选项已���新: {option_key} = {parsed_value}")
 
     @filter.command("sub_bind")
     async def cmd_sub_bind(self, event: AstrMessageEvent, target: str = ""):

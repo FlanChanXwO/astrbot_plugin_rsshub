@@ -49,8 +49,9 @@ class RSSMonitor:
     """
 
     TIMEOUT: Final = 300
-    HASH_HISTORY_MIN: Final = 1000
-    HASH_HISTORY_MULTIPLIER: Final = 12
+    HASH_HISTORY_MIN: Final = 200
+    HASH_HISTORY_MULTIPLIER: Final = 2
+    HASH_HISTORY_HARD_LIMIT: Final = 5000
     TRACKING_QUERY_PARAMS: Final = {
         "utm_source",
         "utm_medium",
@@ -63,7 +64,6 @@ class RSSMonitor:
         "mc_cid",
         "mc_eid",
         "spm",
-        "from",
         "ref",
         "ref_src",
     }
@@ -385,6 +385,8 @@ class RSSMonitor:
         for entry in entries:
             entry_hashes = self._hash_entry(entry)
             if not entry_hashes:
+                logger.debug("Feed entry has no dedupe fingerprint; treated as updated")
+                updated_entries.append(entry)
                 continue
 
             if not any(entry_hash in old_hashes_set for entry_hash in entry_hashes):
@@ -403,30 +405,48 @@ class RSSMonitor:
         text = re.sub(r"\s+", " ", text).strip().lower()
         return text[:max_length]
 
+    def _tracking_query_params(self) -> set[str]:
+        raw = self.config.get("tracking_query_params") if self.config else None
+        if isinstance(raw, (list, tuple, set)):
+            normalized = {
+                str(item).strip().lower() for item in raw if str(item).strip()
+            }
+            if normalized:
+                return normalized
+        return set(self.TRACKING_QUERY_PARAMS)
+
     def _normalize_link(self, link: str) -> str:
         if not link:
             return ""
 
+        trimmed_link = link.strip()
         try:
-            parsed = urlsplit(link.strip())
+            parsed = urlsplit(trimmed_link)
         except Exception:
-            return self._normalize_text(link, max_length=2048)
+            return self._normalize_text(trimmed_link, max_length=2048)
 
-        scheme = (parsed.scheme or "https").lower()
-        netloc = (parsed.netloc or "").lower()
         path = parsed.path or ""
         if path != "/":
             path = path.rstrip("/")
 
+        tracking_query_params = self._tracking_query_params()
         query_pairs = []
         for key, value in parse_qsl(parsed.query, keep_blank_values=True):
             normalized_key = key.lower()
-            if normalized_key in self.TRACKING_QUERY_PARAMS:
+            if normalized_key in tracking_query_params:
                 continue
             query_pairs.append((normalized_key, value))
         query_pairs.sort()
-
         query = urlencode(query_pairs, doseq=True)
+
+        # Relative links must stay relative. Forcing a scheme here would create
+        # invalid forms like https:///post/1 and break fingerprint stability.
+        if not parsed.netloc:
+            relative = urlunsplit(("", "", path, query, ""))
+            return relative or trimmed_link
+
+        scheme = (parsed.scheme or "").lower()
+        netloc = parsed.netloc.lower()
         return urlunsplit((scheme, netloc, path, query, ""))
 
     @staticmethod
@@ -496,10 +516,28 @@ class RSSMonitor:
         new_hashes: list[str],
         entry_count: int,
     ) -> list[str] | None:
-        history_limit = max(
-            self.HASH_HISTORY_MIN,
-            max(entry_count, 1) * self.HASH_HISTORY_MULTIPLIER,
+        configured_min = self.config.get("hash_history_min") if self.config else None
+        configured_multiplier = (
+            self.config.get("hash_history_multiplier") if self.config else None
         )
+        configured_hard_limit = (
+            self.config.get("hash_history_hard_limit") if self.config else None
+        )
+
+        min_limit = self.HASH_HISTORY_MIN
+        multiplier = self.HASH_HISTORY_MULTIPLIER
+        hard_limit = self.HASH_HISTORY_HARD_LIMIT
+
+        if isinstance(configured_min, int) and configured_min > 0:
+            min_limit = configured_min
+        if isinstance(configured_multiplier, int) and configured_multiplier > 0:
+            multiplier = configured_multiplier
+        if isinstance(configured_hard_limit, int) and configured_hard_limit > 0:
+            hard_limit = configured_hard_limit
+
+        growth_limit = max(entry_count, 1) * multiplier
+        history_limit = min(max(min_limit, growth_limit), hard_limit)
+
         merged: list[str] = []
         seen: set[str] = set()
 

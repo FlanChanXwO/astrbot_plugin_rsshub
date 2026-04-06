@@ -6,12 +6,16 @@ RSS-to-AstrBot Monitor
 from __future__ import annotations
 
 import asyncio
-import zlib
+import hashlib
+import re
+from calendar import timegm
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from email.utils import format_datetime
-from itertools import chain, islice, repeat
+from email.utils import format_datetime, parsedate_to_datetime
+from html import unescape
+from itertools import chain, repeat
 from typing import TYPE_CHECKING, Final
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -45,6 +49,24 @@ class RSSMonitor:
     """
 
     TIMEOUT: Final = 300
+    HASH_HISTORY_MIN: Final = 1000
+    HASH_HISTORY_MULTIPLIER: Final = 12
+    TRACKING_QUERY_PARAMS: Final = {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "utm_id",
+        "gclid",
+        "fbclid",
+        "mc_cid",
+        "mc_eid",
+        "spm",
+        "from",
+        "ref",
+        "ref_src",
+    }
 
     def __init__(self, config: PluginConfig | None = None):
         self.config = config
@@ -212,23 +234,28 @@ class RSSMonitor:
                     feed.title = title[:1024]
                     feed_updated_fields.add("title")
 
-                old_hashes = feed.entry_hashes or []
+                old_hashes = list(feed.entry_hashes or [])
                 new_hashes, updated_entries = self._calculate_update(
                     old_hashes, rss_d.entries
+                )
+                merged_hashes = self._merge_hash_history(
+                    old_hashes,
+                    new_hashes,
+                    len(rss_d.entries),
                 )
 
                 if not old_hashes:
                     feed.last_modified = wf.last_modified
-                    feed.entry_hashes = (
-                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
-                        or None
-                    )
+                    feed.entry_hashes = merged_hashes
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
                     schedule_action = ("success", None)
                     self._stat.not_updated()
                     logger.info(f"Feed首次初始化完成（不推送历史内容）: {feed.link}")
 
                 elif not updated_entries:
+                    if merged_hashes != old_hashes:
+                        feed.entry_hashes = merged_hashes
+                        feed_updated_fields.add("entry_hashes")
                     schedule_action = ("success", None)
                     self._stat.not_updated()
 
@@ -237,10 +264,7 @@ class RSSMonitor:
                         f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
                     )
                     feed.last_modified = wf.last_modified
-                    feed.entry_hashes = (
-                        list(islice(new_hashes, max(len(rss_d.entries) * 2, 100)))
-                        or None
-                    )
+                    feed.entry_hashes = merged_hashes
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
 
                     updated_entries.reverse()
@@ -349,27 +373,145 @@ class RSSMonitor:
         plugin_default = self.config.default_interval if self.config else 10
         return max(1, int(plugin_default))
 
-    def _calculate_update(self, old_hashes: list[str], entries: list) -> tuple:
+    def _calculate_update(
+        self, old_hashes: list[str], entries: list
+    ) -> tuple[list[str], list]:
         """计算哪些条目是新的。"""
+        old_hashes_set = {h for h in old_hashes if h}
         new_hashes = []
+        new_hashes_seen: set[str] = set()
         updated_entries = []
 
         for entry in entries:
-            entry_hash = self._hash_entry(entry)
-            new_hashes.append(entry_hash)
-            if entry_hash not in old_hashes:
+            entry_hashes = self._hash_entry(entry)
+            if not entry_hashes:
+                continue
+
+            if not any(entry_hash in old_hashes_set for entry_hash in entry_hashes):
                 updated_entries.append(entry)
+
+            for entry_hash in entry_hashes:
+                if entry_hash not in new_hashes_seen:
+                    new_hashes_seen.add(entry_hash)
+                    new_hashes.append(entry_hash)
 
         return new_hashes, updated_entries
 
-    def _hash_entry(self, entry) -> str:
-        """计算条目哈希。"""
-        hash_base = (
-            entry.get("link", "")
-            + entry.get("title", "")
-            + str(entry.get("published", ""))
+    @staticmethod
+    def _normalize_text(value: str, max_length: int = 1024) -> str:
+        text = unescape(value or "")
+        text = re.sub(r"\s+", " ", text).strip().lower()
+        return text[:max_length]
+
+    def _normalize_link(self, link: str) -> str:
+        if not link:
+            return ""
+
+        try:
+            parsed = urlsplit(link.strip())
+        except Exception:
+            return self._normalize_text(link, max_length=2048)
+
+        scheme = (parsed.scheme or "https").lower()
+        netloc = (parsed.netloc or "").lower()
+        path = parsed.path or ""
+        if path != "/":
+            path = path.rstrip("/")
+
+        query_pairs = []
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            normalized_key = key.lower()
+            if normalized_key in self.TRACKING_QUERY_PARAMS:
+                continue
+            query_pairs.append((normalized_key, value))
+        query_pairs.sort()
+
+        query = urlencode(query_pairs, doseq=True)
+        return urlunsplit((scheme, netloc, path, query, ""))
+
+    @staticmethod
+    def _format_entry_timestamp(entry) -> str:
+        parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
+        if parsed_time:
+            try:
+                return str(timegm(parsed_time))
+            except Exception:
+                pass
+
+        for field_name in ("published", "updated"):
+            raw_value = entry.get(field_name)
+            if not raw_value:
+                continue
+            try:
+                dt = parsedate_to_datetime(str(raw_value))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return str(int(dt.timestamp()))
+            except Exception:
+                continue
+
+        return ""
+
+    @staticmethod
+    def _sha256(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _hash_entry(self, entry) -> list[str]:
+        """Calculate a robust dedupe fingerprint set for one entry."""
+        entry_id = self._normalize_text(str(entry.get("id") or entry.get("guid") or ""))
+        link = self._normalize_link(str(entry.get("link") or ""))
+        title = self._normalize_text(str(entry.get("title") or ""))
+        summary = self._normalize_text(
+            str(entry.get("summary") or entry.get("description") or ""),
+            max_length=2048,
         )
-        return str(zlib.crc32(hash_base.encode()))
+        published_ts = self._format_entry_timestamp(entry)
+
+        if entry_id:
+            stable_key = f"id={entry_id}"
+        elif link:
+            stable_key = f"link={link}"
+        elif title:
+            stable_key = f"title={title}"
+        else:
+            stable_key = f"summary={summary[:256]}"
+
+        # Primary fingerprint prefers stable identity fields and normalized timestamp.
+        primary_material = f"v2|{stable_key}|ts={published_ts}"
+
+        # Secondary fingerprint keeps content context to reduce false positives.
+        secondary_material = (
+            f"v2|title={title}|link={link}|summary={summary[:512]}|ts={published_ts}"
+        )
+
+        fingerprints = [self._sha256(primary_material)]
+        secondary_hash = self._sha256(secondary_material)
+        if secondary_hash != fingerprints[0]:
+            fingerprints.append(secondary_hash)
+        return fingerprints
+
+    def _merge_hash_history(
+        self,
+        old_hashes: list[str],
+        new_hashes: list[str],
+        entry_count: int,
+    ) -> list[str] | None:
+        history_limit = max(
+            self.HASH_HISTORY_MIN,
+            max(entry_count, 1) * self.HASH_HISTORY_MULTIPLIER,
+        )
+        merged: list[str] = []
+        seen: set[str] = set()
+
+        for entry_hash in chain(new_hashes, old_hashes):
+            if not entry_hash or entry_hash in seen:
+                continue
+            seen.add(entry_hash)
+            merged.append(entry_hash)
+            if len(merged) >= history_limit:
+                break
+
+        return merged or None
 
 
 class TaskState:

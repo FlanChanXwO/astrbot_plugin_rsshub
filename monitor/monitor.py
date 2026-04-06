@@ -483,6 +483,14 @@ class RSSMonitor:
         query_pairs.sort()
         query = urlencode(query_pairs, doseq=True)
 
+        # For non-hierarchical URLs (mailto:, tel:, magnet:), keep their scheme
+        # even when netloc is empty; they are not relative links.
+        if parsed.scheme and not parsed.netloc:
+            scheme = parsed.scheme.lower()
+            if scheme not in {"http", "https"}:
+                opaque = urlunsplit((scheme, "", path, query, ""))
+                return opaque or trimmed_link
+
         # Relative links must stay relative. Forcing a scheme here would create
         # invalid forms like https:///post/1 and break fingerprint stability.
         if not parsed.netloc:

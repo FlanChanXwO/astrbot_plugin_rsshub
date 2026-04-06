@@ -653,7 +653,7 @@ class RSSHubPlugin(Star):
                 {
                     "resolved_base_url": resolved_base_url,
                     "found": False,
-                    "message": "未找到�� uri，请先调用 rsshub_search_routes",
+                    "message": "未找到指定 uri，请先调用 rsshub_search_routes",
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -1142,21 +1142,23 @@ class RSSHubPlugin(Star):
     async def cmd_unsub_all(self, event: AstrMessageEvent, scope: str = ""):
         """取消当前会话或所有订阅
 
-        Usage: /unsub_all [global]
+        Usage: /unsub_all [global|yes]
         - 默认只清除当前会话的订阅
-        - global: 清除所有会话的订阅（需要管理员权限）
+        - global / yes: 清除所有会话的订阅（需要管理员权限）
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
         user_id = event.get_sender_id()
         current_session = event.unified_msg_origin
-        is_global = scope.strip().lower() == "global"
+        scope_value = scope.strip().lower()
+        is_global = scope_value in {"global", "yes"}
 
         # global 模式需要管理员权限
         if is_global and not event.is_admin():
             yield event.plain_result(
-                "清除所有会话订阅需要管理员权限，请使用 /unsub_all 或 /unsub_all global"
+                "清除所有会话订阅需要管理员权限。\n"
+                "说明: /unsub_all 默认仅删除当前会话；使用 /unsub_all global(或 yes) 删除所有会话。"
             )
             return
 
@@ -1204,12 +1206,6 @@ class RSSHubPlugin(Star):
         except OSError as ex:
             logger.error("Failed to export subscriptions before unsub_all: %s", ex)
             yield event.plain_result(f"备份导出失败，将继续删除订阅: {ex}")
-        finally:
-            try:
-                if export_path.exists():
-                    os.unlink(export_path)
-            except OSError:
-                pass
 
         # 删除订阅
         deleted_count = 0
@@ -1366,11 +1362,11 @@ class RSSHubPlugin(Star):
                 return
 
         temp_file_path: str | None = None
+        has_file = False
 
         try:
             # 检查消息中是否有文件
             messages = event.get_messages()
-            has_file = False
             for comp in messages:
                 if isinstance(comp, File):
                     has_file = True
@@ -1417,9 +1413,10 @@ class RSSHubPlugin(Star):
             logger.error(f"导入文件处理失败: {e}")
             yield event.plain_result(f"文件处理失败: {e}")
         finally:
-            # 统一清理临时文件和会话状态
-            async with self._import_session_lock:
-                self._import_sessions.pop(sender_id, None)
+            # 仅在本次消息包含文件并触发导入流程时，才清理导入会话
+            if has_file:
+                async with self._import_session_lock:
+                    self._import_sessions.pop(sender_id, None)
             if temp_file_path:
                 try:
                     os.unlink(temp_file_path)
@@ -1641,7 +1638,7 @@ class RSSHubPlugin(Star):
         command_lines = [
             "订阅: /sub <RSS链接> [目标]",
             "取消订阅: /unsub <订阅ID>",
-            "取消订阅(当前会话): /unsub_all [global]",
+            "取消订阅: /unsub_all [global|yes]  # 默认当前会话，global/yes=所有会话(管理员)",
             "订阅列表: /sub_list [all]",
             "设置订阅选项: /sub_set <订阅ID> <选项> <值>",
             "设置默认选项: /sub_set_default <选项> <值>",

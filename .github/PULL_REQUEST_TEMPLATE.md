@@ -7,7 +7,7 @@
 <!--请总结你的改动：哪些核心文件被修改了？实现了什么功能？-->
 
 - [x] This is NOT a breaking change. / 这不是一个破坏性变更。
-<!-- If your changes is a breaking change, please uncheck the checkbox above -->
+<!-- If your change is a breaking change, please uncheck the checkbox above. -->
 
 ### Screenshots or Test Results / 运行截图或测试结果
 

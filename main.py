@@ -20,6 +20,7 @@ import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -33,6 +34,7 @@ from .monitor import Monitor
 from .notifier import Notifier
 from .notifier.senders import set_bot_self_id_provider
 from .utils.config import PluginConfig
+from .utils.rsshub_api import RSSHubRadarAPI, normalize_base_url
 from .utils.subscription_io import (
     parse_subscriptions_toml,
     serialize_subscriptions_to_toml,
@@ -76,6 +78,7 @@ PLUGIN_CONFIG_KEYS = {
     "minimal_interval",
     "timeout",
     "download_image_before_send",
+    "rsshub_base_url",
 }
 
 SESSION_DEFAULT_KV_PREFIX = "session_defaults::"
@@ -175,7 +178,34 @@ class RSSHubPlugin(Star):
         if normalized_key == "proxy":
             return raw_value
 
+        if normalized_key == "rsshub_base_url":
+            try:
+                return normalize_base_url(raw_value)
+            except ValueError as ex:
+                raise ValueError(f"rsshub_base_url 非法: {ex}") from ex
+
         raise ValueError(f"不支持的插件配置项: {normalized_key}")
+
+    @staticmethod
+    def _parse_llm_params_input(params: str) -> dict[str, str]:
+        """Parse LLM params input from JSON object or query-string form."""
+        raw = (params or "").strip()
+        if not raw:
+            return {}
+
+        try:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise ValueError("params_json 必须是 JSON 对象")
+            return {str(k): str(v) for k, v in parsed.items() if str(k).strip()}
+        except json.JSONDecodeError:
+            return {k: v for k, v in parse_qsl(raw, keep_blank_values=True) if k}
+
+    def _rsshub_api(self) -> RSSHubRadarAPI:
+        """Create API helper with current runtime timeout/proxy config."""
+        timeout = self.config.timeout if self.config else 30
+        proxy = self.config.proxy if self.config else ""
+        return RSSHubRadarAPI(timeout=timeout, proxy=proxy)
 
     async def initialize(self):
         """插件初始化"""
@@ -383,6 +413,67 @@ class RSSHubPlugin(Star):
                 [],
                 "Get current session-level default options.",
             ),
+            (
+                "rsshub_search_routes",
+                self._llm_rsshub_search_routes,
+                [
+                    {
+                        "name": "query",
+                        "type": "string",
+                        "description": "Route search keywords, e.g. bilibili dynamic",
+                    },
+                    {
+                        "name": "top_k",
+                        "type": "string",
+                        "description": "Optional result limit (1-30), default 8",
+                    },
+                    {
+                        "name": "base_url",
+                        "type": "string",
+                        "description": "Optional RSSHub base URL override",
+                    },
+                ],
+                "Search RSSHub routes and return concise route summaries.",
+            ),
+            (
+                "rsshub_get_route_schema",
+                self._llm_rsshub_get_route_schema,
+                [
+                    {
+                        "name": "uri",
+                        "type": "string",
+                        "description": "Route URI like /bilibili/user/dynamic/:uid",
+                    },
+                    {
+                        "name": "base_url",
+                        "type": "string",
+                        "description": "Optional RSSHub base URL override",
+                    },
+                ],
+                "Get one RSSHub route schema with required/optional params.",
+            ),
+            (
+                "rsshub_build_subscribe_url",
+                self._llm_rsshub_build_subscribe_url,
+                [
+                    {
+                        "name": "uri",
+                        "type": "string",
+                        "description": "Route URI path to build final subscription URL",
+                    },
+                    {
+                        "name": "params_json",
+                        "type": "string",
+                        "description": "Optional JSON object or query-string params",
+                    },
+                    {
+                        "name": "base_url",
+                        "type": "string",
+                        "description": "Optional RSSHub base URL override",
+                    },
+                ],
+                "Build final RSSHub subscription URL from uri and params.",
+            ),
         ]
 
         for name, handler, args, desc in tools:
@@ -404,6 +495,9 @@ class RSSHubPlugin(Star):
             "rss_set_plugin_config",
             "rss_set_session_default_option",
             "rss_get_session_defaults",
+            "rsshub_search_routes",
+            "rsshub_get_route_schema",
+            "rsshub_build_subscribe_url",
         ]
         for name in tool_names:
             try:
@@ -494,6 +588,120 @@ class RSSHubPlugin(Star):
     async def _llm_get_session_defaults(self, event: AstrMessageEvent) -> str:
         return await self._run_command_and_collect(
             self.cmd_sub_session_default_get(event)
+        )
+
+    async def _llm_rsshub_search_routes(
+        self,
+        event: AstrMessageEvent,
+        query: str = "",
+        top_k: str = "",
+        base_url: str = "",
+    ) -> str:
+        del event
+        if self.config is None:
+            return "插件配置尚未初始化"
+
+        try:
+            limit = int(top_k) if (top_k or "").strip() else 8
+        except ValueError:
+            return "top_k 必须是整数"
+        limit = max(1, min(limit, 30))
+
+        try:
+            resolved_base_url, routes = await self._rsshub_api().search_routes(
+                query=query,
+                top_k=limit,
+                explicit_base_url=base_url,
+                default_base_url=self.config.rsshub_base_url,
+            )
+        except Exception as ex:
+            return f"RSSHub 路由检索失败: {ex}"
+
+        return json.dumps(
+            {
+                "resolved_base_url": resolved_base_url,
+                "count": len(routes),
+                "routes": routes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def _llm_rsshub_get_route_schema(
+        self,
+        event: AstrMessageEvent,
+        uri: str = "",
+        base_url: str = "",
+    ) -> str:
+        del event
+        if self.config is None:
+            return "插件配置尚未初始化"
+        if not (uri or "").strip():
+            return "请提供 uri，例如 /bilibili/user/dynamic/:uid"
+
+        try:
+            resolved_base_url, schema = await self._rsshub_api().get_route_schema(
+                uri=uri,
+                explicit_base_url=base_url,
+                default_base_url=self.config.rsshub_base_url,
+            )
+        except Exception as ex:
+            return f"获取路由参数失败: {ex}"
+
+        if schema is None:
+            return json.dumps(
+                {
+                    "resolved_base_url": resolved_base_url,
+                    "found": False,
+                    "message": "未找到�� uri，请先调用 rsshub_search_routes",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        return json.dumps(
+            {
+                "resolved_base_url": resolved_base_url,
+                "found": True,
+                "schema": schema,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def _llm_rsshub_build_subscribe_url(
+        self,
+        event: AstrMessageEvent,
+        uri: str = "",
+        params_json: str = "",
+        base_url: str = "",
+    ) -> str:
+        del event
+        if self.config is None:
+            return "插件配置尚未初始化"
+        if not (uri or "").strip():
+            return "请提供 uri，例如 /bilibili/user/dynamic/12345"
+
+        try:
+            parsed_params = self._parse_llm_params_input(params_json)
+            resolved_base_url, subscribe_url = self._rsshub_api().build_subscribe_url(
+                uri=uri,
+                params=parsed_params,
+                explicit_base_url=base_url,
+                default_base_url=self.config.rsshub_base_url,
+            )
+        except Exception as ex:
+            return f"构建订阅链接失败: {ex}"
+
+        return json.dumps(
+            {
+                "resolved_base_url": resolved_base_url,
+                "uri": uri,
+                "params": parsed_params,
+                "subscribe_url": subscribe_url,
+            },
+            ensure_ascii=False,
+            indent=2,
         )
 
     def _start_scheduler_task(self):
@@ -947,7 +1155,9 @@ class RSSHubPlugin(Star):
 
         # global 模式需要管理员权限
         if is_global and not event.is_admin():
-            yield event.plain_result("清除所有会话订阅需要管理员权限，请使用 /unsub_all 或 /unsub_all global")
+            yield event.plain_result(
+                "清除所有会话订阅需要管理员权限，请使用 /unsub_all 或 /unsub_all global"
+            )
             return
 
         subscriptions = await Sub.get_by_user(user_id)
@@ -1019,9 +1229,7 @@ class RSSHubPlugin(Star):
             yield notice
 
         # 先尝试直接读取（用户可能直接附带文件或提供路径）
-        content, read_err = await self._read_import_toml_content(
-            event, import_path
-        )
+        content, read_err = await self._read_import_toml_content(event, import_path)
 
         if content:
             # 用户已提供文件，直接处理
@@ -1055,9 +1263,7 @@ class RSSHubPlugin(Star):
             "超时请重新执行 /sub_import 命令。"
         )
 
-    async def _process_import_toml(
-        self, event: AstrMessageEvent, content: str
-    ):
+    async def _process_import_toml(self, event: AstrMessageEvent, content: str):
         """处理 TOML 内容并导入订阅。"""
         payload = parse_subscriptions_toml(content)
         if payload.errors and not payload.records:
@@ -1075,9 +1281,7 @@ class RSSHubPlugin(Star):
 
         for index, record in enumerate(payload.records, start=1):
             options = dict(record.options)
-            validated, option_err = self._validate_import_record_options(
-                event, options
-            )
+            validated, option_err = self._validate_import_record_options(event, options)
             if option_err:
                 failed += 1
                 details.append(f"[{index}] 选项校验失败: {option_err}")
@@ -1400,6 +1604,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(
                 "当前 RSS 插件配置:\n"
                 f"proxy = {self.config.proxy or '(empty)'}\n"
+                f"rsshub_base_url = {self.config.rsshub_base_url}\n"
                 f"default_interval = {self.config.default_interval}\n"
                 f"minimal_interval = {self.config.minimal_interval}\n"
                 f"timeout = {self.config.timeout}\n"
@@ -1411,7 +1616,7 @@ class RSSHubPlugin(Star):
         if normalized_key not in PLUGIN_CONFIG_KEYS:
             yield event.plain_result(
                 "不支持的配置项。可用项: "
-                "proxy/default_interval/minimal_interval/timeout/download_image_before_send"
+                "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/download_image_before_send"
             )
             return
 
@@ -1464,7 +1669,7 @@ class RSSHubPlugin(Star):
             + "- display_media: -1/0\n"
             + "- target_session: private/group/current 或完整 session\n\n"
             + "插件配置项:\n"
-            + "- proxy/default_interval/minimal_interval/timeout/download_image_before_send\n\n"
+            + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/download_image_before_send\n\n"
             + "会话级默认配置项:\n"
             + "- notify/send_mode/length_limit/link_preview/display_author/display_via/display_title/display_entry_tags/style/display_media/interval/title/tags\n\n"
             + "目标绑定:\n"

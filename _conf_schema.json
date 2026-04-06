@@ -5,6 +5,12 @@
     "hint": "HTTP/SOCKS 代理地址，留空则不使用代理。例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
     "default": ""
   },
+  "rsshub_base_url": {
+    "type": "string",
+    "description": "默认 RSSHub 域名",
+    "hint": "用于 RSSHub 路由检索与订阅链接拼接的默认域名。支持在 LLM 工具调用时通过 base_url 临时覆盖",
+    "default": "https://rsshub.app"
+  },
   "default_interval": {
     "type": "int",
     "description": "默认监控间隔（分钟）",

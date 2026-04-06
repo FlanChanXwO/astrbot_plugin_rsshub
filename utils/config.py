@@ -18,6 +18,7 @@ class PluginConfig:
     minimal_interval: int = 1
     timeout: int = 30
     proxy: str = ""
+    rsshub_base_url: str = "https://rsshub.app"
     download_image_before_send: bool = True
     db_file: str = "rsshub.db"
     astrbot_config: AstrBotConfig | None = None
@@ -40,6 +41,10 @@ class PluginConfig:
             config.minimal_interval = int(astrbot_config.get("minimal_interval", 1))
             config.timeout = int(astrbot_config.get("timeout", 30))
             config.proxy = str(astrbot_config.get("proxy", "") or "")
+            config.rsshub_base_url = str(
+                astrbot_config.get("rsshub_base_url", "https://rsshub.app")
+                or "https://rsshub.app"
+            )
             config.download_image_before_send = bool(
                 astrbot_config.get("download_image_before_send", True)
             )
@@ -53,6 +58,10 @@ class PluginConfig:
                 config.minimal_interval = int(data.get("minimal_interval", 1))
                 config.timeout = int(data.get("timeout", 30))
                 config.proxy = str(data.get("proxy", "") or "")
+                config.rsshub_base_url = str(
+                    data.get("rsshub_base_url", "https://rsshub.app")
+                    or "https://rsshub.app"
+                )
                 config.download_image_before_send = bool(
                     data.get("download_image_before_send", True)
                 )
@@ -71,6 +80,7 @@ class PluginConfig:
         self.astrbot_config["minimal_interval"] = int(self.minimal_interval)
         self.astrbot_config["timeout"] = int(self.timeout)
         self.astrbot_config["proxy"] = str(self.proxy)
+        self.astrbot_config["rsshub_base_url"] = str(self.rsshub_base_url)
         self.astrbot_config["download_image_before_send"] = bool(
             self.download_image_before_send
         )

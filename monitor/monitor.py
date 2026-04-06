@@ -21,6 +21,7 @@ from sqlmodel import select
 
 from astrbot.api import logger
 
+from ..api import feed_get
 from ..db import Feed, MonitorSchedule, Sub, User, get_session
 from ..notifier import Notifier
 from ..utils.monitor_helpers import (
@@ -33,7 +34,6 @@ from ..utils.monitor_helpers import (
     resolve_hash_history_limit,
     tracking_query_params_cache_key,
 )
-from ..web import feed_get
 
 
 def _ensure_utc_aware(dt: datetime | None) -> datetime | None:

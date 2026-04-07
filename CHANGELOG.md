@@ -6,7 +6,6 @@
 
 - 调整 `/sub_list all` 为管理员全局视图：展示数据库内所有平台/会话订阅
 - 为管理员全局列表新增分页能力：支持 `/sub_list all [page] [page_size]`，避免一次性加载/输出全量数据
-- `sub_list` 输出改为纯文本分片发送，并根据 `platform_settings.forward_threshold` 动态收敛分片长度，降低被平台转换为合并消息的概率
 
 ### Fixed
 

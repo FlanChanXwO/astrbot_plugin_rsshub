@@ -104,8 +104,6 @@ SESSION_DEFAULT_KEYS = {
 
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
-SUB_LIST_PLAIN_CHUNK_LIMIT = 1200
-SUB_LIST_FORWARD_MARGIN = 20
 
 
 class RSSHubPlugin(Star):
@@ -281,7 +279,7 @@ class RSSHubPlugin(Star):
         logger.info("RSS插件数据库已关闭")
 
     def _get_bot_self_id(self, platform_id: str) -> str:
-        """根据 platform_id 获取对应平台适配器的 bot self_id"""
+        """根��� platform_id 获取对应平台适配器的 bot self_id"""
         if self.context is None:
             return "10000"
 
@@ -1758,40 +1756,3 @@ class RSSHubPlugin(Star):
         )
         yield event.plain_result(help_text)
 
-    @staticmethod
-    def _split_plain_text_chunks(lines: list[str], limit: int) -> list[str]:
-        """Split text by lines first to keep URL lines intact; hard-split only long non-URL lines."""
-        safe_limit = max(1, int(limit))
-        chunks: list[str] = []
-        current = ""
-
-        for line in lines:
-            candidate = f"{current}\n{line}" if current else line
-            if len(candidate) <= safe_limit:
-                current = candidate
-                continue
-
-            if current:
-                chunks.append(current)
-                current = ""
-
-            if len(line) <= safe_limit:
-                current = line
-                continue
-
-            stripped = line.strip()
-            if stripped.startswith("http://") or stripped.startswith("https://"):
-                # Keep full URL line to avoid broken links in output.
-                chunks.append(line)
-                continue
-
-            start = 0
-            while start < len(line):
-                end = min(start + safe_limit, len(line))
-                chunks.append(line[start:end])
-                start = end
-
-        if current:
-            chunks.append(current)
-
-        return chunks

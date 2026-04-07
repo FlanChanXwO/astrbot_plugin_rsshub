@@ -107,8 +107,6 @@ def _read_cache(url: str) -> Path | None:
         return None
 
     if expire_ts < time.time():
-        safe_unlink(file_path)
-        safe_unlink(meta_path)
         return None
     return file_path
 

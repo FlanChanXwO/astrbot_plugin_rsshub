@@ -105,6 +105,7 @@ SESSION_DEFAULT_KEYS = {
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
 SUB_LIST_PLAIN_CHUNK_LIMIT = 1200
+SUB_LIST_FORWARD_MARGIN = 20
 
 
 class RSSHubPlugin(Star):
@@ -1196,10 +1197,8 @@ class RSSHubPlugin(Star):
                 lines.append(f"    {feed_link}")
 
         # 命令响应走纯文本分片，避免长消息被平台降级为合并/转发样式。
-        for chunk in self._split_plain_text_chunks(
-            lines,
-            SUB_LIST_PLAIN_CHUNK_LIMIT,
-        ):
+        chunk_limit = self._resolve_sub_list_chunk_limit()
+        for chunk in self._split_plain_text_chunks(lines, chunk_limit):
             yield event.plain_result(chunk)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -1731,7 +1730,7 @@ class RSSHubPlugin(Star):
             "会话默认配置: /sub_session_default_set <key> <value>",
             "查看会话默认配置: /sub_session_default_get",
             "插件配置: /rss_conf [key] [value]",
-            "导入订阅: /sub_import [本地���件路径]",
+            "导入订阅: /sub_import [本地文件路径]",
         ]
         if event.is_admin():
             command_lines.append(
@@ -1782,3 +1781,18 @@ class RSSHubPlugin(Star):
             chunks.append("\n".join(current))
 
         return chunks
+
+    def _resolve_sub_list_chunk_limit(self) -> int:
+        """Keep chunks below aiocqhttp forward threshold to prevent node conversion."""
+        limit = SUB_LIST_PLAIN_CHUNK_LIMIT
+
+        try:
+            cfg = self.astrbot_config or {}
+            platform_settings = cfg.get("platform_settings", {})
+            threshold = int(platform_settings.get("forward_threshold"))
+            if threshold > 0:
+                limit = min(limit, max(100, threshold - SUB_LIST_FORWARD_MARGIN))
+        except Exception:
+            pass
+
+        return limit

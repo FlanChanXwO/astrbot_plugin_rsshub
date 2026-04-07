@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
@@ -13,6 +14,22 @@ from astrbot.core.utils.http_ssl import build_tls_connector
 
 _CACHE_DIR = Path(tempfile.gettempdir()) / "astrbot_rsshub_media_cache"
 _CACHE_TTL_SECONDS = 15 * 60
+_CACHE_GC_INTERVAL_SECONDS = 5 * 60
+_CACHE_GC_GRACE_SECONDS = 10 * 60
+_CACHE_MEDIA_SUFFIXES = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".mp4",
+    ".mp3",
+    ".ogg",
+    ".bin",
+)
+
+_cache_gc_lock = asyncio.Lock()
+_cache_gc_last_run = 0.0
 
 
 def _guess_suffix(url: str) -> str:
@@ -85,14 +102,81 @@ def safe_unlink(path: Path | None) -> None:
         logger.debug("remove temp media failed: path=%s, err=%s", path, ex)
 
 
+def _cache_file_prefix(url: str) -> str:
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
 def _cache_file_path(url: str) -> Path:
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    digest = _cache_file_prefix(url)
     return _CACHE_DIR / f"{digest}{_guess_suffix(url)}"
 
 
 def _cache_meta_path(url: str) -> Path:
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    digest = _cache_file_prefix(url)
     return _CACHE_DIR / f"{digest}.meta"
+
+
+def _cleanup_expired_cache_files(now_ts: float) -> int:
+    if not _CACHE_DIR.exists():
+        return 0
+
+    removed = 0
+
+    for meta_path in _CACHE_DIR.glob("*.meta"):
+        try:
+            expire_ts = float(meta_path.read_text(encoding="utf-8").strip())
+        except Exception:
+            expire_ts = 0.0
+
+        # Keep a grace window to avoid deleting files that may still be in-flight.
+        if expire_ts + _CACHE_GC_GRACE_SECONDS >= now_ts:
+            continue
+
+        stem = meta_path.stem
+        safe_unlink(meta_path)
+        removed += 1
+
+        for suffix in _CACHE_MEDIA_SUFFIXES:
+            candidate = _CACHE_DIR / f"{stem}{suffix}"
+            if candidate.exists():
+                safe_unlink(candidate)
+                removed += 1
+
+    stale_orphan_age = _CACHE_TTL_SECONDS + _CACHE_GC_GRACE_SECONDS
+    for suffix in _CACHE_MEDIA_SUFFIXES:
+        for media_path in _CACHE_DIR.glob(f"*{suffix}"):
+            meta_path = media_path.with_suffix(".meta")
+            if meta_path.exists():
+                continue
+            try:
+                age = now_ts - media_path.stat().st_mtime
+            except OSError:
+                continue
+            if age < stale_orphan_age:
+                continue
+            safe_unlink(media_path)
+            removed += 1
+
+    return removed
+
+
+async def _run_periodic_cache_gc() -> None:
+    global _cache_gc_last_run
+
+    now_ts = time.time()
+    if now_ts - _cache_gc_last_run < _CACHE_GC_INTERVAL_SECONDS:
+        return
+
+    async with _cache_gc_lock:
+        now_ts = time.time()
+        if now_ts - _cache_gc_last_run < _CACHE_GC_INTERVAL_SECONDS:
+            return
+
+        removed = _cleanup_expired_cache_files(now_ts)
+        _cache_gc_last_run = now_ts
+
+    if removed > 0:
+        logger.debug("Media cache GC removed %s files", removed)
 
 
 def _read_cache(url: str) -> Path | None:
@@ -107,8 +191,6 @@ def _read_cache(url: str) -> Path | None:
         return None
 
     if expire_ts < time.time():
-        safe_unlink(file_path)
-        safe_unlink(meta_path)
         return None
     return file_path
 
@@ -129,6 +211,8 @@ async def get_or_download_media_to_cache(
     timeout_seconds: int,
     proxy: str,
 ) -> Path:
+    await _run_periodic_cache_gc()
+
     cached = _read_cache(url)
     if cached is not None:
         return cached

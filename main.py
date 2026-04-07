@@ -104,6 +104,8 @@ SESSION_DEFAULT_KEYS = {
 
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
+SUB_LIST_PLAIN_CHUNK_LIMIT = 1200
+SUB_LIST_FORWARD_MARGIN = 20
 
 
 class RSSHubPlugin(Star):
@@ -1194,8 +1196,10 @@ class RSSHubPlugin(Star):
             if feed_link:
                 lines.append(f"    {feed_link}")
 
-        # 命令响应始终走纯文本，避免误进入合并转发策略。
-        yield event.plain_result("\n".join(lines))
+        # 命令响应走纯文本分片，避免长消息被平台降级为合并/转发样式。
+        chunk_limit = self._resolve_sub_list_chunk_limit()
+        for chunk in self._split_plain_text_chunks(lines, chunk_limit):
+            yield event.plain_result(chunk)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("sub_test")
@@ -1755,3 +1759,31 @@ class RSSHubPlugin(Star):
             + "支持的平台: QQ、Telegram、微信、钉钉、Slack、Discord等"
         )
         yield event.plain_result(help_text)
+
+    @staticmethod
+    def _split_plain_text_chunks(lines: list[str], limit: int) -> list[str]:
+        """Split plain text into hard-sized chunks, including very long single lines."""
+        text = "\n".join(lines)
+        if not text:
+            return []
+
+        safe_limit = max(1, int(limit))
+        return [text[i : i + safe_limit] for i in range(0, len(text), safe_limit)]
+
+    def _resolve_sub_list_chunk_limit(self) -> int:
+        """Keep chunks below aiocqhttp forward threshold to prevent node conversion."""
+        limit = SUB_LIST_PLAIN_CHUNK_LIMIT
+
+        try:
+            cfg = self.astrbot_config or {}
+            platform_settings = cfg.get("platform_settings", {})
+            threshold = int(platform_settings.get("forward_threshold"))
+            if threshold > 0:
+                safe_threshold = max(1, threshold - SUB_LIST_FORWARD_MARGIN)
+                limit = min(limit, safe_threshold)
+                # Final guard: never exceed configured forward threshold.
+                limit = min(limit, threshold)
+        except Exception:
+            pass
+
+        return max(1, limit)

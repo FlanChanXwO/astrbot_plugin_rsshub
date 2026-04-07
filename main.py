@@ -1762,25 +1762,13 @@ class RSSHubPlugin(Star):
 
     @staticmethod
     def _split_plain_text_chunks(lines: list[str], limit: int) -> list[str]:
-        """Split long plain text into bounded chunks to avoid platform long-message fallback."""
-        chunks: list[str] = []
-        current: list[str] = []
-        current_len = 0
+        """Split plain text into hard-sized chunks, including very long single lines."""
+        text = "\n".join(lines)
+        if not text:
+            return []
 
-        for line in lines:
-            line_len = len(line) + 1
-            if current and current_len + line_len > limit:
-                chunks.append("\n".join(current))
-                current = [line]
-                current_len = line_len
-            else:
-                current.append(line)
-                current_len += line_len
-
-        if current:
-            chunks.append("\n".join(current))
-
-        return chunks
+        safe_limit = max(1, int(limit))
+        return [text[i : i + safe_limit] for i in range(0, len(text), safe_limit)]
 
     def _resolve_sub_list_chunk_limit(self) -> int:
         """Keep chunks below aiocqhttp forward threshold to prevent node conversion."""
@@ -1791,8 +1779,11 @@ class RSSHubPlugin(Star):
             platform_settings = cfg.get("platform_settings", {})
             threshold = int(platform_settings.get("forward_threshold"))
             if threshold > 0:
-                limit = min(limit, max(100, threshold - SUB_LIST_FORWARD_MARGIN))
+                safe_threshold = max(1, threshold - SUB_LIST_FORWARD_MARGIN)
+                limit = min(limit, safe_threshold)
+                # Final guard: never exceed configured forward threshold.
+                limit = min(limit, threshold)
         except Exception:
             pass
 
-        return limit
+        return max(1, limit)

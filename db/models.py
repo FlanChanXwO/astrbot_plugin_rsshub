@@ -6,7 +6,7 @@
 import os
 from datetime import datetime
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import registry, selectinload
 from sqlmodel import Field, Relationship, SQLModel
@@ -315,6 +315,34 @@ class SubMethods:
             return list(result.scalars().all())
 
     @staticmethod
+    async def get_all_active_paged(
+        *,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Sub], int]:
+        """Return paged active subscriptions with total count for admin scope."""
+        page = max(1, int(page))
+        page_size = max(1, int(page_size))
+        offset = (page - 1) * page_size
+
+        async with get_session() as session:
+            from sqlmodel import select
+
+            total_stmt = select(func.count()).select_from(Sub).where(Sub.state == 1)
+            total = int((await session.execute(total_stmt)).scalar_one() or 0)
+
+            stmt = (
+                select(Sub)
+                .where(Sub.state == 1)
+                .options(selectinload(Sub.feed))
+                .order_by(Sub.id.asc())
+                .offset(offset)
+                .limit(page_size)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all()), total
+
+    @staticmethod
     async def get_active_by_feed_id(feed_id: int) -> list[Sub]:
         """Return all active subscriptions for one feed."""
         async with get_session() as session:
@@ -601,6 +629,7 @@ Feed.get_by_id = staticmethod(FeedMethods.get_by_id)
 Sub.create = staticmethod(SubMethods.create)
 Sub.get_by_user = staticmethod(SubMethods.get_by_user)
 Sub.get_all_active = staticmethod(SubMethods.get_all_active)
+Sub.get_all_active_paged = staticmethod(SubMethods.get_all_active_paged)
 Sub.get_active_by_feed_id = staticmethod(SubMethods.get_active_by_feed_id)
 Sub.get_by_id = staticmethod(SubMethods.get_by_id)
 Sub.get_by_id_and_user = staticmethod(SubMethods.get_by_id_and_user)

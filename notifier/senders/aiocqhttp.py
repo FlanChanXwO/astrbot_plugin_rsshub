@@ -10,6 +10,8 @@ from .types import NotifierContext, PreparedMedia, SendResult
 class AiocqhttpMessageSender(MessageSender):
     """OneBot sender: pack metadata and media into merged forward nodes."""
 
+    _fingerprint_logged = False
+
     @classmethod
     def _build_node(cls, nickname: str, chain: list):
         return Node(content=chain, name=nickname)
@@ -44,6 +46,12 @@ class AiocqhttpMessageSender(MessageSender):
         prepared_media: list[PreparedMedia] | None = None,
         context: NotifierContext | None = None,
     ) -> SendResult:
+        if not cls._fingerprint_logged:
+            logger.warning(
+                "Aiocqhttp sender fingerprint=v1.0.6-url-first module=%s",
+                __file__,
+            )
+            cls._fingerprint_logged = True
         """发送消息到用户。
 
         Args:

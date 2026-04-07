@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from astrbot.api import logger
-from astrbot.api.message_components import Image, Plain, Record, Video
+from astrbot.api.message_components import File, Image, Plain, Record, Video
 
 from .base import MessageSender
 from .media_downloader import get_or_download_media_to_cache
@@ -13,6 +14,9 @@ from .types import PreparedMedia, SendResult
 
 class TelegramMessageSender(MessageSender):
     """Telegram sender strategy with media-first chain ordering."""
+
+    TELEGRAM_MAX_PHOTO_SIZE = 10 * 1024 * 1024
+    TELEGRAM_MAX_OTHER_MEDIA_SIZE = 50 * 1024 * 1024
 
     @staticmethod
     def _hash_for_log(value: str) -> str:
@@ -29,7 +33,7 @@ class TelegramMessageSender(MessageSender):
             if item.download_failed or item.local_path is not None:
                 normalized.append(item)
                 continue
-            if item.media_type not in {"video", "audio"}:
+            if item.media_type not in {"image", "video", "audio"}:
                 normalized.append(item)
                 continue
 
@@ -89,7 +93,10 @@ class TelegramMessageSender(MessageSender):
         return path
 
     @classmethod
-    def _normalize_component_file_value(cls, component: Image | Video | Record) -> None:
+    def _normalize_component_file_value(
+        cls,
+        component: Image | Video | Record | File,
+    ) -> None:
         file_value = getattr(component, "file", None)
         if isinstance(file_value, str):
             component.file = cls._uri_to_local_path(file_value)
@@ -97,14 +104,84 @@ class TelegramMessageSender(MessageSender):
     @classmethod
     def _normalize_components_for_telegram(
         cls,
-        image_components: list[Image | Video | Record],
-        tail_components: list[Image | Video | Record],
+        image_components: list[Image | Video | Record | File],
+        tail_components: list[Image | Video | Record | File],
     ) -> None:
         for component in image_components:
             cls._normalize_component_file_value(component)
 
         for component in tail_components:
             cls._normalize_component_file_value(component)
+
+    @classmethod
+    def _component_file_size(
+        cls,
+        component: Image | Video | Record | File,
+    ) -> int | None:
+        file_value = getattr(component, "file", None)
+        if not isinstance(file_value, str) or not file_value:
+            return None
+        if file_value.startswith("http://") or file_value.startswith("https://"):
+            return None
+        path = Path(file_value)
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            return path.stat().st_size
+        except OSError:
+            return None
+
+    @classmethod
+    def _apply_telegram_media_size_limits(
+        cls,
+        image_components: list[Image | Video | Record | File],
+        tail_components: list[Image | Video | Record | File],
+        failed_media_urls: list[str],
+    ) -> tuple[
+        list[Image | Video | Record | File],
+        list[Image | Video | Record | File],
+    ]:
+        normalized_images: list[Image | Video | Record | File] = []
+        normalized_tail: list[Image | Video | Record | File] = []
+
+        for component in image_components:
+            if not isinstance(component, Image):
+                normalized_images.append(component)
+                continue
+            size = cls._component_file_size(component)
+            if size is None or size <= cls.TELEGRAM_MAX_PHOTO_SIZE:
+                normalized_images.append(component)
+                continue
+
+            # Oversized photo falls back to document send path (up to 50MB).
+            if size <= cls.TELEGRAM_MAX_OTHER_MEDIA_SIZE and isinstance(
+                component.file, str
+            ):
+                normalized_tail.append(
+                    File(
+                        name=Path(component.file).name or "image",
+                        file=component.file,
+                        url=component.url or "",
+                    )
+                )
+            else:
+                if component.url:
+                    failed_media_urls.append(component.url)
+
+        for component in tail_components:
+            if not isinstance(component, (Video, Record)):
+                normalized_tail.append(component)
+                continue
+            size = cls._component_file_size(component)
+            if size is None or size <= cls.TELEGRAM_MAX_OTHER_MEDIA_SIZE:
+                normalized_tail.append(component)
+                continue
+
+            original_url = getattr(component, "url", "")
+            if isinstance(original_url, str) and original_url:
+                failed_media_urls.append(original_url)
+
+        return normalized_images, normalized_tail
 
     @classmethod
     async def send_to_user(
@@ -144,6 +221,11 @@ class TelegramMessageSender(MessageSender):
                 cls._normalize_components_for_telegram(
                     image_components,
                     tail_components,
+                )
+                image_components, tail_components = cls._apply_telegram_media_size_limits(
+                    image_components,
+                    tail_components,
+                    failed_media_urls,
                 )
 
             message = cls._append_failed_media_links(message, failed_media_urls)

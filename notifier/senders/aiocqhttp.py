@@ -97,6 +97,31 @@ class AiocqhttpMessageSender(MessageSender):
                 effective_prepared = await cls._ensure_local_media_for_forward(
                     effective_prepared
                 )
+                for item in effective_prepared:
+                    if item.local_path is None:
+                        logger.debug(
+                            "Aiocqhttp media resolved: type=%s, source=url, session=%s, failed=%s",
+                            item.media_type,
+                            session_id,
+                            item.download_failed,
+                        )
+                        continue
+
+                    exists = item.local_path.exists()
+                    size = 0
+                    if exists:
+                        try:
+                            size = item.local_path.stat().st_size
+                        except OSError:
+                            size = 0
+                    logger.debug(
+                        "Aiocqhttp media resolved: type=%s, source=local_path, session=%s, exists=%s, size=%s, failed=%s",
+                        item.media_type,
+                        session_id,
+                        exists,
+                        size,
+                        item.download_failed,
+                    )
                 (
                     image_components,
                     tail_components,

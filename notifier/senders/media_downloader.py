@@ -29,6 +29,7 @@ _CACHE_MEDIA_SUFFIXES = (
 )
 
 _cache_gc_lock = asyncio.Lock()
+_cache_io_lock = asyncio.Lock()
 _cache_gc_last_run = 0.0
 
 
@@ -116,11 +117,13 @@ def _cache_meta_path(url: str) -> Path:
     return _CACHE_DIR / f"{digest}.meta"
 
 
-def _cleanup_expired_cache_files(now_ts: float) -> int:
-    if not _CACHE_DIR.exists():
-        return 0
+def _collect_expired_cache_paths(now_ts: float) -> tuple[list[Path], list[Path]]:
+    """Collect stale meta/media paths; caller applies deletions under I/O lock."""
+    meta_paths_to_remove: list[Path] = []
+    media_paths_to_remove: list[Path] = []
 
-    removed = 0
+    if not _CACHE_DIR.exists():
+        return meta_paths_to_remove, media_paths_to_remove
 
     for meta_path in _CACHE_DIR.glob("*.meta"):
         try:
@@ -132,15 +135,10 @@ def _cleanup_expired_cache_files(now_ts: float) -> int:
         if expire_ts + _CACHE_GC_GRACE_SECONDS >= now_ts:
             continue
 
+        meta_paths_to_remove.append(meta_path)
         stem = meta_path.stem
-        safe_unlink(meta_path)
-        removed += 1
-
         for suffix in _CACHE_MEDIA_SUFFIXES:
-            candidate = _CACHE_DIR / f"{stem}{suffix}"
-            if candidate.exists():
-                safe_unlink(candidate)
-                removed += 1
+            media_paths_to_remove.append(_CACHE_DIR / f"{stem}{suffix}")
 
     stale_orphan_age = _CACHE_TTL_SECONDS + _CACHE_GC_GRACE_SECONDS
     for suffix in _CACHE_MEDIA_SUFFIXES:
@@ -154,7 +152,25 @@ def _cleanup_expired_cache_files(now_ts: float) -> int:
                 continue
             if age < stale_orphan_age:
                 continue
-            safe_unlink(media_path)
+            media_paths_to_remove.append(media_path)
+
+    return meta_paths_to_remove, media_paths_to_remove
+
+
+def _apply_cache_gc_deletions(
+    meta_paths_to_remove: list[Path],
+    media_paths_to_remove: list[Path],
+) -> int:
+    removed = 0
+
+    for path in meta_paths_to_remove:
+        if path.exists():
+            safe_unlink(path)
+            removed += 1
+
+    for path in media_paths_to_remove:
+        if path.exists():
+            safe_unlink(path)
             removed += 1
 
     return removed
@@ -172,8 +188,17 @@ async def _run_periodic_cache_gc() -> None:
         if now_ts - _cache_gc_last_run < _CACHE_GC_INTERVAL_SECONDS:
             return
 
-        removed = _cleanup_expired_cache_files(now_ts)
-        _cache_gc_last_run = now_ts
+        # Scan without I/O lock to reduce blocking of normal cache read/write flow.
+        meta_paths_to_remove, media_paths_to_remove = _collect_expired_cache_paths(
+            now_ts
+        )
+
+        async with _cache_io_lock:
+            removed = _apply_cache_gc_deletions(
+                meta_paths_to_remove,
+                media_paths_to_remove,
+            )
+            _cache_gc_last_run = now_ts
 
     if removed > 0:
         logger.debug("Media cache GC removed %s files", removed)
@@ -213,9 +238,10 @@ async def get_or_download_media_to_cache(
 ) -> Path:
     await _run_periodic_cache_gc()
 
-    cached = _read_cache(url)
-    if cached is not None:
-        return cached
+    async with _cache_io_lock:
+        cached = _read_cache(url)
+        if cached is not None:
+            return cached
 
     tmp_path = await download_media_to_temp(
         url=url,
@@ -223,6 +249,11 @@ async def get_or_download_media_to_cache(
         proxy=proxy,
     )
     try:
-        return _write_cache(url, tmp_path)
+        async with _cache_io_lock:
+            # Another task may have filled cache while we were downloading.
+            cached = _read_cache(url)
+            if cached is not None:
+                return cached
+            return _write_cache(url, tmp_path)
     finally:
         safe_unlink(tmp_path)

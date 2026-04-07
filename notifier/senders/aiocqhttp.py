@@ -133,33 +133,34 @@ class AiocqhttpMessageSender(MessageSender):
             return await cls._send_chain(session_id, [Nodes(nodes)])
         except Exception as err:
             logger.warning(
-                "Aiocqhttp merged-forward send failed, fallback to plain text: session=%s, err=%s",
+                "Aiocqhttp merged-forward send failed, trying text-only merged fallback: session=%s, err=%s",
                 session_id,
                 err,
             )
-            # Preserve media URLs when large media upload is rejected by upstream.
+
+            # Keep merged-forward mode even in fallback: convert media to links in text.
             fallback_urls: list[str] = []
             if media:
                 fallback_urls.extend([url for _, url in media if url])
             fallback_text = cls._append_failed_media_links(message, fallback_urls)
 
-            if not fallback_text:
-                return SendResult(
-                    ok=False,
-                    transient=cls._is_transient_network_error(err),
-                    detail=str(err),
-                )
+            if context:
+                nickname = context.channel.title if context.channel.title else "RSSHub"
+            else:
+                nickname = "RSSHub"
+
+            merged_text = fallback_text or "RSS update"
+            fallback_nodes = [cls._build_node(nickname, [Plain(merged_text)])]
 
             try:
                 fallback_result = await cls._send_chain(
-                    session_id,
-                    [Plain(fallback_text)],
+                    session_id, [Nodes(fallback_nodes)]
                 )
                 if fallback_result.ok:
                     return SendResult(
                         ok=True,
                         transient=False,
-                        detail="merged_forward_failed_text_fallback",
+                        detail="merged_forward_failed_text_nodes_fallback",
                     )
                 return fallback_result
             except Exception as fallback_ex:

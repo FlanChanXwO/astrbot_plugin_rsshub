@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-04-07
+
+### Changed
+
+- `AiocqhttpMessageSender` 回退策略调整为“仅合并转发”：当合并转发失败时，不再尝试非合并消息链发送
+- 合并转发失败后的兜底改为“纯文本合并节点”重试，保持消息形态一致，避免在群内出现直发链路
+
+### Fixed
+
+- 修复 aiocqhttp 场景下，合并转发失败后消息意外降级为直发文本的问题
+- 优化违规媒体/平台拒绝时的降级路径：保留合并消息结构，并在文本中附带媒体原始链接
+
 ## [1.0.3] - 2026-04-07
 
 ### Added

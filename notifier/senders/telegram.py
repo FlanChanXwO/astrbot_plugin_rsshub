@@ -89,17 +89,22 @@ class TelegramMessageSender(MessageSender):
         return path
 
     @classmethod
+    def _normalize_component_file_value(cls, component: Image | Video | Record) -> None:
+        file_value = getattr(component, "file", None)
+        if isinstance(file_value, str):
+            component.file = cls._uri_to_local_path(file_value)
+
+    @classmethod
     def _normalize_components_for_telegram(
         cls,
-        image_components: list,
-        tail_components: list,
+        image_components: list[Image | Video | Record],
+        tail_components: list[Image | Video | Record],
     ) -> None:
-        for component in [*image_components, *tail_components]:
-            if not isinstance(component, (Image, Video, Record)):
-                continue
-            file_value = getattr(component, "file", None)
-            if isinstance(file_value, str) and file_value.startswith("file:///"):
-                component.file = cls._uri_to_local_path(file_value)
+        for component in image_components:
+            cls._normalize_component_file_value(component)
+
+        for component in tail_components:
+            cls._normalize_component_file_value(component)
 
     @classmethod
     async def send_to_user(

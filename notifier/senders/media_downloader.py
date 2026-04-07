@@ -29,6 +29,7 @@ _CACHE_MEDIA_SUFFIXES = (
 )
 
 _cache_gc_lock = asyncio.Lock()
+_cache_io_lock = asyncio.Lock()
 _cache_gc_last_run = 0.0
 
 
@@ -172,8 +173,9 @@ async def _run_periodic_cache_gc() -> None:
         if now_ts - _cache_gc_last_run < _CACHE_GC_INTERVAL_SECONDS:
             return
 
-        removed = _cleanup_expired_cache_files(now_ts)
-        _cache_gc_last_run = now_ts
+        async with _cache_io_lock:
+            removed = _cleanup_expired_cache_files(now_ts)
+            _cache_gc_last_run = now_ts
 
     if removed > 0:
         logger.debug("Media cache GC removed %s files", removed)
@@ -213,9 +215,10 @@ async def get_or_download_media_to_cache(
 ) -> Path:
     await _run_periodic_cache_gc()
 
-    cached = _read_cache(url)
-    if cached is not None:
-        return cached
+    async with _cache_io_lock:
+        cached = _read_cache(url)
+        if cached is not None:
+            return cached
 
     tmp_path = await download_media_to_temp(
         url=url,
@@ -223,6 +226,11 @@ async def get_or_download_media_to_cache(
         proxy=proxy,
     )
     try:
-        return _write_cache(url, tmp_path)
+        async with _cache_io_lock:
+            # Another task may have filled cache while we were downloading.
+            cached = _read_cache(url)
+            if cached is not None:
+                return cached
+            return _write_cache(url, tmp_path)
     finally:
         safe_unlink(tmp_path)

@@ -1117,7 +1117,7 @@ class RSSHubPlugin(Star):
         event: AstrMessageEvent,
         scope: str = "",
         page: str = "1",
-        page_size: str = "50",
+        page_size: str = "5",
     ):
         """列出订阅列表。
 
@@ -1135,12 +1135,12 @@ class RSSHubPlugin(Star):
         list_offset = 0
         total_count = 0
         page_int = 1
-        page_size_int = 50
+        page_size_int = 5
 
         if show_all_sessions:
             try:
                 page_int = max(1, int(page.strip() or "1"))
-                page_size_int = int(page_size.strip() or "50")
+                page_size_int = int(page_size.strip() or "5")
             except ValueError:
                 yield event.plain_result(
                     "分页参数无效。用法: /sub_list all [page] [page_size]"
@@ -1196,10 +1196,8 @@ class RSSHubPlugin(Star):
             if feed_link:
                 lines.append(f"    {feed_link}")
 
-        # 命令响应走纯文本分片，避免长消息被平台降级为合并/转发样式。
-        chunk_limit = self._resolve_sub_list_chunk_limit()
-        for chunk in self._split_plain_text_chunks(lines, chunk_limit):
-            yield event.plain_result(chunk)
+        # 按单条文本返回，让平台自行处理长消息（例如合并转发）。
+        yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("sub_test")
@@ -1762,28 +1760,38 @@ class RSSHubPlugin(Star):
 
     @staticmethod
     def _split_plain_text_chunks(lines: list[str], limit: int) -> list[str]:
-        """Split plain text into hard-sized chunks, including very long single lines."""
-        text = "\n".join(lines)
-        if not text:
-            return []
-
+        """Split text by lines first to keep URL lines intact; hard-split only long non-URL lines."""
         safe_limit = max(1, int(limit))
-        return [text[i : i + safe_limit] for i in range(0, len(text), safe_limit)]
+        chunks: list[str] = []
+        current = ""
 
-    def _resolve_sub_list_chunk_limit(self) -> int:
-        """Keep chunks below aiocqhttp forward threshold to prevent node conversion."""
-        limit = SUB_LIST_PLAIN_CHUNK_LIMIT
+        for line in lines:
+            candidate = f"{current}\n{line}" if current else line
+            if len(candidate) <= safe_limit:
+                current = candidate
+                continue
 
-        try:
-            cfg = self.astrbot_config or {}
-            platform_settings = cfg.get("platform_settings", {})
-            threshold = int(platform_settings.get("forward_threshold"))
-            if threshold > 0:
-                safe_threshold = max(1, threshold - SUB_LIST_FORWARD_MARGIN)
-                limit = min(limit, safe_threshold)
-                # Final guard: never exceed configured forward threshold.
-                limit = min(limit, threshold)
-        except Exception:
-            pass
+            if current:
+                chunks.append(current)
+                current = ""
 
-        return max(1, limit)
+            if len(line) <= safe_limit:
+                current = line
+                continue
+
+            stripped = line.strip()
+            if stripped.startswith("http://") or stripped.startswith("https://"):
+                # Keep full URL line to avoid broken links in output.
+                chunks.append(line)
+                continue
+
+            start = 0
+            while start < len(line):
+                end = min(start + safe_limit, len(line))
+                chunks.append(line[start:end])
+                start = end
+
+        if current:
+            chunks.append(current)
+
+        return chunks

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+from urllib.parse import unquote, urlsplit
 
 from astrbot.api import logger
-from astrbot.api.message_components import Plain
+from astrbot.api.message_components import Image, Plain, Record, Video
 
 from .base import MessageSender
 from .media_downloader import get_or_download_media_to_cache
@@ -75,6 +76,31 @@ class TelegramMessageSender(MessageSender):
                     cls._hash_for_log(item.original_url),
                 )
 
+    @staticmethod
+    def _uri_to_local_path(file_value: str) -> str:
+        if not file_value.startswith("file:///"):
+            return file_value
+
+        parsed = urlsplit(file_value)
+        path = unquote(parsed.path or "")
+        # On Windows, file:///C:/... is parsed as /C:/...
+        if len(path) >= 3 and path[0] == "/" and path[2] == ":":
+            return path[1:]
+        return path
+
+    @classmethod
+    def _normalize_components_for_telegram(
+        cls,
+        image_components: list,
+        tail_components: list,
+    ) -> None:
+        for component in [*image_components, *tail_components]:
+            if not isinstance(component, (Image, Video, Record)):
+                continue
+            file_value = getattr(component, "file", None)
+            if isinstance(file_value, str) and file_value.startswith("file:///"):
+                component.file = cls._uri_to_local_path(file_value)
+
     @classmethod
     async def send_to_user(
         cls,
@@ -110,6 +136,10 @@ class TelegramMessageSender(MessageSender):
                     tail_components,
                     failed_media_urls,
                 ) = await cls._build_media_components(effective_prepared)
+                cls._normalize_components_for_telegram(
+                    image_components,
+                    tail_components,
+                )
 
             message = cls._append_failed_media_links(message, failed_media_urls)
 

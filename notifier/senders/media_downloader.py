@@ -219,8 +219,8 @@ async def _run_periodic_cache_gc() -> None:
             return
 
         # Scan without I/O lock to reduce blocking of normal cache read/write flow.
-        meta_paths_to_check, orphan_media_with_age_to_check = _collect_expired_cache_paths(
-            now_ts
+        meta_paths_to_check, orphan_media_with_age_to_check = (
+            _collect_expired_cache_paths(now_ts)
         )
 
         async with _cache_io_lock:

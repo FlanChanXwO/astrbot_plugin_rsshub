@@ -189,7 +189,9 @@ async def _run_periodic_cache_gc() -> None:
             return
 
         # Scan without I/O lock to reduce blocking of normal cache read/write flow.
-        meta_paths_to_remove, media_paths_to_remove = _collect_expired_cache_paths(now_ts)
+        meta_paths_to_remove, media_paths_to_remove = _collect_expired_cache_paths(
+            now_ts
+        )
 
         async with _cache_io_lock:
             removed = _apply_cache_gc_deletions(

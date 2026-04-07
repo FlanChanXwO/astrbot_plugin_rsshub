@@ -1755,4 +1755,3 @@ class RSSHubPlugin(Star):
             + "支持的平台: QQ、Telegram、微信、钉钉、Slack、Discord等"
         )
         yield event.plain_result(help_text)
-

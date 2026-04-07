@@ -296,11 +296,17 @@ class RSSMonitor:
                     feed.entry_hashes = merged_hashes
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
 
-                    updated_entries.reverse()
+                    ordered_entries = list(reversed(updated_entries))
+                    fanout_subs = subs
+                    if feed.id is not None:
+                        # Fan out once to all active subscribers of this feed,
+                        # avoiding chunk-based preemption between sessions/platforms.
+                        fanout_subs = await Sub.get_active_by_feed_id(feed.id)
+
                     await Notifier(
                         feed=feed,
-                        subs=subs,
-                        entries=updated_entries,
+                        subs=fanout_subs,
+                        entries=ordered_entries,
                         timeout_seconds=self.config.timeout if self.config else 30,
                         proxy=self.config.proxy if self.config else "",
                         download_media_before_send=(

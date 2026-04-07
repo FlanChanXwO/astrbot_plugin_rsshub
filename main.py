@@ -1110,27 +1110,64 @@ class RSSHubPlugin(Star):
         yield event.plain_result(f"已取消订阅 (ID: {sub_id_int})")
 
     @filter.command("sub_list")
-    async def cmd_list(self, event: AstrMessageEvent, scope: str = ""):
+    async def cmd_list(
+        self,
+        event: AstrMessageEvent,
+        scope: str = "",
+        page: str = "1",
+        page_size: str = "50",
+    ):
         """列出订阅列表。
 
-        Usage: /sub_list [all]
+        Usage: /sub_list [all [page] [page_size]]
         """
         user_id = event.get_sender_id()
 
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
-        subs = await Sub.get_by_user(user_id)
-        if not subs:
-            yield event.plain_result("您还没有任何订阅")
-            return
-
-        show_all_sessions = scope.strip().lower() == "all" and event.is_admin()
+        scope_value = scope.strip().lower()
+        show_all_sessions = scope_value == "all" and event.is_admin()
         current_session = event.unified_msg_origin
+
+        list_offset = 0
+        total_count = 0
+        page_int = 1
+        page_size_int = 50
+
+        if show_all_sessions:
+            try:
+                page_int = max(1, int(page.strip() or "1"))
+                page_size_int = int(page_size.strip() or "50")
+            except ValueError:
+                yield event.plain_result(
+                    "分页参数无效。用法: /sub_list all [page] [page_size]"
+                )
+                return
+
+            page_size_int = max(1, min(page_size_int, 100))
+            list_offset = (page_int - 1) * page_size_int
+            subs, total_count = await Sub.get_all_active_paged(
+                page=page_int,
+                page_size=page_size_int,
+            )
+        else:
+            subs = await Sub.get_by_user(user_id)
+
+        if not subs:
+            if show_all_sessions:
+                yield event.plain_result("当前没有任何订阅")
+            else:
+                yield event.plain_result("您还没有任何订阅")
+            return
 
         if show_all_sessions:
             filtered_subs = subs
-            lines = ["您的订阅列表（所有会话）:"]
+            total_pages = max(1, (total_count + page_size_int - 1) // page_size_int)
+            lines = [
+                "订阅列表（全局，所有平台/会话）:",
+                f"页码: {page_int}/{total_pages}  每页: {page_size_int}  总数: {total_count}",
+            ]
         else:
             filtered_subs = [
                 sub
@@ -1145,16 +1182,19 @@ class RSSHubPlugin(Star):
                 return
             lines = ["您的订阅列表（当前会话）:"]
 
-        for idx, sub in enumerate(filtered_subs, 1):
+        for idx, sub in enumerate(filtered_subs, list_offset + 1):
             feed_title = sub.feed.title if sub.feed else "未知"
             feed_link = sub.feed.link if sub.feed else ""
             custom_title = f" ({sub.title})" if sub.title else ""
             lines.append(f"{idx}. [{sub.id}] {feed_title}{custom_title}")
-            if show_all_sessions and sub.target_session:
-                lines.append(f"    target: {sub.target_session}")
+            if show_all_sessions:
+                lines.append(f"    user: {sub.user_id}")
+                lines.append(f"    platform: {sub.platform_name or '(unknown)'}")
+                lines.append(f"    target: {sub.target_session or '(未绑定)'}")
             if feed_link:
                 lines.append(f"    {feed_link}")
 
+        # 命令响应始终走纯文本，避免误进入合并转发策略。
         yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -1679,7 +1719,7 @@ class RSSHubPlugin(Star):
             "订阅: /sub <RSS链接> [目标]",
             "取消订阅: /unsub <订阅ID>",
             "取消订阅: /unsub_all [global]  # 默认当前会话，global=所有会话(管理员)",
-            "订阅列表: /sub_list [all]",
+            "订阅列表: /sub_list [all [page] [page_size]]",
             "设置订阅选项: /sub_set <订阅ID> <选项> <值>",
             "设置默认选项: /sub_set_default <选项> <值>",
             "设置推送目标: /sub_bind <目标>",

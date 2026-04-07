@@ -1,9 +1,26 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## [1.0.5] - 2026-04-07
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### Changed
+
+- 调整 `/sub_list all` 为管理员全局视图：展示数据库内所有平台/会话订阅，并强制纯文本响应
+
+### Fixed
+
+- 修复同一 RSS 源在多平台/多会话并发订阅时的推送抢占：单次更新统一扇出到该源全部活跃订阅，避免条目被不同会话分走
+
+## [1.0.4] - 2026-04-07
+
+### Changed
+
+- 调整 `AiocqhttpMessageSender` 回退策略为“仅合并转发”：合并转发失败后不再尝试非合并消息链
+- 新增 aiocqhttp 合并失败兜底链路：改为发送“纯文本合并节点”，保持推送形态一致
+
+### Fixed
+
+- 修复 aiocqhttp 在合并转发失败时退化为直发文本消息的问题
+- 优化违规或受限媒体场景下的降级行为：文本中补充媒体原始链接，降低信息丢失风险
 
 ## [1.0.4] - 2026-04-07
 

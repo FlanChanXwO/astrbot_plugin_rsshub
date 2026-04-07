@@ -1,6 +1,6 @@
 name: astrbot_plugin_rsshub
 display_name: RSS订阅插件
 desc: RSS 订阅插件，支持多平台消息推送。
-version: v1.0.2
+version: v1.0.3
 author: FlanChanXwO
 repo: https://github.com/FlanChanXwO/astrbot_plugin_rsshub

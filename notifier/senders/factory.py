@@ -14,8 +14,14 @@ def get_sender_for_platform_name(platform_name: str | None) -> type[MessageSende
     Returns:
         对应的 MessageSender 子类，用于实现平台特定的发送策略
     """
-    if platform_name == "telegram":
+    normalized = (platform_name or "").strip().lower()
+
+    if normalized in {"telegram", "tg"} or "telegram" in normalized:
         return TelegramMessageSender
-    if platform_name == "aiocqhttp":
+
+    if normalized in {"aiocqhttp", "onebot", "onebot11", "onebotv11"}:
         return AiocqhttpMessageSender
+    if "aiocqhttp" in normalized or "onebot" in normalized:
+        return AiocqhttpMessageSender
+
     return MessageSender

@@ -191,10 +191,14 @@ class Notifier:
             logger.warning("订阅缺少推送目标: sub=%s, user=%s", sub.id, sub.user_id)
             return
 
-        sender = get_sender_for_platform_name(sub.platform_name)
+        sender_platform_name = (sub.platform_name or "").strip()
+        if not sender_platform_name and session_id:
+            sender_platform_name = session_id.split(":", 1)[0]
+
+        sender = get_sender_for_platform_name(sender_platform_name)
         logger.debug(
             "Push strategy selected: platform=%s, sender=%s, has_media=%s, prepared_media=%s, session=%s",
-            sub.platform_name,
+            sender_platform_name or sub.platform_name,
             sender.__name__,
             bool(media_items),
             bool(prepared_media),

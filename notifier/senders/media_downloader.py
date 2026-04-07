@@ -33,6 +33,10 @@ _cache_io_lock = asyncio.Lock()
 _cache_gc_last_run = 0.0
 
 
+def _stale_orphan_age_threshold() -> int:
+    return _CACHE_TTL_SECONDS + _CACHE_GC_GRACE_SECONDS
+
+
 def _guess_suffix(url: str) -> str:
     lowered = url.lower()
     if ".jpg" in lowered or ".jpeg" in lowered:
@@ -117,13 +121,15 @@ def _cache_meta_path(url: str) -> Path:
     return _CACHE_DIR / f"{digest}.meta"
 
 
-def _collect_expired_cache_paths(now_ts: float) -> tuple[list[Path], list[Path]]:
+def _collect_expired_cache_paths(
+    now_ts: float,
+) -> tuple[list[Path], list[tuple[Path, float]]]:
     """Collect candidate stale meta/media paths; deletion is re-validated under lock."""
     meta_paths_to_check: list[Path] = []
-    orphan_media_paths_to_check: list[Path] = []
+    orphan_media_with_age_to_check: list[tuple[Path, float]] = []
 
     if not _CACHE_DIR.exists():
-        return meta_paths_to_check, orphan_media_paths_to_check
+        return meta_paths_to_check, orphan_media_with_age_to_check
 
     for meta_path in _CACHE_DIR.glob("*.meta"):
         try:
@@ -135,7 +141,7 @@ def _collect_expired_cache_paths(now_ts: float) -> tuple[list[Path], list[Path]]
             continue
         meta_paths_to_check.append(meta_path)
 
-    stale_orphan_age = _CACHE_TTL_SECONDS + _CACHE_GC_GRACE_SECONDS
+    stale_orphan_age = _stale_orphan_age_threshold()
     for suffix in _CACHE_MEDIA_SUFFIXES:
         for media_path in _CACHE_DIR.glob(f"*{suffix}"):
             meta_path = media_path.with_suffix(".meta")
@@ -147,14 +153,14 @@ def _collect_expired_cache_paths(now_ts: float) -> tuple[list[Path], list[Path]]
                 continue
             if age < stale_orphan_age:
                 continue
-            orphan_media_paths_to_check.append(media_path)
+            orphan_media_with_age_to_check.append((media_path, age))
 
-    return meta_paths_to_check, orphan_media_paths_to_check
+    return meta_paths_to_check, orphan_media_with_age_to_check
 
 
 def _apply_cache_gc_deletions(
     meta_paths_to_check: list[Path],
-    orphan_media_paths_to_check: list[Path],
+    orphan_media_with_age_to_check: list[tuple[Path, float]],
     now_ts: float,
 ) -> int:
     removed = 0
@@ -181,8 +187,8 @@ def _apply_cache_gc_deletions(
                 safe_unlink(media_path)
                 removed += 1
 
-    stale_orphan_age = _CACHE_TTL_SECONDS + _CACHE_GC_GRACE_SECONDS
-    for media_path in orphan_media_paths_to_check:
+    stale_orphan_age = _stale_orphan_age_threshold()
+    for media_path, age in orphan_media_with_age_to_check:
         if not media_path.exists():
             continue
 
@@ -190,10 +196,7 @@ def _apply_cache_gc_deletions(
         if meta_path.exists():
             continue
 
-        try:
-            age = now_ts - media_path.stat().st_mtime
-        except OSError:
-            continue
+        # Age was computed during scan phase to avoid duplicate stat() under lock.
         if age < stale_orphan_age:
             continue
 
@@ -216,14 +219,14 @@ async def _run_periodic_cache_gc() -> None:
             return
 
         # Scan without I/O lock to reduce blocking of normal cache read/write flow.
-        meta_paths_to_check, orphan_media_paths_to_check = _collect_expired_cache_paths(
+        meta_paths_to_check, orphan_media_with_age_to_check = _collect_expired_cache_paths(
             now_ts
         )
 
         async with _cache_io_lock:
             removed = _apply_cache_gc_deletions(
                 meta_paths_to_check,
-                orphan_media_paths_to_check,
+                orphan_media_with_age_to_check,
                 now_ts,
             )
             _cache_gc_last_run = now_ts

@@ -11,6 +11,7 @@ class AiocqhttpMessageSender(MessageSender):
     """OneBot sender: pack metadata and media into merged forward nodes."""
 
     _fingerprint_logged = False
+    _strategy_version = "v1.0.6-url-first-r2"
 
     @classmethod
     def _build_node(cls, nickname: str, chain: list):
@@ -46,12 +47,6 @@ class AiocqhttpMessageSender(MessageSender):
         prepared_media: list[PreparedMedia] | None = None,
         context: NotifierContext | None = None,
     ) -> SendResult:
-        if not cls._fingerprint_logged:
-            logger.warning(
-                "Aiocqhttp sender fingerprint=v1.0.6-url-first module=%s",
-                __file__,
-            )
-            cls._fingerprint_logged = True
         """发送消息到用户。
 
         Args:
@@ -61,8 +56,17 @@ class AiocqhttpMessageSender(MessageSender):
             prepared_media: 预处理的媒体
             context: 通知上下文，包含频道元信息和运行时信息
         """
+        if not cls._fingerprint_logged:
+            logger.warning(
+                "Aiocqhttp sender fingerprint=%s module=%s",
+                cls._strategy_version,
+                __file__,
+            )
+            cls._fingerprint_logged = True
+
         logger.debug(
-            "Aiocqhttp sender strategy: merged-forward nodes, session=%s, has_media=%s, prepared_media=%s",
+            "Aiocqhttp sender strategy: merged-forward nodes (%s), session=%s, has_media=%s, prepared_media=%s",
+            cls._strategy_version,
             session_id,
             bool(media),
             bool(prepared_media),

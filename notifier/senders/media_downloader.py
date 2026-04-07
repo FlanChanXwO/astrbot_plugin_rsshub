@@ -10,9 +10,15 @@ from pathlib import Path
 import aiohttp
 
 from astrbot.api import logger
+from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.utils.http_ssl import build_tls_connector
 
-_CACHE_DIR = Path(tempfile.gettempdir()) / "astrbot_rsshub_media_cache"
+_CACHE_DIR = (
+    Path(get_astrbot_plugin_data_path())
+    / "astrbot_plugin_rsshub"
+    / "cache"
+    / "media"
+)
 _CACHE_TTL_SECONDS = 15 * 60
 _CACHE_GC_INTERVAL_SECONDS = 5 * 60
 _CACHE_GC_GRACE_SECONDS = 10 * 60

@@ -176,15 +176,6 @@ class Notifier:
             for media in formatter.media:
                 media_items.append((media.type, media.url))
 
-        prepared_media = None
-        if media_items and self.download_media_before_send:
-            MessageSender.configure_runtime(
-                timeout_seconds=self.timeout_seconds,
-                proxy=self.proxy,
-            )
-            MessageSender.configure_behavior(download_media_before_send=True)
-            prepared_media = await MessageSender.prepare_media(media_items)
-
         session_id = self._resolve_target_session(sub, user)
         if not session_id:
             await self._mark_binding_needed(sub.user_id)
@@ -196,6 +187,17 @@ class Notifier:
             sender_platform_name = session_id.split(":", 1)[0]
 
         sender = get_sender_for_platform_name(sender_platform_name)
+        should_pre_download = self.download_media_before_send
+
+        prepared_media = None
+        if media_items and should_pre_download:
+            MessageSender.configure_runtime(
+                timeout_seconds=self.timeout_seconds,
+                proxy=self.proxy,
+            )
+            MessageSender.configure_behavior(download_media_before_send=True)
+            prepared_media = await MessageSender.prepare_media(media_items)
+
         logger.debug(
             "Push strategy selected: platform=%s, sender=%s, has_media=%s, prepared_media=%s, session=%s",
             sender_platform_name or sub.platform_name,
@@ -209,9 +211,7 @@ class Notifier:
             proxy=self.proxy,
         )
         sender.configure_behavior(
-            download_media_before_send=(
-                self.download_media_before_send and prepared_media is None
-            )
+            download_media_before_send=(should_pre_download and prepared_media is None)
         )
         sent = await sender.send_to_user(
             session_id,

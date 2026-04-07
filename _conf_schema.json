@@ -70,8 +70,8 @@
   "download_image_before_send": {
     "type": "bool",
     "description": "先下载图片再发送",
-    "hint": "开启后会先下载媒体到本地再推送，避免部分平台对外链重定向导致发送失败",
-    "default": true
+    "hint": "开启后会先下载媒体到本地再推送，可复用缓存，但是在docker环境下需要共享数据卷",
+    "default": false
   },
   "webui": {
     "description": "WebUI 管理界面配置",

@@ -1120,17 +1120,22 @@ class RSSHubPlugin(Star):
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
-        subs = await Sub.get_by_user(user_id)
+        scope_value = scope.strip().lower()
+        show_all_sessions = scope_value == "all" and event.is_admin()
+        current_session = event.unified_msg_origin
+
+        if show_all_sessions:
+            subs = await Sub.get_all_active()
+        else:
+            subs = await Sub.get_by_user(user_id)
+
         if not subs:
             yield event.plain_result("您还没有任何订阅")
             return
 
-        show_all_sessions = scope.strip().lower() == "all" and event.is_admin()
-        current_session = event.unified_msg_origin
-
         if show_all_sessions:
             filtered_subs = subs
-            lines = ["您的订阅列表（所有会话）:"]
+            lines = ["订阅列表（全局，所有平台/会话）:"]
         else:
             filtered_subs = [
                 sub
@@ -1150,11 +1155,14 @@ class RSSHubPlugin(Star):
             feed_link = sub.feed.link if sub.feed else ""
             custom_title = f" ({sub.title})" if sub.title else ""
             lines.append(f"{idx}. [{sub.id}] {feed_title}{custom_title}")
-            if show_all_sessions and sub.target_session:
-                lines.append(f"    target: {sub.target_session}")
+            if show_all_sessions:
+                lines.append(f"    user: {sub.user_id}")
+                lines.append(f"    platform: {sub.platform_name or '(unknown)'}")
+                lines.append(f"    target: {sub.target_session or '(未绑定)'}")
             if feed_link:
                 lines.append(f"    {feed_link}")
 
+        # 命令响应始终走纯文本，避免误进入合并转发策略。
         yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.ADMIN)

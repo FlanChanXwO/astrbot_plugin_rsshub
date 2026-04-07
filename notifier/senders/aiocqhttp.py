@@ -159,18 +159,13 @@ class AiocqhttpMessageSender(MessageSender):
         except Exception as err:
             err_text = str(err)
             logger.warning(
-                "Aiocqhttp merged-forward send failed, trying text-only merged fallback: session=%s, err=%s",
+                "Aiocqhttp merged-forward send failed: session=%s, err=%s",
                 session_id,
                 err,
             )
 
-            # In split-runtime deployments, bot process may not access local cache path.
-            # Retry merged-forward once with URL sources before text-only fallback.
-            if (
-                "ENOENT" in err_text
-                and effective_prepared
-                and any(item.local_path is not None for item in effective_prepared)
-            ):
+            # Always retry merged-forward once with URL sources when media exists.
+            if effective_prepared:
                 if context:
                     nickname = (
                         context.channel.title if context.channel.title else "RSSHub"
@@ -202,7 +197,9 @@ class AiocqhttpMessageSender(MessageSender):
                     retry_nodes = [
                         cls._build_node(
                             nickname,
-                            [Plain(retry_message)] if retry_message else [Plain("RSS update")],
+                            [Plain(retry_message)]
+                            if retry_message
+                            else [Plain("RSS update")],
                         )
                     ]
                     for component in url_image_components:
@@ -210,9 +207,10 @@ class AiocqhttpMessageSender(MessageSender):
                     for component in url_tail_components:
                         retry_nodes.append(cls._build_node(nickname, [component]))
 
-                    logger.debug(
-                        "Aiocqhttp ENOENT retry with URL media: session=%s, images=%s, tail=%s",
+                    logger.warning(
+                        "Aiocqhttp merged-forward retry with URL media: session=%s, prev_err=%s, images=%s, tail=%s",
                         session_id,
+                        err_text,
                         len(url_image_components),
                         len(url_tail_components),
                     )
@@ -221,14 +219,20 @@ class AiocqhttpMessageSender(MessageSender):
                         return SendResult(
                             ok=True,
                             transient=False,
-                            detail="merged_forward_enoent_retry_with_url",
+                            detail="merged_forward_retry_with_url",
                         )
                 except Exception as retry_ex:
                     logger.warning(
-                        "Aiocqhttp ENOENT URL-media retry failed: session=%s, err=%s",
+                        "Aiocqhttp URL-media merged-forward retry failed: session=%s, err=%s",
                         session_id,
                         retry_ex,
                     )
+
+            logger.warning(
+                "Aiocqhttp falling back to text-only merged nodes: session=%s, prev_err=%s",
+                session_id,
+                err_text,
+            )
 
             # Keep merged-forward mode even in fallback: convert media to links in text.
             fallback_urls: list[str] = []

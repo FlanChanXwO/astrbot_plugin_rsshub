@@ -222,10 +222,12 @@ class TelegramMessageSender(MessageSender):
                     image_components,
                     tail_components,
                 )
-                image_components, tail_components = cls._apply_telegram_media_size_limits(
-                    image_components,
-                    tail_components,
-                    failed_media_urls,
+                image_components, tail_components = (
+                    cls._apply_telegram_media_size_limits(
+                        image_components,
+                        tail_components,
+                        failed_media_urls,
+                    )
                 )
 
             message = cls._append_failed_media_links(message, failed_media_urls)

@@ -104,6 +104,7 @@ SESSION_DEFAULT_KEYS = {
 
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
+SUB_LIST_PLAIN_CHUNK_LIMIT = 1200
 
 
 class RSSHubPlugin(Star):
@@ -1194,8 +1195,12 @@ class RSSHubPlugin(Star):
             if feed_link:
                 lines.append(f"    {feed_link}")
 
-        # 命令响应始终走纯文本，避免误进入合并转发策略。
-        yield event.plain_result("\n".join(lines))
+        # 命令响应走纯文本分片，避免长消息被平台降级为合并/转发样式。
+        for chunk in self._split_plain_text_chunks(
+            lines,
+            SUB_LIST_PLAIN_CHUNK_LIMIT,
+        ):
+            yield event.plain_result(chunk)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("sub_test")
@@ -1726,7 +1731,7 @@ class RSSHubPlugin(Star):
             "会话默认配置: /sub_session_default_set <key> <value>",
             "查看会话默认配置: /sub_session_default_get",
             "插件配置: /rss_conf [key] [value]",
-            "导入订阅: /sub_import [本地文件路径]",
+            "导入订阅: /sub_import [本地���件路径]",
         ]
         if event.is_admin():
             command_lines.append(
@@ -1755,3 +1760,25 @@ class RSSHubPlugin(Star):
             + "支持的平台: QQ、Telegram、微信、钉钉、Slack、Discord等"
         )
         yield event.plain_result(help_text)
+
+    @staticmethod
+    def _split_plain_text_chunks(lines: list[str], limit: int) -> list[str]:
+        """Split long plain text into bounded chunks to avoid platform long-message fallback."""
+        chunks: list[str] = []
+        current: list[str] = []
+        current_len = 0
+
+        for line in lines:
+            line_len = len(line) + 1
+            if current and current_len + line_len > limit:
+                chunks.append("\n".join(current))
+                current = [line]
+                current_len = line_len
+            else:
+                current.append(line)
+                current_len += line_len
+
+        if current:
+            chunks.append("\n".join(current))
+
+        return chunks

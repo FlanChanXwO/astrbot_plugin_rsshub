@@ -4,7 +4,6 @@ from astrbot.api import logger
 from astrbot.api.message_components import Node, Nodes, Plain
 
 from .base import MessageSender
-from .media_downloader import get_or_download_media_to_cache
 from .types import NotifierContext, PreparedMedia, SendResult
 
 
@@ -16,50 +15,24 @@ class AiocqhttpMessageSender(MessageSender):
         return Node(content=chain, name=nickname)
 
     @classmethod
-    async def _ensure_local_media_for_forward(
+    def _prefer_url_media_for_forward(
         cls,
         prepared_media: list[PreparedMedia],
     ) -> list[PreparedMedia]:
-        """Ensure video/audio are local files for better OneBot forward compatibility."""
+        """Use URL media for OneBot forward to avoid cross-runtime local-path ENOENT."""
         normalized: list[PreparedMedia] = []
         for item in prepared_media:
-            if item.download_failed or item.local_path is not None:
+            if item.download_failed:
                 normalized.append(item)
                 continue
-            if item.media_type not in {"video", "audio"}:
-                normalized.append(item)
-                continue
-
-            try:
-                local_path = await get_or_download_media_to_cache(
-                    url=item.original_url,
-                    timeout_seconds=cls._get_timeout_seconds(),
-                    proxy=cls._get_proxy(),
+            normalized.append(
+                PreparedMedia(
+                    media_type=item.media_type,
+                    original_url=item.original_url,
+                    local_path=None,
+                    download_failed=False,
                 )
-                normalized.append(
-                    PreparedMedia(
-                        media_type=item.media_type,
-                        original_url=item.original_url,
-                        local_path=local_path,
-                        download_failed=False,
-                    )
-                )
-            except Exception as ex:
-                logger.warning(
-                    "Force local media for OneBot forward failed: type=%s, url=%s, err=%s",
-                    item.media_type,
-                    item.original_url,
-                    ex,
-                )
-                normalized.append(
-                    PreparedMedia(
-                        media_type=item.media_type,
-                        original_url=item.original_url,
-                        local_path=None,
-                        download_failed=True,
-                    )
-                )
-
+            )
         return normalized
 
     @classmethod
@@ -94,32 +67,14 @@ class AiocqhttpMessageSender(MessageSender):
             image_components = []
             tail_components = []
             if effective_prepared:
-                effective_prepared = await cls._ensure_local_media_for_forward(
+                effective_prepared = cls._prefer_url_media_for_forward(
                     effective_prepared
                 )
                 for item in effective_prepared:
-                    if item.local_path is None:
-                        logger.debug(
-                            "Aiocqhttp media resolved: type=%s, source=url, session=%s, failed=%s",
-                            item.media_type,
-                            session_id,
-                            item.download_failed,
-                        )
-                        continue
-
-                    exists = item.local_path.exists()
-                    size = 0
-                    if exists:
-                        try:
-                            size = item.local_path.stat().st_size
-                        except OSError:
-                            size = 0
                     logger.debug(
-                        "Aiocqhttp media resolved: type=%s, source=local_path, session=%s, exists=%s, size=%s, failed=%s",
+                        "Aiocqhttp media resolved: type=%s, source=url, session=%s, failed=%s",
                         item.media_type,
                         session_id,
-                        exists,
-                        size,
                         item.download_failed,
                     )
                 (
@@ -164,76 +119,6 @@ class AiocqhttpMessageSender(MessageSender):
                 err,
             )
 
-            # Always retry merged-forward once with URL sources when media exists.
-            if effective_prepared:
-                if context:
-                    nickname = (
-                        context.channel.title if context.channel.title else "RSSHub"
-                    )
-                else:
-                    nickname = "RSSHub"
-
-                url_prepared = [
-                    PreparedMedia(
-                        media_type=item.media_type,
-                        original_url=item.original_url,
-                        local_path=None,
-                        download_failed=item.download_failed,
-                    )
-                    for item in effective_prepared
-                ]
-
-                try:
-                    (
-                        url_image_components,
-                        url_tail_components,
-                        url_failed_media_urls,
-                    ) = await cls._build_media_components(url_prepared)
-                    retry_message = cls._append_failed_media_links(
-                        message,
-                        url_failed_media_urls,
-                    )
-
-                    retry_nodes = [
-                        cls._build_node(
-                            nickname,
-                            [Plain(retry_message)]
-                            if retry_message
-                            else [Plain("RSS update")],
-                        )
-                    ]
-                    for component in url_image_components:
-                        retry_nodes.append(cls._build_node(nickname, [component]))
-                    for component in url_tail_components:
-                        retry_nodes.append(cls._build_node(nickname, [component]))
-
-                    logger.warning(
-                        "Aiocqhttp merged-forward retry with URL media: session=%s, prev_err=%s, images=%s, tail=%s",
-                        session_id,
-                        err_text,
-                        len(url_image_components),
-                        len(url_tail_components),
-                    )
-                    retry_result = await cls._send_chain(session_id, [Nodes(retry_nodes)])
-                    if retry_result.ok:
-                        return SendResult(
-                            ok=True,
-                            transient=False,
-                            detail="merged_forward_retry_with_url",
-                        )
-                except Exception as retry_ex:
-                    logger.warning(
-                        "Aiocqhttp URL-media merged-forward retry failed: session=%s, err=%s",
-                        session_id,
-                        retry_ex,
-                    )
-
-            logger.warning(
-                "Aiocqhttp falling back to text-only merged nodes: session=%s, prev_err=%s",
-                session_id,
-                err_text,
-            )
-
             # Keep merged-forward mode even in fallback: convert media to links in text.
             fallback_urls: list[str] = []
             if media:
@@ -244,6 +129,12 @@ class AiocqhttpMessageSender(MessageSender):
                 nickname = context.channel.title if context.channel.title else "RSSHub"
             else:
                 nickname = "RSSHub"
+
+            logger.warning(
+                "Aiocqhttp falling back to text-only merged nodes: session=%s, prev_err=%s",
+                session_id,
+                err_text,
+            )
 
             merged_text = fallback_text or "RSS update"
             fallback_nodes = [cls._build_node(nickname, [Plain(merged_text)])]

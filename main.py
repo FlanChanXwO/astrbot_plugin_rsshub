@@ -1073,6 +1073,8 @@ class RSSHubPlugin(Star):
         """取消订阅
 
         Usage: /unsub <订阅ID>
+        - 非管理员：仅可删除当前会话或本人关联的订阅
+        - 管理员可删除任意用户任意会话的订阅
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
@@ -1088,11 +1090,21 @@ class RSSHubPlugin(Star):
             return
 
         user_id = event.get_sender_id()
+        current_session = event.unified_msg_origin
 
-        sub = await Sub.get_by_id_and_user(sub_id_int, user_id)
+        sub = await Sub.get_by_id(sub_id_int)
         if not sub:
             yield event.plain_result("未找到该订阅")
             return
+
+        if not event.is_admin():
+            is_owner = sub.user_id == user_id
+            is_current_session = bool(sub.target_session) and (
+                sub.target_session == current_session
+            )
+            if not (is_owner or is_current_session):
+                yield event.plain_result("无权限删除该订阅")
+                return
 
         await Sub.delete(sub)
         yield event.plain_result(f"已取消订阅 (ID: {sub_id_int})")

@@ -183,13 +183,23 @@ class FailedNotification(RSSHubModel, table=True):
     media_urls: list[str] | None = Field(
         default=None, sa_column=Column(JSON), description="Media URLs"
     )
-    entry_title: str | None = Field(default=None, max_length=1024, description="Entry title")
-    entry_link: str | None = Field(default=None, max_length=4096, description="Entry link")
+    entry_title: str | None = Field(
+        default=None, max_length=1024, description="Entry title"
+    )
+    entry_link: str | None = Field(
+        default=None, max_length=4096, description="Entry link"
+    )
 
     # Context info
-    feed_title: str | None = Field(default=None, max_length=1024, description="Feed title")
-    feed_link: str | None = Field(default=None, max_length=4096, description="Feed link")
-    platform_name: str | None = Field(default=None, max_length=64, description="Platform name")
+    feed_title: str | None = Field(
+        default=None, max_length=1024, description="Feed title"
+    )
+    feed_link: str | None = Field(
+        default=None, max_length=4096, description="Feed link"
+    )
+    platform_name: str | None = Field(
+        default=None, max_length=64, description="Platform name"
+    )
     target_session: str | None = Field(
         default=None, max_length=255, description="Target session"
     )
@@ -201,8 +211,12 @@ class FailedNotification(RSSHubModel, table=True):
 
     # Retry tracking
     retry_count: int = Field(default=0, description="Retry attempts")
-    fail_reason: str | None = Field(default=None, max_length=255, description="Last failure reason")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="First failure time")
+    fail_reason: str | None = Field(
+        default=None, max_length=255, description="Last failure reason"
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="First failure time"
+    )
     updated_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column_kwargs={"onupdate": datetime.utcnow},
@@ -774,9 +788,7 @@ class FailedNotificationMethods:
         async with get_session() as session:
             from sqlmodel import select
 
-            stmt = select(FailedNotification).where(
-                FailedNotification.sub_id == sub_id
-            )
+            stmt = select(FailedNotification).where(FailedNotification.sub_id == sub_id)
             result = await session.execute(stmt)
             notifs = list(result.scalars().all())
             for notif in notifs:
@@ -901,9 +913,15 @@ MonitorSchedule.delete = staticmethod(MonitorScheduleMethods.delete)
 FailedNotification.enqueue = staticmethod(FailedNotificationMethods.enqueue)
 FailedNotification.get_pending = staticmethod(FailedNotificationMethods.get_pending)
 FailedNotification.get_by_sub = staticmethod(FailedNotificationMethods.get_by_sub)
-FailedNotification.get_count_by_sub = staticmethod(FailedNotificationMethods.count_by_sub)
-FailedNotification.increment_retry = staticmethod(FailedNotificationMethods.increment_retry)
+FailedNotification.get_count_by_sub = staticmethod(
+    FailedNotificationMethods.count_by_sub
+)
+FailedNotification.increment_retry = staticmethod(
+    FailedNotificationMethods.increment_retry
+)
 FailedNotification.delete = staticmethod(FailedNotificationMethods.delete)
 FailedNotification.delete_by_sub = staticmethod(FailedNotificationMethods.delete_by_sub)
-FailedNotification.delete_exceeded = staticmethod(FailedNotificationMethods.delete_exceeded)
+FailedNotification.delete_exceeded = staticmethod(
+    FailedNotificationMethods.delete_exceeded
+)
 FailedNotification.get_stats = staticmethod(FailedNotificationMethods.get_stats)

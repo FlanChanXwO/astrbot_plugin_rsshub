@@ -18,6 +18,7 @@ import json
 import os
 import re
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -118,7 +119,6 @@ class RSSHubPlugin(Star):
         self._webui: RSSHubWebUI | None = None
         self._rsshub_radar_api: RSSHubRadarAPI | None = None
         self._rsshub_radar_api_settings: tuple[int, str] | None = None
-        # 导入会话状态管理（类似 deerpipe）
         self._import_session_lock = asyncio.Lock()
         self._import_sessions: dict[tuple[str, str], float] = {}
         self._import_session_timeout = 300  # 5分钟超时
@@ -1358,6 +1358,92 @@ class RSSHubPlugin(Star):
 
         yield event.plain_result(f"已取消{scope_desc}订阅，共删除 {deleted_count} 条")
 
+    @filter.command("sub_export")
+    async def cmd_sub_export(
+        self,
+        event: AstrMessageEvent,
+        scope: str = "",
+    ):
+        """导出订阅到 TOML 文件
+
+        Usage: /sub_export [all]
+        - 默认导出当前用户当前会话的订阅
+        - all: 导出所有订阅（管理员）
+        """
+        user_id = event.get_sender_id()
+        scope_value = scope.strip().lower()
+
+        if scope_value and scope_value != "all":
+            yield event.plain_result(
+                "参数无效。用法: /sub_export [all]\n"
+                "不带参数表示导出当前用户当前会话；all 表示导出所有订阅（管理员）。"
+            )
+            return
+
+        is_global = scope_value == "all"
+
+        if is_global and not event.is_admin():
+            yield event.plain_result("导出所有订阅需要管理员权限")
+            return
+
+        if is_global:
+            subs = await Sub.get_all_active()
+            if not subs:
+                yield event.plain_result("当前没有任何订阅")
+                return
+            export_text = build_subscriptions_export_text(
+                user_id="global",
+                subscriptions=subs,
+            )
+            short_id = uuid.uuid4().hex[:8]
+            filename = f"rsshub_export_global_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{short_id}.toml"
+        else:
+            subs = await Sub.get_by_user(user_id)
+            if not subs:
+                yield event.plain_result("您当前没有可导出的订阅")
+                return
+            current_session = event.unified_msg_origin
+            filtered_subs = [
+                sub
+                for sub in subs
+                if (sub.target_session or current_session) == current_session
+            ]
+            if not filtered_subs:
+                yield event.plain_result("当前会话没有可导出的订阅")
+                return
+            export_text = build_subscriptions_export_text(
+                user_id=str(user_id),
+                subscriptions=filtered_subs,
+            )
+            short_id = uuid.uuid4().hex[:8]
+            filename = f"rsshub_export_{user_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{short_id}.toml"
+
+        temp_dir = Path(get_astrbot_temp_path())
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        export_path = temp_dir / filename
+
+        try:
+            export_path.write_text(export_text, encoding="utf-8")
+            yield event.plain_result(
+                f"订阅导出完成，共 {len(filtered_subs if not is_global else subs)} 条"
+            )
+            yield event.chain_result([File(name=filename, file=str(export_path))])
+        except OSError as ex:
+            logger.error("Failed to export subscriptions: %s", ex)
+            yield event.plain_result(f"导出失败: {ex}")
+        finally:
+            # Clean up temporary export file after sending
+            try:
+                if export_path.exists():
+                    export_path.unlink()
+                    logger.debug("Cleaned up temporary export file: %s", export_path)
+            except OSError as cleanup_ex:
+                logger.warning(
+                    "Failed to clean up temporary export file %s: %s",
+                    export_path,
+                    cleanup_ex,
+                )
+
     @filter.command("sub_import", alias={"import"})
     async def cmd_sub_import(self, event: AstrMessageEvent, import_path: str = ""):
         """Import subscriptions from TOML file.
@@ -1720,13 +1806,14 @@ class RSSHubPlugin(Star):
             "取消订阅: /unsub <订阅ID>",
             "取消订阅: /unsub_all [global]  # 默认当前会话，global=所有会话(管理员)",
             "订阅列表: /sub_list [all [page] [page_size]]",
+            "导出订阅: /sub_export [all]  # 默认当前会话，all=所有订阅(管理员)",
+            "导入订阅: /sub_import [本地文件路径]",
             "设置订阅选项: /sub_set <订阅ID> <选项> <值>",
             "设置默认选项: /sub_set_default <选项> <值>",
             "设置推送目标: /sub_bind <目标>",
             "会话默认配置: /sub_session_default_set <key> <value>",
             "查看会话默认配置: /sub_session_default_get",
             "插件配置: /rss_conf [key] [value]",
-            "导入订阅: /sub_import [本地文件路径]",
         ]
         if event.is_admin():
             command_lines.append(

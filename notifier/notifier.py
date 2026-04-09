@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from astrbot.api import logger
 
-from ..db import Feed, Sub, User
+from ..db import FailedNotification, Feed, Sub, User
 from ..parsing import PostFormatter, parse_entry
 from .senders import (
     ChannelInfo,
@@ -29,6 +29,7 @@ class Notifier:
         timeout_seconds: int = 30,
         proxy: str = "",
         download_media_before_send: bool = True,
+        config: object | None = None,
     ):
         self.feed = feed
         self.subs = subs or []
@@ -37,6 +38,7 @@ class Notifier:
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.proxy = proxy or ""
         self.download_media_before_send = bool(download_media_before_send)
+        self.config = config
 
     def _build_context(self, sub: Sub) -> NotifierContext:
         """构建通知上下文"""
@@ -186,7 +188,7 @@ class Notifier:
         if not sender_platform_name and session_id:
             sender_platform_name = session_id.split(":", 1)[0]
 
-        sender = get_sender_for_platform_name(sender_platform_name)
+        sender = get_sender_for_platform_name(sender_platform_name, self.config)
         should_pre_download = self.download_media_before_send
 
         prepared_media = None
@@ -229,6 +231,16 @@ class Notifier:
                     session_id,
                     sent.detail,
                 )
+                # Enqueue for retry when platform is available again
+                await self._enqueue_failed_notification(
+                    sub=sub,
+                    user=user,
+                    content=content,
+                    media_items=media_items,
+                    entry_title=entry_parsed.title,
+                    entry_link=entry_parsed.link,
+                    fail_reason=f"platform_or_session: {sent.detail}",
+                )
             else:
                 logger.warning(
                     "推送失败(非绑定问题): sub=%s, session=%s, transient=%s, detail=%s",
@@ -237,7 +249,21 @@ class Notifier:
                     sent.transient,
                     sent.detail,
                 )
+                # For transient errors, also enqueue for retry
+                if sent.transient:
+                    await self._enqueue_failed_notification(
+                        sub=sub,
+                        user=user,
+                        content=content,
+                        media_items=media_items,
+                        entry_title=entry_parsed.title,
+                        entry_link=entry_parsed.link,
+                        fail_reason=f"transient: {sent.detail}",
+                    )
             return
+
+        # Success - check if there are pending retries for this subscription
+        await self._process_failed_queue(sub, user, effective)
 
         logger.debug("已发送更新通知给用户 %s: %s", sub.user_id, entry_parsed.title)
 
@@ -255,3 +281,137 @@ class Notifier:
             await User.mark_binding_notice(user_id)
         except Exception as ex:
             logger.error("标记用户绑定提示失败: %s, %s", user_id, ex)
+
+    async def _enqueue_failed_notification(
+        self,
+        sub: Sub,
+        user: User,
+        content: str,
+        media_items: list[tuple[str, str]] | None,
+        entry_title: str | None,
+        entry_link: str | None,
+        fail_reason: str,
+    ) -> None:
+        """Enqueue a failed notification for retry."""
+        try:
+            # Get current queue size
+            queue_size = await FailedNotification.get_count_by_sub(sub.id)
+
+            # Get max capacity from config (default 50)
+            max_capacity = 50
+            if hasattr(self, "config") and self.config:
+                max_capacity = int(getattr(self.config, "failed_queue_capacity", 50))
+
+            # Skip if queue is full
+            if queue_size >= max_capacity:
+                logger.warning(
+                    "Failed notification queue full for sub=%s, dropping message",
+                    sub.id,
+                )
+                return
+
+            # Build media URLs list
+            media_urls = None
+            if media_items:
+                media_urls = [url for _, url in media_items if url]
+
+            # Build options dict
+            options = {}
+            if sub.options:
+                options = sub.options
+
+            await FailedNotification.enqueue(
+                sub_id=sub.id,
+                user_id=sub.user_id,
+                content=content,
+                media_urls=media_urls,
+                entry_title=entry_title,
+                entry_link=entry_link,
+                feed_title=self.feed.title if self.feed else None,
+                feed_link=self.feed.link if self.feed else None,
+                platform_name=sub.platform_name,
+                target_session=sub.target_session or user.default_target_session,
+                options=options,
+                fail_reason=fail_reason,
+            )
+            logger.info(
+                "Enqueued failed notification for retry: sub=%s, reason=%s",
+                sub.id,
+                fail_reason,
+            )
+        except Exception as ex:
+            logger.error("Failed to enqueue notification: %s", ex)
+
+    async def _process_failed_queue(
+        self,
+        sub: Sub,
+        user: User,
+        effective_options: dict,
+    ) -> None:
+        """Process pending failed notifications for this subscription."""
+        try:
+            pending = await FailedNotification.get_by_sub(sub.id)
+            if not pending:
+                return
+
+            logger.info(
+                "Processing %d pending failed notifications for sub=%s",
+                len(pending),
+                sub.id,
+            )
+
+            for notif in pending:
+                try:
+                    # Reconstruct media items
+                    media_items = None
+                    if notif.media_urls:
+                        media_items = [("image", url) for url in notif.media_urls]
+
+                    # Send the notification
+                    sender_platform_name = (notif.platform_name or "").strip()
+                    if not sender_platform_name and notif.target_session:
+                        sender_platform_name = notif.target_session.split(":", 1)[0]
+
+                    sender = get_sender_for_platform_name(sender_platform_name, self.config)
+                    sender.configure_runtime(
+                        timeout_seconds=self.timeout_seconds,
+                        proxy=self.proxy,
+                    )
+
+                    context = NotifierContext(
+                        channel=ChannelInfo(
+                            title=notif.feed_title or "",
+                            link=notif.feed_link or "",
+                        ),
+                        platform_name=notif.platform_name or "",
+                    )
+
+                    sent = await sender.send_to_user(
+                        notif.target_session,
+                        notif.content,
+                        media_items,
+                        context=context,
+                    )
+
+                    if sent.ok:
+                        await FailedNotification.delete(notif.id)
+                        logger.info(
+                            "Retry succeeded, removed from queue: notif=%s", notif.id
+                        )
+                    else:
+                        await FailedNotification.increment_retry(
+                            notif.id, fail_reason=sent.detail
+                        )
+                        logger.warning(
+                            "Retry failed: notif=%s, retries=%s, detail=%s",
+                            notif.id,
+                            notif.retry_count + 1,
+                            sent.detail,
+                        )
+
+                except Exception as ex:
+                    await FailedNotification.increment_retry(notif.id, fail_reason=str(ex))
+                    logger.error("Retry processing failed: notif=%s, error=%s", notif.id, ex)
+
+        except Exception as ex:
+            logger.error("Failed to process failed queue for sub=%s: %s", sub.id, ex)

@@ -22,8 +22,9 @@ from sqlmodel import select
 from astrbot.api import logger
 
 from ..api import feed_get
-from ..db import Feed, MonitorSchedule, Sub, User, get_session
+from ..db import FailedNotification, Feed, MonitorSchedule, Sub, User, get_session
 from ..notifier import Notifier
+from ..notifier.senders import ChannelInfo, get_sender_for_platform_name
 from ..utils.monitor_helpers import (
     looks_like_bare_domain_scheme,
     normalize_config_positive_int,
@@ -107,6 +108,103 @@ class RSSMonitor:
 
         return default
 
+    async def _process_failed_queue(self) -> None:
+        """Process pending failed notifications from the queue."""
+        try:
+            # Get max retries from config
+            max_retries = self._config_value("failed_queue_max_retries", 3)
+
+            # Get pending notifications
+            pending = await FailedNotification.get_pending(
+                limit=50, max_retries=max_retries
+            )
+
+            if not pending:
+                return
+
+            logger.info("Processing %d failed notifications from queue", len(pending))
+
+            for notif in pending:
+                try:
+                    # Get subscription info
+                    async with get_session() as session:
+                        sub = await session.get(Sub, notif.sub_id)
+                        if not sub or sub.state != 1:
+                            # Subscription deleted or disabled, remove notification
+                            await FailedNotification.delete(notif.id)
+                            logger.debug(
+                                "Removed failed notification for inactive sub=%s",
+                                notif.sub_id,
+                            )
+                            continue
+
+                    # Determine sender
+                    sender_platform_name = (notif.platform_name or "").strip()
+                    if not sender_platform_name and notif.target_session:
+                        sender_platform_name = notif.target_session.split(":", 1)[0]
+
+                    sender = get_sender_for_platform_name(sender_platform_name, self.config)
+                    timeout = self.config.timeout if self.config else 30
+                    proxy = self.config.proxy if self.config else ""
+                    sender.configure_runtime(
+                        timeout_seconds=timeout,
+                        proxy=proxy,
+                    )
+
+                    # Reconstruct media items
+                    media_items = None
+                    if notif.media_urls:
+                        media_items = [("image", url) for url in notif.media_urls]
+
+                    # Build context
+                    context = ChannelInfo(
+                        title=notif.feed_title or "",
+                        link=notif.feed_link or "",
+                    )
+
+                    # Try to send
+                    sent = await sender.send_to_user(
+                        session_id=notif.target_session,
+                        message=notif.content,
+                        media=media_items,
+                        context=context,
+                    )
+
+                    if sent.ok:
+                        await FailedNotification.delete(notif.id)
+                        logger.info(
+                            "Failed notification retry succeeded: notif=%s, sub=%s",
+                            notif.id,
+                            notif.sub_id,
+                        )
+                    else:
+                        await FailedNotification.increment_retry(
+                            notif.id, fail_reason=sent.detail
+                        )
+                        if notif.retry_count + 1 >= max_retries:
+                            logger.warning(
+                                "Failed notification exhausted retries: notif=%s, sub=%s",
+                                notif.id,
+                                notif.sub_id,
+                            )
+                        else:
+                            logger.debug(
+                                "Failed notification retry failed: notif=%s, retries=%s",
+                                notif.id,
+                                notif.retry_count + 1,
+                            )
+
+                except Exception as ex:
+                    await FailedNotification.increment_retry(notif.id, fail_reason=str(ex))
+                    logger.error(
+                        "Failed to process failed notification: notif=%s, error=%s",
+                        notif.id,
+                        ex,
+                    )
+
+        except Exception as ex:
+            logger.error("Failed to process failed queue: %s", ex)
+
     async def start(self):
         self._running = True
         logger.info("RSS监控器已启动")
@@ -124,6 +222,9 @@ class RSSMonitor:
     async def run_periodic_task(self):
         """每分钟执行一次，按订阅调度并在 feed 级复用抓取结果。"""
         self._stat.print_summary()
+
+        # Process failed notification queue
+        await self._process_failed_queue()
 
         try:
             async with get_session() as session:
@@ -303,6 +404,10 @@ class RSSMonitor:
                         # avoiding chunk-based preemption between sessions/platforms.
                         fanout_subs = await Sub.get_active_by_feed_id(feed.id)
 
+                    # Apply multi-bot deduplication if enabled
+                    if self.config and getattr(self.config, "deduplicate_multi_bot", True):
+                        fanout_subs = self._deduplicate_session_subscriptions(fanout_subs)
+
                     await Notifier(
                         feed=feed,
                         subs=fanout_subs,
@@ -314,6 +419,7 @@ class RSSMonitor:
                             if self.config
                             else True
                         ),
+                        config=self.config,
                     ).notify_all()
                     schedule_action = ("success", None)
                     self._stat.updated()
@@ -334,6 +440,38 @@ class RSSMonitor:
     @staticmethod
     def _all_subs_blocked(subs: list[Sub]) -> bool:
         return len(subs) > 0 and all((s.state == 0) for s in subs)
+
+    @staticmethod
+    def _deduplicate_session_subscriptions(subs: list[Sub]) -> list[Sub]:
+        """Deduplicate subscriptions by session, keeping only the earliest one.
+
+        When multiple BOTs in the same session subscribed to the same RSS feed,
+        only the earliest subscription should be used for pushing.
+        """
+        if not subs:
+            return subs
+
+        # Group by target_session, keeping track of creation time
+        session_subs: dict[str, Sub] = {}
+        for sub in subs:
+            session_id = sub.target_session or ""
+            if not session_id:
+                continue
+
+            # If session not seen yet, or this sub is older, keep it
+            if session_id not in session_subs:
+                session_subs[session_id] = sub
+            elif sub.created_at < session_subs[session_id].created_at:
+                session_subs[session_id] = sub
+
+        deduplicated = list(session_subs.values())
+        if len(deduplicated) < len(subs):
+            logger.debug(
+                "Multi-bot deduplication: %d subscriptions -> %d unique sessions",
+                len(subs),
+                len(deduplicated),
+            )
+        return deduplicated
 
     async def _schedule_after_success(self, subs: list[Sub]) -> None:
         """成功后按订阅生效 interval 刷新 next_check_time 并重置 error。"""
@@ -373,6 +511,7 @@ class RSSMonitor:
                     download_media_before_send=(
                         self.config.download_image_before_send if self.config else True
                     ),
+                    config=self.config,
                 ).notify_all()
                 await MonitorSchedule.upsert(
                     sub.id,

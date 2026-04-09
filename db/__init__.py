@@ -2,6 +2,7 @@
 # 基于 RSS-to-Telegram-Bot 移植，使用 SQLModel 替代 tortoise-orm
 
 from .models import (
+    FailedNotification,
     Feed,
     MonitorSchedule,
     Option,
@@ -18,6 +19,7 @@ __all__ = [
     "User",
     "Option",
     "MonitorSchedule",
+    "FailedNotification",
     "init_db",
     "close_db",
     "get_session",

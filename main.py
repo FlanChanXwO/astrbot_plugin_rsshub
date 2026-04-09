@@ -1438,7 +1438,11 @@ class RSSHubPlugin(Star):
                     export_path.unlink()
                     logger.debug("Cleaned up temporary export file: %s", export_path)
             except OSError as cleanup_ex:
-                logger.warning("Failed to clean up temporary export file %s: %s", export_path, cleanup_ex)
+                logger.warning(
+                    "Failed to clean up temporary export file %s: %s",
+                    export_path,
+                    cleanup_ex,
+                )
 
     @filter.command("sub_import", alias={"import"})
     async def cmd_sub_import(self, event: AstrMessageEvent, import_path: str = ""):

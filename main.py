@@ -1424,7 +1424,9 @@ class RSSHubPlugin(Star):
 
         try:
             export_path.write_text(export_text, encoding="utf-8")
-            yield event.plain_result(f"订阅导出完成，共 {len(filtered_subs if not is_global else subs)} 条")
+            yield event.plain_result(
+                f"订阅导出完成，共 {len(filtered_subs if not is_global else subs)} 条"
+            )
             yield event.chain_result([File(name=filename, file=str(export_path))])
         except OSError as ex:
             logger.error("Failed to export subscriptions: %s", ex)

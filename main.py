@@ -18,6 +18,7 @@ import json
 import os
 import re
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -1394,7 +1395,8 @@ class RSSHubPlugin(Star):
                 user_id="global",
                 subscriptions=subs,
             )
-            filename = f"rsshub_export_global_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.toml"
+            short_id = uuid.uuid4().hex[:8]
+            filename = f"rsshub_export_global_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{short_id}.toml"
         else:
             subs = await Sub.get_by_user(user_id)
             if not subs:
@@ -1413,7 +1415,8 @@ class RSSHubPlugin(Star):
                 user_id=str(user_id),
                 subscriptions=filtered_subs,
             )
-            filename = f"rsshub_export_{user_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.toml"
+            short_id = uuid.uuid4().hex[:8]
+            filename = f"rsshub_export_{user_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{short_id}.toml"
 
         temp_dir = Path(get_astrbot_temp_path())
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1426,6 +1429,14 @@ class RSSHubPlugin(Star):
         except OSError as ex:
             logger.error("Failed to export subscriptions: %s", ex)
             yield event.plain_result(f"导出失败: {ex}")
+        finally:
+            # Clean up temporary export file after sending
+            try:
+                if export_path.exists():
+                    export_path.unlink()
+                    logger.debug("Cleaned up temporary export file: %s", export_path)
+            except OSError as cleanup_ex:
+                logger.warning("Failed to clean up temporary export file %s: %s", export_path, cleanup_ex)
 
     @filter.command("sub_import", alias={"import"})
     async def cmd_sub_import(self, event: AstrMessageEvent, import_path: str = ""):

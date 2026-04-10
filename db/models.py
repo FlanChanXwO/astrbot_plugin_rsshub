@@ -734,16 +734,25 @@ class FailedNotificationMethods:
             return list(result.scalars().all())
 
     @staticmethod
-    async def get_by_sub(sub_id: int) -> list[FailedNotification]:
-        """Get all failed notifications for a subscription."""
+    async def get_by_sub(
+        sub_id: int, limit: int | None = None
+    ) -> list[FailedNotification]:
+        """Get failed notifications for a subscription, ordered by creation time.
+
+        Args:
+            sub_id: Subscription ID
+            limit: Maximum number of notifications to fetch (for bounded processing)
+        """
         async with get_session() as session:
             from sqlmodel import select
 
             stmt = (
                 select(FailedNotification)
                 .where(FailedNotification.sub_id == sub_id)
-                .order_by(FailedNotification.created_at.desc())
+                .order_by(FailedNotification.created_at.asc())
             )
+            if limit is not None and limit > 0:
+                stmt = stmt.limit(limit)
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
@@ -760,6 +769,32 @@ class FailedNotificationMethods:
             )
             result = await session.execute(stmt)
             return int(result.scalar_one() or 0)
+
+    @staticmethod
+    async def is_at_capacity(sub_id: int, capacity: int) -> bool:
+        """Check if the failed notification queue is at capacity.
+
+        Uses a cheaper existence check (LIMIT capacity+1) instead of full COUNT
+        to reduce DB load under high volume.
+
+        Args:
+            sub_id: Subscription ID
+            capacity: Maximum capacity
+
+        Returns:
+            True if queue has reached or exceeded capacity
+        """
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(FailedNotification.id)
+                .where(FailedNotification.sub_id == sub_id)
+                .limit(capacity + 1)
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return len(rows) > capacity
 
     @staticmethod
     async def count_by_sub_ids(sub_ids: list[int]) -> dict[int, int]:

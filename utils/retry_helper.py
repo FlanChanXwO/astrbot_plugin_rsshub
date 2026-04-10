@@ -23,6 +23,7 @@ async def process_failed_notification(
     config: PluginConfig | None = None,
     timeout_seconds: int = 30,
     proxy: str = "",
+    max_retries: int = 3,
 ) -> tuple[bool, str | None]:
     """Process a single failed notification retry.
 
@@ -31,10 +32,21 @@ async def process_failed_notification(
         config: Plugin configuration
         timeout_seconds: Request timeout for sender
         proxy: Proxy URL for sender
+        max_retries: Maximum retry count (from config)
 
     Returns:
         Tuple of (success: bool, error_detail: str | None)
     """
+    # Skip if already exhausted (defensive check)
+    if notif.retry_count >= max_retries:
+        logger.debug(
+            "Skipping exhausted notification: notif=%s, retries=%s/%s",
+            notif.id,
+            notif.retry_count,
+            max_retries,
+        )
+        return False, "max_retries_exhausted"
+
     try:
         # Reconstruct media items
         media_items = None
@@ -117,6 +129,7 @@ async def process_failed_notifications_batch(
             config=config,
             timeout_seconds=timeout_seconds,
             proxy=proxy,
+            max_retries=max_retries,
         )
 
         if success:

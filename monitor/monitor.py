@@ -153,6 +153,7 @@ class RSSMonitor:
                         config=self.config,
                         timeout_seconds=self.config.timeout if self.config else 30,
                         proxy=self.config.proxy if self.config else "",
+                        max_retries=max_retries,
                     )
 
                     if not success:

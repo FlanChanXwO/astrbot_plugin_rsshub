@@ -264,7 +264,7 @@ class Notifier:
             return
 
         # Success - check if there are pending retries for this subscription
-        await self._process_failed_queue(sub, user, effective)
+        await self._process_failed_queue(sub, user)
 
         logger.debug("已发送更新通知给用户 %s: %s", sub.user_id, entry_parsed.title)
 
@@ -295,16 +295,14 @@ class Notifier:
     ) -> None:
         """Enqueue a failed notification for retry."""
         try:
-            # Get current queue size
-            queue_size = await FailedNotification.get_count_by_sub(sub.id)
-
             # Get max capacity from config (default 50)
             max_capacity = 50
             if hasattr(self, "config") and self.config:
                 max_capacity = int(getattr(self.config, "failed_queue_capacity", 50))
 
-            # Skip if queue is full
-            if queue_size >= max_capacity:
+            # Use cheaper capacity check to reduce DB load
+            is_full = await FailedNotification.is_at_capacity(sub.id, max_capacity)
+            if is_full:
                 logger.warning(
                     "Failed notification queue full for sub=%s, dropping message",
                     sub.id,
@@ -347,11 +345,16 @@ class Notifier:
         self,
         sub: Sub,
         user: User,
-        effective_options: dict,
     ) -> None:
         """Process pending failed notifications for this subscription."""
         try:
-            pending = await FailedNotification.get_by_sub(sub.id)
+            # Get max retries from config
+            max_retries = 3
+            if self.config:
+                max_retries = int(getattr(self.config, "failed_queue_max_retries", 3))
+
+            # Process in bounded batches to avoid long blocking bursts
+            pending = await FailedNotification.get_by_sub(sub.id, limit=10)
             if not pending:
                 return
 
@@ -367,6 +370,7 @@ class Notifier:
                     config=self.config,
                     timeout_seconds=self.timeout_seconds,
                     proxy=self.proxy,
+                    max_retries=max_retries,
                 )
 
         except Exception as ex:

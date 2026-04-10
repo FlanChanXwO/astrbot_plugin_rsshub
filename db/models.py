@@ -425,6 +425,30 @@ class SubMethods:
             return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_by_ids(sub_ids: list[int]) -> dict[int, Sub]:
+        """Batch load subscriptions by IDs to avoid N+1 queries.
+
+        Args:
+            sub_ids: List of subscription IDs
+
+        Returns:
+            Mapping of {sub_id: Sub} for found active subscriptions
+        """
+        if not sub_ids:
+            return {}
+
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .where(Sub.id.in_(sub_ids), Sub.state == 1)
+            )
+            result = await session.execute(stmt)
+            subs = result.scalars().all()
+            return {sub.id: sub for sub in subs if sub.id is not None}
+
+    @staticmethod
     async def get_by_id_and_user(sub_id: int, user_id: int) -> Sub | None:
         async with get_session() as session:
             from sqlmodel import select
@@ -1000,6 +1024,7 @@ Sub.get_all_active = staticmethod(SubMethods.get_all_active)
 Sub.get_all_active_paged = staticmethod(SubMethods.get_all_active_paged)
 Sub.get_active_by_feed_id = staticmethod(SubMethods.get_active_by_feed_id)
 Sub.get_by_id = staticmethod(SubMethods.get_by_id)
+Sub.get_by_ids = staticmethod(SubMethods.get_by_ids)
 Sub.get_by_id_and_user = staticmethod(SubMethods.get_by_id_and_user)
 Sub.get_by_user_and_link = staticmethod(SubMethods.get_by_user_and_link)
 Sub.get_by_platform_and_link = staticmethod(SubMethods.get_by_platform_and_link)

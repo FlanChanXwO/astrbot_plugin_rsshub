@@ -220,6 +220,19 @@ class RSSHubPlugin(Star):
 
         raise ValueError(f"不支持的插件配置项: {normalized_key}")
 
+    def _is_platform_shared(self, platform_name: str) -> bool:
+        """Check if platform shared data is enabled for the given platform.
+
+        Args:
+            platform_name: Platform name to check
+
+        Returns:
+            True if shared data is enabled for this platform
+        """
+        if self.config and self.config.platform_shared_data:
+            return bool(self.config.platform_shared_data.get(platform_name, False))
+        return False
+
     @staticmethod
     def _parse_llm_params_input(params: str) -> dict[str, str]:
         """Parse LLM params input from JSON object or query-string form."""
@@ -1069,11 +1082,7 @@ class RSSHubPlugin(Star):
         platform_name = event.platform.name
 
         # Check if platform shared data is enabled for this platform
-        shared_data_enabled = False
-        if self.config and self.config.platform_shared_data:
-            shared_data_enabled = self.config.platform_shared_data.get(
-                platform_name, False
-            )
+        shared_data_enabled = self._is_platform_shared(platform_name)
 
         if shared_data_enabled:
             # Use platform-level subscription check
@@ -1144,11 +1153,7 @@ class RSSHubPlugin(Star):
         if not event.is_admin():
             # Check if platform shared data is enabled
             platform_name = event.platform.name
-            shared_data_enabled = False
-            if self.config and self.config.platform_shared_data:
-                shared_data_enabled = self.config.platform_shared_data.get(
-                    platform_name, False
-                )
+            shared_data_enabled = self._is_platform_shared(platform_name)
 
             is_owner = sub.user_id == user_id
             is_current_session = bool(sub.target_session) and (
@@ -1190,11 +1195,7 @@ class RSSHubPlugin(Star):
         platform_name = event.platform.name
 
         # Check if platform shared data is enabled
-        shared_data_enabled = False
-        if self.config and self.config.platform_shared_data:
-            shared_data_enabled = self.config.platform_shared_data.get(
-                platform_name, False
-            )
+        shared_data_enabled = self._is_platform_shared(platform_name)
 
         list_offset = 0
         total_count = 0

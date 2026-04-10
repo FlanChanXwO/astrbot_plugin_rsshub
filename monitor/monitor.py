@@ -133,19 +133,22 @@ class RSSMonitor:
 
             logger.info("Processing %d failed notifications from queue", len(pending))
 
+            # Batch load all subscriptions to avoid N+1 pattern
+            sub_ids = {notif.sub_id for notif in pending if notif.sub_id}
+            subs_map = await Sub.get_by_ids(list(sub_ids))
+
             for notif in pending:
                 try:
-                    # Get subscription info
-                    async with get_session() as session:
-                        sub = await session.get(Sub, notif.sub_id)
-                        if not sub or sub.state != 1:
-                            # Subscription deleted or disabled, remove notification
-                            await FailedNotification.delete(notif.id)
-                            logger.debug(
-                                "Removed failed notification for inactive sub=%s",
-                                notif.sub_id,
-                            )
-                            continue
+                    # Check subscription from batch-loaded map
+                    sub = subs_map.get(notif.sub_id)
+                    if not sub or sub.state != 1:
+                        # Subscription deleted or disabled, remove notification
+                        await FailedNotification.delete(notif.id)
+                        logger.debug(
+                            "Removed failed notification for inactive sub=%s",
+                            notif.sub_id,
+                        )
+                        continue
 
                     # Use shared retry helper
                     success, _ = await process_failed_notification(

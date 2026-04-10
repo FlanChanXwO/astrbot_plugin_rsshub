@@ -1900,7 +1900,9 @@ class RSSHubPlugin(Star):
         user_sub_ids = [s.id for s in user_subs if s.id]
 
         # Aggregate failed notification counts for all subs in a single query
-        failed_counts_by_sub = await FailedNotification.get_count_by_sub_ids(user_sub_ids)
+        failed_counts_by_sub = await FailedNotification.get_count_by_sub_ids(
+            user_sub_ids
+        )
         user_pending = sum(failed_counts_by_sub.values())
 
         result_lines = [

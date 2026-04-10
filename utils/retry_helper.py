@@ -71,14 +71,10 @@ async def process_failed_notification(
 
         if sent.ok:
             await FailedNotification.delete(notif.id)
-            logger.info(
-                "Retry succeeded, removed from queue: notif=%s", notif.id
-            )
+            logger.info("Retry succeeded, removed from queue: notif=%s", notif.id)
             return True, None
         else:
-            await FailedNotification.increment_retry(
-                notif.id, fail_reason=sent.detail
-            )
+            await FailedNotification.increment_retry(notif.id, fail_reason=sent.detail)
             logger.warning(
                 "Retry failed: notif=%s, retries=%s, detail=%s",
                 notif.id,
@@ -88,12 +84,8 @@ async def process_failed_notification(
             return False, sent.detail
 
     except Exception as ex:
-        await FailedNotification.increment_retry(
-            notif.id, fail_reason=str(ex)
-        )
-        logger.error(
-            "Retry processing failed: notif=%s, error=%s", notif.id, ex
-        )
+        await FailedNotification.increment_retry(notif.id, fail_reason=str(ex))
+        logger.error("Retry processing failed: notif=%s, error=%s", notif.id, ex)
         return False, str(ex)
 
 

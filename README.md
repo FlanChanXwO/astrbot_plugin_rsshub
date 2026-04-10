@@ -136,6 +136,11 @@
 | `sender_strategies.telegram`  | 布尔值 | 启用 Telegram 专用策略（媒体优先、大小限制处理） | `true` |
 | `sender_strategies.aiocqhttp` | 布尔值 | 启用 OneBot 专用策略（合并转发节点）        | `true` |
 
+> **命名说明：**
+> - 配置文件中使用 `sender_strategies.<platform>` 形式（点号分隔），例如：`sender_strategies.telegram`、`sender_strategies.aiocqhttp`
+> - `/rss_conf` 命令参数中使用 `sender_strategy_<platform>` 形式（下划线分隔），例如：`sender_strategy_telegram`、`sender_strategy_aiocqhttp`
+> - 两者是一一对应的配置项，仅书写形式不同，含义完全相同
+
 ### 多 BOT 配置
 
 | 配置项                              | 类型  | 说明                 | 默认值     |

@@ -114,6 +114,15 @@ class RSSMonitor:
             # Get max retries from config
             max_retries = self._config_value("failed_queue_max_retries", 3)
 
+            # Cleanup exhausted failed notifications so the table doesn't grow unbounded
+            deleted_count = await FailedNotification.delete_exceeded(max_retries)
+            if deleted_count > 0:
+                logger.debug(
+                    "Cleaned up %d exhausted failed notifications (max_retries=%s)",
+                    deleted_count,
+                    max_retries,
+                )
+
             # Get pending notifications
             pending = await FailedNotification.get_pending(
                 limit=50, max_retries=max_retries

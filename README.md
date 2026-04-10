@@ -126,7 +126,7 @@
 
 | 配置项                          | 类型  | 说明                        | 默认值     |
 |------------------------------|-----|---------------------------|---------|
-| `download_image_before_send` | 布尔值 | 先下载图片再发送，docker 环境下需共享数据卷 | `false` |
+| `download_image_before_send` | 布尔值 | 先下载图片再发送，Docker 环境下需共享数据卷 | `false` |
 | `failed_queue_capacity`      | 整数  | 失败队列容量，0=禁用失败队列           | `50`    |
 
 ### 发送策略配置 (`sender_strategies`)

@@ -9,6 +9,7 @@ from astrbot.api import logger
 
 from ..db import FailedNotification, Feed, Sub, User
 from ..parsing import PostFormatter, parse_entry
+from ..utils.retry_helper import process_failed_notification
 from .senders import (
     ChannelInfo,
     MessageSender,
@@ -361,63 +362,12 @@ class Notifier:
             )
 
             for notif in pending:
-                try:
-                    # Reconstruct media items
-                    media_items = None
-                    if notif.media_urls:
-                        media_items = [("image", url) for url in notif.media_urls]
-
-                    # Send the notification
-                    sender_platform_name = (notif.platform_name or "").strip()
-                    if not sender_platform_name and notif.target_session:
-                        sender_platform_name = notif.target_session.split(":", 1)[0]
-
-                    sender = get_sender_for_platform_name(
-                        sender_platform_name, self.config
-                    )
-                    sender.configure_runtime(
-                        timeout_seconds=self.timeout_seconds,
-                        proxy=self.proxy,
-                    )
-
-                    context = NotifierContext(
-                        channel=ChannelInfo(
-                            title=notif.feed_title or "",
-                            link=notif.feed_link or "",
-                        ),
-                        platform_name=notif.platform_name or "",
-                    )
-
-                    sent = await sender.send_to_user(
-                        notif.target_session,
-                        notif.content,
-                        media_items,
-                        context=context,
-                    )
-
-                    if sent.ok:
-                        await FailedNotification.delete(notif.id)
-                        logger.info(
-                            "Retry succeeded, removed from queue: notif=%s", notif.id
-                        )
-                    else:
-                        await FailedNotification.increment_retry(
-                            notif.id, fail_reason=sent.detail
-                        )
-                        logger.warning(
-                            "Retry failed: notif=%s, retries=%s, detail=%s",
-                            notif.id,
-                            notif.retry_count + 1,
-                            sent.detail,
-                        )
-
-                except Exception as ex:
-                    await FailedNotification.increment_retry(
-                        notif.id, fail_reason=str(ex)
-                    )
-                    logger.error(
-                        "Retry processing failed: notif=%s, error=%s", notif.id, ex
-                    )
+                await process_failed_notification(
+                    notif,
+                    config=self.config,
+                    timeout_seconds=self.timeout_seconds,
+                    proxy=self.proxy,
+                )
 
         except Exception as ex:
             logger.error("Failed to process failed queue for sub=%s: %s", sub.id, ex)

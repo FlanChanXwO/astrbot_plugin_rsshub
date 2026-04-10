@@ -808,35 +808,33 @@ class FailedNotificationMethods:
 
     @staticmethod
     async def delete_by_sub(sub_id: int) -> int:
-        """Delete all notifications for a subscription."""
+        """Delete all notifications for a subscription using SQL DELETE WHERE."""
         async with get_session() as session:
-            from sqlmodel import select
+            from sqlalchemy import delete
 
-            stmt = select(FailedNotification).where(FailedNotification.sub_id == sub_id)
+            stmt = (
+                delete(FailedNotification)
+                .where(FailedNotification.sub_id == sub_id)
+                .execution_options(synchronize_session=False)
+            )
             result = await session.execute(stmt)
-            notifs = list(result.scalars().all())
-            for notif in notifs:
-                await session.delete(notif)
-            if notifs:
-                await session.commit()
-            return len(notifs)
+            await session.commit()
+            return result.rowcount or 0
 
     @staticmethod
     async def delete_exceeded(max_retries: int = 3) -> int:
-        """Delete notifications that exceeded max retries."""
+        """Delete notifications that exceeded max retries using SQL DELETE WHERE."""
         async with get_session() as session:
-            from sqlmodel import select
+            from sqlalchemy import delete
 
-            stmt = select(FailedNotification).where(
-                FailedNotification.retry_count >= max_retries
+            stmt = (
+                delete(FailedNotification)
+                .where(FailedNotification.retry_count >= max_retries)
+                .execution_options(synchronize_session=False)
             )
             result = await session.execute(stmt)
-            notifs = list(result.scalars().all())
-            for notif in notifs:
-                await session.delete(notif)
-            if notifs:
-                await session.commit()
-            return len(notifs)
+            await session.commit()
+            return result.rowcount or 0
 
     @staticmethod
     async def get_stats(max_retries: int = 3) -> dict:

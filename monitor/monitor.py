@@ -24,11 +24,6 @@ from astrbot.api import logger
 from ..api import feed_get
 from ..db import FailedNotification, Feed, MonitorSchedule, Sub, User, get_session
 from ..notifier import Notifier
-from ..notifier.senders import (
-    ChannelInfo,
-    NotifierContext,
-    get_sender_for_platform_name,
-)
 from ..utils.monitor_helpers import (
     looks_like_bare_domain_scheme,
     normalize_config_positive_int,
@@ -39,6 +34,7 @@ from ..utils.monitor_helpers import (
     resolve_hash_history_limit,
     tracking_query_params_cache_key,
 )
+from ..utils.retry_helper import process_failed_notification
 
 
 def _ensure_utc_aware(dt: datetime | None) -> datetime | None:
@@ -142,65 +138,21 @@ class RSSMonitor:
                             )
                             continue
 
-                    # Determine sender
-                    sender_platform_name = (notif.platform_name or "").strip()
-                    if not sender_platform_name and notif.target_session:
-                        sender_platform_name = notif.target_session.split(":", 1)[0]
-
-                    sender = get_sender_for_platform_name(
-                        sender_platform_name, self.config
-                    )
-                    timeout = self.config.timeout if self.config else 30
-                    proxy = self.config.proxy if self.config else ""
-                    sender.configure_runtime(
-                        timeout_seconds=timeout,
-                        proxy=proxy,
+                    # Use shared retry helper
+                    success, _ = await process_failed_notification(
+                        notif,
+                        config=self.config,
+                        timeout_seconds=self.config.timeout if self.config else 30,
+                        proxy=self.config.proxy if self.config else "",
                     )
 
-                    # Reconstruct media items
-                    media_items = None
-                    if notif.media_urls:
-                        media_items = [("image", url) for url in notif.media_urls]
-
-                    # Build context (align with Notifier._process_failed_queue)
-                    context = NotifierContext(
-                        channel=ChannelInfo(
-                            title=notif.feed_title or "",
-                            link=notif.feed_link or "",
-                        ),
-                        platform_name=notif.platform_name or "",
-                    )
-
-                    # Try to send
-                    sent = await sender.send_to_user(
-                        session_id=notif.target_session,
-                        message=notif.content,
-                        media=media_items,
-                        context=context,
-                    )
-
-                    if sent.ok:
-                        await FailedNotification.delete(notif.id)
-                        logger.info(
-                            "Failed notification retry succeeded: notif=%s, sub=%s",
-                            notif.id,
-                            notif.sub_id,
-                        )
-                    else:
-                        await FailedNotification.increment_retry(
-                            notif.id, fail_reason=sent.detail
-                        )
+                    if not success:
+                        # Check if exhausted after retry increment
                         if notif.retry_count + 1 >= max_retries:
                             logger.warning(
                                 "Failed notification exhausted retries: notif=%s, sub=%s",
                                 notif.id,
                                 notif.sub_id,
-                            )
-                        else:
-                            logger.debug(
-                                "Failed notification retry failed: notif=%s, retries=%s",
-                                notif.id,
-                                notif.retry_count + 1,
                             )
 
                 except Exception as ex:

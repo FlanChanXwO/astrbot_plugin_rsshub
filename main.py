@@ -85,6 +85,7 @@ PLUGIN_CONFIG_KEYS = {
     "download_image_before_send",
     "rsshub_base_url",
     "failed_queue_capacity",
+    "failed_queue_max_retries",
     "sender_strategy_telegram",
     "sender_strategy_aiocqhttp",
     "deduplicate_multi_bot",
@@ -199,7 +200,7 @@ class RSSHubPlugin(Star):
             except ValueError as ex:
                 raise ValueError(f"rsshub_base_url 非法: {ex}") from ex
 
-        if normalized_key in {"failed_queue_capacity"}:
+        if normalized_key in {"failed_queue_capacity", "failed_queue_max_retries"}:
             if not raw_value.isdigit() or int(raw_value) < 0:
                 raise ValueError(f"{normalized_key} 需要大于等于 0 的整数")
             return int(raw_value)
@@ -1844,6 +1845,7 @@ class RSSHubPlugin(Star):
                 f"minimal_interval = {self.config.minimal_interval}\n"
                 f"timeout = {self.config.timeout}\n"
                 f"failed_queue_capacity = {self.config.failed_queue_capacity}\n"
+                f"failed_queue_max_retries = {self.config.failed_queue_max_retries}\n"
                 f"deduplicate_multi_bot = {self.config.deduplicate_multi_bot}\n"
                 "download_image_before_send = "
                 f"{self.config.download_image_before_send}\n"
@@ -1859,7 +1861,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(
                 "不支持的配置项。可用项: "
                 "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
-                "download_image_before_send/failed_queue_capacity/"
+                "download_image_before_send/failed_queue_capacity/failed_queue_max_retries/"
                 "sender_strategy_telegram/sender_strategy_aiocqhttp/"
                 "deduplicate_multi_bot/platform_shared_data_aiocqhttp"
             )

@@ -504,6 +504,48 @@ class SubMethods:
             return list(result.scalars().all())
 
     @staticmethod
+    async def get_by_platform_paged(
+        platform_name: str,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Sub], int]:
+        """Return paged active subscriptions for a specific platform with total count.
+
+        Args:
+            platform_name: Platform name to filter by
+            page: Page number (1-based)
+            page_size: Number of items per page
+
+        Returns:
+            Tuple of (subscriptions list, total count)
+        """
+        page = max(1, int(page))
+        page_size = max(1, int(page_size))
+        offset = (page - 1) * page_size
+
+        async with get_session() as session:
+            from sqlmodel import select
+
+            total_stmt = (
+                select(func.count())
+                .select_from(Sub)
+                .where(Sub.platform_name == platform_name, Sub.state == 1)
+            )
+            total = int((await session.execute(total_stmt)).scalar_one() or 0)
+
+            stmt = (
+                select(Sub)
+                .where(Sub.platform_name == platform_name, Sub.state == 1)
+                .options(selectinload(Sub.feed))
+                .order_by(Sub.id.asc())
+                .offset(offset)
+                .limit(page_size)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all()), total
+
+    @staticmethod
     async def delete(sub: Sub) -> None:
         async with get_session() as session:
             db_sub = await session.get(Sub, sub.id)
@@ -962,6 +1004,7 @@ Sub.get_by_id_and_user = staticmethod(SubMethods.get_by_id_and_user)
 Sub.get_by_user_and_link = staticmethod(SubMethods.get_by_user_and_link)
 Sub.get_by_platform_and_link = staticmethod(SubMethods.get_by_platform_and_link)
 Sub.get_by_platform = staticmethod(SubMethods.get_by_platform)
+Sub.get_by_platform_paged = staticmethod(SubMethods.get_by_platform_paged)
 Sub.delete = staticmethod(SubMethods.delete)
 Sub.delete_all_by_user = staticmethod(SubMethods.delete_all_by_user)
 Sub.update_options = staticmethod(SubMethods.update_options)

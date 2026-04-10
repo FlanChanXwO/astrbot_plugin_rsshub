@@ -300,6 +300,14 @@ class Notifier:
             if hasattr(self, "config") and self.config:
                 max_capacity = int(getattr(self.config, "failed_queue_capacity", 50))
 
+            # Skip if queue is disabled (capacity <= 0)
+            if max_capacity <= 0:
+                logger.debug(
+                    "Failed notification queue disabled (capacity=%s), dropping message",
+                    max_capacity,
+                )
+                return
+
             # Use cheaper capacity check to reduce DB load
             is_full = await FailedNotification.is_at_capacity(sub.id, max_capacity)
             if is_full:

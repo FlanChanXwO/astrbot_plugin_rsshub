@@ -1176,7 +1176,8 @@ class RSSHubPlugin(Star):
     ):
         """列出订阅列表。
 
-        Usage: /sub_list [all [page] [page_size]]
+        Usage: /sub_list [all] [page] [page_size]
+               /sub_list all [page] [page_size]  (管理员查看所有)
         """
         user_id = event.get_sender_id()
 
@@ -1200,25 +1201,35 @@ class RSSHubPlugin(Star):
         page_int = 1
         page_size_int = 5
 
-        if show_all_sessions:
+        # Parse pagination parameters (used for both 'all' admin view and shared data mode)
+        if show_all_sessions or shared_data_enabled:
             try:
                 page_int = max(1, int(page.strip() or "1"))
                 page_size_int = int(page_size.strip() or "5")
             except ValueError:
-                yield event.plain_result(
+                usage_hint = (
                     "分页参数无效。用法: /sub_list all [page] [page_size]"
+                    if show_all_sessions
+                    else "分页参数无效。用法: /sub_list [page] [page_size]"
                 )
+                yield event.plain_result(usage_hint)
                 return
 
             page_size_int = max(1, min(page_size_int, 100))
             list_offset = (page_int - 1) * page_size_int
+
+        if show_all_sessions:
             subs, total_count = await Sub.get_all_active_paged(
                 page=page_int,
                 page_size=page_size_int,
             )
         elif shared_data_enabled:
-            # In shared data mode, show all subscriptions for this platform
-            subs = await Sub.get_by_platform(platform_name)
+            # In shared data mode, use paginated query for this platform
+            subs, total_count = await Sub.get_by_platform_paged(
+                platform_name,
+                page=page_int,
+                page_size=page_size_int,
+            )
         else:
             subs = await Sub.get_by_user(user_id)
 
@@ -1238,7 +1249,11 @@ class RSSHubPlugin(Star):
             ]
         elif shared_data_enabled:
             filtered_subs = subs
-            lines = [f"订阅列表（平台共享模式 - {platform_name}）:"]
+            total_pages = max(1, (total_count + page_size_int - 1) // page_size_int)
+            lines = [
+                f"订阅列表（平台共享模式 - {platform_name}）:",
+                f"页码: {page_int}/{total_pages}  每页: {page_size_int}  总数: {total_count}",
+            ]
         else:
             filtered_subs = [
                 sub

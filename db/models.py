@@ -440,10 +440,7 @@ class SubMethods:
         async with get_session() as session:
             from sqlmodel import select
 
-            stmt = (
-                select(Sub)
-                .where(Sub.id.in_(sub_ids), Sub.state == 1)
-            )
+            stmt = select(Sub).where(Sub.id.in_(sub_ids), Sub.state == 1)
             result = await session.execute(stmt)
             subs = result.scalars().all()
             return {sub.id: sub for sub in subs if sub.id is not None}

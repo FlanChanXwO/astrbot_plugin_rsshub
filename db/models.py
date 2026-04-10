@@ -762,6 +762,30 @@ class FailedNotificationMethods:
             return int(result.scalar_one() or 0)
 
     @staticmethod
+    async def count_by_sub_ids(sub_ids: list[int]) -> dict[int, int]:
+        """Count failed notifications for multiple subscriptions in a single query.
+
+        Returns a mapping of {sub_id: count} to avoid N+1 query patterns.
+        """
+        if not sub_ids:
+            return {}
+
+        async with get_session() as session:
+            from sqlmodel import func, select
+
+            stmt = (
+                select(
+                    FailedNotification.sub_id,
+                    func.count().label("count"),
+                )
+                .where(FailedNotification.sub_id.in_(sub_ids))
+                .group_by(FailedNotification.sub_id)
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return {row[0]: row[1] for row in rows}
+
+    @staticmethod
     async def increment_retry(notif_id: int, fail_reason: str | None = None) -> None:
         """Increment retry count for a notification."""
         async with get_session() as session:
@@ -815,8 +839,14 @@ class FailedNotificationMethods:
             return len(notifs)
 
     @staticmethod
-    async def get_stats() -> dict:
-        """Get queue statistics."""
+    async def get_stats(max_retries: int = 3) -> dict:
+        """Get queue statistics.
+
+        Args:
+            max_retries: Maximum retry count threshold. Notifications with
+                        retry_count < max_retries are considered pending.
+                        Should match the system's configured max retries.
+        """
         async with get_session() as session:
             from sqlmodel import func, select
 
@@ -826,7 +856,7 @@ class FailedNotificationMethods:
             pending_stmt = (
                 select(func.count())
                 .select_from(FailedNotification)
-                .where(FailedNotification.retry_count < 3)
+                .where(FailedNotification.retry_count < max_retries)
             )
             pending = (await session.execute(pending_stmt)).scalar_one() or 0
 
@@ -915,6 +945,9 @@ FailedNotification.get_pending = staticmethod(FailedNotificationMethods.get_pend
 FailedNotification.get_by_sub = staticmethod(FailedNotificationMethods.get_by_sub)
 FailedNotification.get_count_by_sub = staticmethod(
     FailedNotificationMethods.count_by_sub
+)
+FailedNotification.get_count_by_sub_ids = staticmethod(
+    FailedNotificationMethods.count_by_sub_ids
 )
 FailedNotification.increment_retry = staticmethod(
     FailedNotificationMethods.increment_retry

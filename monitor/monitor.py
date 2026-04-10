@@ -24,7 +24,11 @@ from astrbot.api import logger
 from ..api import feed_get
 from ..db import FailedNotification, Feed, MonitorSchedule, Sub, User, get_session
 from ..notifier import Notifier
-from ..notifier.senders import ChannelInfo, get_sender_for_platform_name
+from ..notifier.senders import (
+    ChannelInfo,
+    NotifierContext,
+    get_sender_for_platform_name,
+)
 from ..utils.monitor_helpers import (
     looks_like_bare_domain_scheme,
     normalize_config_positive_int,
@@ -158,10 +162,13 @@ class RSSMonitor:
                     if notif.media_urls:
                         media_items = [("image", url) for url in notif.media_urls]
 
-                    # Build context
-                    context = ChannelInfo(
-                        title=notif.feed_title or "",
-                        link=notif.feed_link or "",
+                    # Build context (align with Notifier._process_failed_queue)
+                    context = NotifierContext(
+                        channel=ChannelInfo(
+                            title=notif.feed_title or "",
+                            link=notif.feed_link or "",
+                        ),
+                        platform_name=notif.platform_name or "",
                     )
 
                     # Try to send
@@ -455,15 +462,21 @@ class RSSMonitor:
 
         When multiple BOTs in the same session subscribed to the same RSS feed,
         only the earliest subscription should be used for pushing.
+        Subscriptions without target_session are preserved as-is.
         """
         if not subs:
             return subs
 
         # Group by target_session, keeping track of creation time
         session_subs: dict[str, Sub] = {}
+        # Keep subscriptions without target_session separately
+        no_session_subs: list[Sub] = []
+
         for sub in subs:
             session_id = sub.target_session or ""
             if not session_id:
+                # Preserve subscriptions without target_session
+                no_session_subs.append(sub)
                 continue
 
             # If session not seen yet, or this sub is older, keep it
@@ -472,12 +485,14 @@ class RSSMonitor:
             elif sub.created_at < session_subs[session_id].created_at:
                 session_subs[session_id] = sub
 
-        deduplicated = list(session_subs.values())
+        # Combine: deduplicated session subs + subs without target_session
+        deduplicated = list(session_subs.values()) + no_session_subs
         if len(deduplicated) < len(subs):
             logger.debug(
-                "Multi-bot deduplication: %d subscriptions -> %d unique sessions",
+                "Multi-bot deduplication: %d subscriptions -> %d unique sessions (%d without target)",
                 len(subs),
-                len(deduplicated),
+                len(session_subs),
+                len(no_session_subs),
             )
         return deduplicated
 

@@ -1886,17 +1886,22 @@ class RSSHubPlugin(Star):
 
         Usage: /sub_failed_queue
         """
-        stats = await FailedNotification.get_stats()
+        # Get max retries from config (default 3)
+        max_retries = 3
+        if self.config:
+            max_retries = int(getattr(self.config, "failed_queue_max_retries", 3))
+
+        # Get stats with configurable max_retries for consistency
+        stats = await FailedNotification.get_stats(max_retries=max_retries)
         user_id = event.get_sender_id()
 
-        # Get user's pending notifications
+        # Get user's pending notifications using batch query to avoid N+1
         user_subs = await Sub.get_by_user(user_id)
-        user_sub_ids = {s.id for s in user_subs if s.id}
+        user_sub_ids = [s.id for s in user_subs if s.id]
 
-        user_pending = 0
-        for sub_id in user_sub_ids:
-            count = await FailedNotification.get_count_by_sub(sub_id)
-            user_pending += count
+        # Aggregate failed notification counts for all subs in a single query
+        failed_counts_by_sub = await FailedNotification.get_count_by_sub_ids(user_sub_ids)
+        user_pending = sum(failed_counts_by_sub.values())
 
         result_lines = [
             "失败队列状态:",

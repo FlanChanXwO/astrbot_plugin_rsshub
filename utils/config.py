@@ -25,6 +25,7 @@ class PluginConfig:
     local_imports_dirname: str = DEFAULT_LOCAL_IMPORTS_DIRNAME
     download_image_before_send: bool = True
     failed_queue_capacity: int = 50
+    failed_queue_max_retries: int = 3
     sender_strategies: dict = None
     deduplicate_multi_bot: bool = True
     platform_shared_data: dict = None
@@ -65,6 +66,9 @@ class PluginConfig:
             config.failed_queue_capacity = int(
                 astrbot_config.get("failed_queue_capacity", 50)
             )
+            config.failed_queue_max_retries = int(
+                astrbot_config.get("failed_queue_max_retries", 3)
+            )
             # Load sender strategies with defaults
             raw_strategies = astrbot_config.get("sender_strategies", {})
             config.sender_strategies = {
@@ -99,6 +103,9 @@ class PluginConfig:
                 )
                 config.failed_queue_capacity = int(
                     data.get("failed_queue_capacity", 50)
+                )
+                config.failed_queue_max_retries = int(
+                    data.get("failed_queue_max_retries", 3)
                 )
                 # Load sender strategies with defaults
                 raw_strategies = data.get("sender_strategies", {})
@@ -135,6 +142,7 @@ class PluginConfig:
             self.download_image_before_send
         )
         self.astrbot_config["failed_queue_capacity"] = int(self.failed_queue_capacity)
+        self.astrbot_config["failed_queue_max_retries"] = int(self.failed_queue_max_retries)
         self.astrbot_config["sender_strategies"] = dict(self.sender_strategies)
         self.astrbot_config["deduplicate_multi_bot"] = bool(self.deduplicate_multi_bot)
         self.astrbot_config["platform_shared_data"] = dict(self.platform_shared_data)

@@ -79,6 +79,12 @@
     "hint": "当推送因平台连接失败时，消息会进入失败队列等待重试。每个订阅最多保留多少条失败消息。0=禁用失败队列",
     "default": 50
   },
+  "failed_queue_max_retries": {
+    "type": "int",
+    "description": "失败队列最大重试次数",
+    "hint": "失败消息的最大重试次数，超过此次数的消息将被视为已耗尽",
+    "default": 3
+  },
   "sender_strategies": {
     "type": "object",
     "description": "平台发送策略配置",

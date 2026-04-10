@@ -170,6 +170,60 @@ class MonitorSchedule(RSSHubModel, table=True):
     )
 
 
+class FailedNotification(RSSHubModel, table=True):
+    """Failed notification queue for retry when platform is unavailable."""
+
+    __tablename__ = "rsshub_failed_notification"
+    id: int | None = Field(default=None, primary_key=True)
+    sub_id: int = Field(foreign_key="rsshub_sub.id", description="Subscription ID")
+    user_id: int = Field(foreign_key="rsshub_user.id", description="User ID")
+
+    # Message content (JSON serialized)
+    content: str = Field(default="", description="Message content")
+    media_urls: list[str] | None = Field(
+        default=None, sa_column=Column(JSON), description="Media URLs"
+    )
+    entry_title: str | None = Field(
+        default=None, max_length=1024, description="Entry title"
+    )
+    entry_link: str | None = Field(
+        default=None, max_length=4096, description="Entry link"
+    )
+
+    # Context info
+    feed_title: str | None = Field(
+        default=None, max_length=1024, description="Feed title"
+    )
+    feed_link: str | None = Field(
+        default=None, max_length=4096, description="Feed link"
+    )
+    platform_name: str | None = Field(
+        default=None, max_length=64, description="Platform name"
+    )
+    target_session: str | None = Field(
+        default=None, max_length=255, description="Target session"
+    )
+
+    # Options (JSON serialized)
+    options: dict | None = Field(
+        default=None, sa_column=Column(JSON), description="Subscription options"
+    )
+
+    # Retry tracking
+    retry_count: int = Field(default=0, description="Retry attempts")
+    fail_reason: str | None = Field(
+        default=None, max_length=255, description="Last failure reason"
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="First failure time"
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow},
+        description="Last retry time",
+    )
+
+
 class Option(RSSHubModel, table=True):
     """选项模型，存储管理员设置的选项。"""
 
@@ -371,6 +425,27 @@ class SubMethods:
             return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_by_ids(sub_ids: list[int]) -> dict[int, Sub]:
+        """Batch load subscriptions by IDs to avoid N+1 queries.
+
+        Args:
+            sub_ids: List of subscription IDs
+
+        Returns:
+            Mapping of {sub_id: Sub} for found active subscriptions
+        """
+        if not sub_ids:
+            return {}
+
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = select(Sub).where(Sub.id.in_(sub_ids), Sub.state == 1)
+            result = await session.execute(stmt)
+            subs = result.scalars().all()
+            return {sub.id: sub for sub in subs if sub.id is not None}
+
+    @staticmethod
     async def get_by_id_and_user(sub_id: int, user_id: int) -> Sub | None:
         async with get_session() as session:
             from sqlmodel import select
@@ -400,6 +475,96 @@ class SubMethods:
             if sub and sub.feed_id:
                 sub.feed = await session.get(Feed, sub.feed_id)
             return sub
+
+    @staticmethod
+    async def get_by_platform_and_link(
+        platform_name: str,
+        feed_link: str,
+        target_session: str | None = None,
+    ) -> Sub | None:
+        """Get subscription by platform and feed link (for shared data mode).
+
+        When platform_shared_data is enabled, subscriptions are shared across
+        all BOTs in the same platform.
+        """
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .join(Feed)
+                .where(
+                    Sub.platform_name == platform_name,
+                    Sub.state == 1,
+                    Feed.link == feed_link,
+                )
+            )
+            if target_session is not None:
+                stmt = stmt.where(Sub.target_session == target_session)
+            # Order by creation time to get the earliest one
+            stmt = stmt.order_by(Sub.created_at.asc())
+            result = await session.execute(stmt)
+            sub = result.scalar_one_or_none()
+            if sub and sub.feed_id:
+                sub.feed = await session.get(Feed, sub.feed_id)
+            return sub
+
+    @staticmethod
+    async def get_by_platform(platform_name: str) -> list[Sub]:
+        """Return all active subscriptions for a specific platform."""
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(Sub)
+                .where(Sub.platform_name == platform_name, Sub.state == 1)
+                .options(selectinload(Sub.feed))
+                .order_by(Sub.id.asc())
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_platform_paged(
+        platform_name: str,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[Sub], int]:
+        """Return paged active subscriptions for a specific platform with total count.
+
+        Args:
+            platform_name: Platform name to filter by
+            page: Page number (1-based)
+            page_size: Number of items per page
+
+        Returns:
+            Tuple of (subscriptions list, total count)
+        """
+        page = max(1, int(page))
+        page_size = max(1, int(page_size))
+        offset = (page - 1) * page_size
+
+        async with get_session() as session:
+            from sqlmodel import select
+
+            total_stmt = (
+                select(func.count())
+                .select_from(Sub)
+                .where(Sub.platform_name == platform_name, Sub.state == 1)
+            )
+            total = int((await session.execute(total_stmt)).scalar_one() or 0)
+
+            stmt = (
+                select(Sub)
+                .where(Sub.platform_name == platform_name, Sub.state == 1)
+                .options(selectinload(Sub.feed))
+                .order_by(Sub.id.asc())
+                .offset(offset)
+                .limit(page_size)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all()), total
 
     @staticmethod
     async def delete(sub: Sub) -> None:
@@ -574,6 +739,230 @@ class MonitorScheduleMethods:
                 await session.commit()
 
 
+class FailedNotificationMethods:
+    """FailedNotification helper methods for retry queue management."""
+
+    @staticmethod
+    async def enqueue(
+        sub_id: int,
+        user_id: int,
+        content: str,
+        media_urls: list[str] | None = None,
+        entry_title: str | None = None,
+        entry_link: str | None = None,
+        feed_title: str | None = None,
+        feed_link: str | None = None,
+        platform_name: str | None = None,
+        target_session: str | None = None,
+        options: dict | None = None,
+        fail_reason: str | None = None,
+    ) -> FailedNotification:
+        """Add a failed notification to the queue."""
+        async with get_session() as session:
+            notif = FailedNotification(
+                sub_id=sub_id,
+                user_id=user_id,
+                content=content,
+                media_urls=media_urls or [],
+                entry_title=entry_title,
+                entry_link=entry_link,
+                feed_title=feed_title,
+                feed_link=feed_link,
+                platform_name=platform_name,
+                target_session=target_session,
+                options=options or {},
+                fail_reason=fail_reason,
+            )
+            session.add(notif)
+            await session.commit()
+            await session.refresh(notif)
+            return notif
+
+    @staticmethod
+    async def get_pending(
+        limit: int = 100,
+        max_retries: int = 3,
+    ) -> list[FailedNotification]:
+        """Get pending failed notifications for retry."""
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(FailedNotification)
+                .where(FailedNotification.retry_count < max_retries)
+                .order_by(FailedNotification.created_at.asc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_sub(
+        sub_id: int, limit: int | None = None
+    ) -> list[FailedNotification]:
+        """Get failed notifications for a subscription, ordered by creation time.
+
+        Args:
+            sub_id: Subscription ID
+            limit: Maximum number of notifications to fetch (for bounded processing)
+        """
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(FailedNotification)
+                .where(FailedNotification.sub_id == sub_id)
+                .order_by(FailedNotification.created_at.asc())
+            )
+            if limit is not None and limit > 0:
+                stmt = stmt.limit(limit)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    @staticmethod
+    async def count_by_sub(sub_id: int) -> int:
+        """Count failed notifications for a subscription."""
+        async with get_session() as session:
+            from sqlmodel import func, select
+
+            stmt = (
+                select(func.count())
+                .select_from(FailedNotification)
+                .where(FailedNotification.sub_id == sub_id)
+            )
+            result = await session.execute(stmt)
+            return int(result.scalar_one() or 0)
+
+    @staticmethod
+    async def is_at_capacity(sub_id: int, capacity: int) -> bool:
+        """Check if the failed notification queue is at capacity.
+
+        Uses a cheaper existence check (LIMIT capacity+1) instead of full COUNT
+        to reduce DB load under high volume.
+
+        Args:
+            sub_id: Subscription ID
+            capacity: Maximum capacity
+
+        Returns:
+            True if queue has reached or exceeded capacity
+        """
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = (
+                select(FailedNotification.id)
+                .where(FailedNotification.sub_id == sub_id)
+                .limit(capacity + 1)
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return len(rows) > capacity
+
+    @staticmethod
+    async def count_by_sub_ids(sub_ids: list[int]) -> dict[int, int]:
+        """Count failed notifications for multiple subscriptions in a single query.
+
+        Returns a mapping of {sub_id: count} to avoid N+1 query patterns.
+        """
+        if not sub_ids:
+            return {}
+
+        async with get_session() as session:
+            from sqlmodel import func, select
+
+            stmt = (
+                select(
+                    FailedNotification.sub_id,
+                    func.count().label("count"),
+                )
+                .where(FailedNotification.sub_id.in_(sub_ids))
+                .group_by(FailedNotification.sub_id)
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return {row[0]: row[1] for row in rows}
+
+    @staticmethod
+    async def increment_retry(notif_id: int, fail_reason: str | None = None) -> None:
+        """Increment retry count for a notification."""
+        async with get_session() as session:
+            notif = await session.get(FailedNotification, notif_id)
+            if notif:
+                notif.retry_count += 1
+                if fail_reason:
+                    notif.fail_reason = fail_reason
+                session.add(notif)
+                await session.commit()
+
+    @staticmethod
+    async def delete(notif_id: int) -> None:
+        """Delete a notification from the queue (on success or max retries)."""
+        async with get_session() as session:
+            notif = await session.get(FailedNotification, notif_id)
+            if notif:
+                await session.delete(notif)
+                await session.commit()
+
+    @staticmethod
+    async def delete_by_sub(sub_id: int) -> int:
+        """Delete all notifications for a subscription using SQL DELETE WHERE."""
+        async with get_session() as session:
+            from sqlalchemy import delete
+
+            stmt = (
+                delete(FailedNotification)
+                .where(FailedNotification.sub_id == sub_id)
+                .execution_options(synchronize_session=False)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount or 0
+
+    @staticmethod
+    async def delete_exceeded(max_retries: int = 3) -> int:
+        """Delete notifications that exceeded max retries using SQL DELETE WHERE."""
+        async with get_session() as session:
+            from sqlalchemy import delete
+
+            stmt = (
+                delete(FailedNotification)
+                .where(FailedNotification.retry_count >= max_retries)
+                .execution_options(synchronize_session=False)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount or 0
+
+    @staticmethod
+    async def get_stats(max_retries: int = 3) -> dict:
+        """Get queue statistics.
+
+        Args:
+            max_retries: Maximum retry count threshold. Notifications with
+                        retry_count < max_retries are considered pending.
+                        Should match the system's configured max retries.
+        """
+        async with get_session() as session:
+            from sqlmodel import func, select
+
+            total_stmt = select(func.count()).select_from(FailedNotification)
+            total = (await session.execute(total_stmt)).scalar_one() or 0
+
+            pending_stmt = (
+                select(func.count())
+                .select_from(FailedNotification)
+                .where(FailedNotification.retry_count < max_retries)
+            )
+            pending = (await session.execute(pending_stmt)).scalar_one() or 0
+
+            return {
+                "total": int(total),
+                "pending": int(pending),
+                "exhausted": int(total) - int(pending),
+            }
+
+
 class WebUIMethods:
     """Helper methods used by plugin webui."""
 
@@ -632,8 +1021,12 @@ Sub.get_all_active = staticmethod(SubMethods.get_all_active)
 Sub.get_all_active_paged = staticmethod(SubMethods.get_all_active_paged)
 Sub.get_active_by_feed_id = staticmethod(SubMethods.get_active_by_feed_id)
 Sub.get_by_id = staticmethod(SubMethods.get_by_id)
+Sub.get_by_ids = staticmethod(SubMethods.get_by_ids)
 Sub.get_by_id_and_user = staticmethod(SubMethods.get_by_id_and_user)
 Sub.get_by_user_and_link = staticmethod(SubMethods.get_by_user_and_link)
+Sub.get_by_platform_and_link = staticmethod(SubMethods.get_by_platform_and_link)
+Sub.get_by_platform = staticmethod(SubMethods.get_by_platform)
+Sub.get_by_platform_paged = staticmethod(SubMethods.get_by_platform_paged)
 Sub.delete = staticmethod(SubMethods.delete)
 Sub.delete_all_by_user = staticmethod(SubMethods.delete_all_by_user)
 Sub.update_options = staticmethod(SubMethods.update_options)
@@ -645,3 +1038,21 @@ MonitorSchedule.get = staticmethod(MonitorScheduleMethods.get)
 MonitorSchedule.get_or_create = staticmethod(MonitorScheduleMethods.get_or_create)
 MonitorSchedule.upsert = staticmethod(MonitorScheduleMethods.upsert)
 MonitorSchedule.delete = staticmethod(MonitorScheduleMethods.delete)
+FailedNotification.enqueue = staticmethod(FailedNotificationMethods.enqueue)
+FailedNotification.get_pending = staticmethod(FailedNotificationMethods.get_pending)
+FailedNotification.get_by_sub = staticmethod(FailedNotificationMethods.get_by_sub)
+FailedNotification.get_count_by_sub = staticmethod(
+    FailedNotificationMethods.count_by_sub
+)
+FailedNotification.get_count_by_sub_ids = staticmethod(
+    FailedNotificationMethods.count_by_sub_ids
+)
+FailedNotification.increment_retry = staticmethod(
+    FailedNotificationMethods.increment_retry
+)
+FailedNotification.delete = staticmethod(FailedNotificationMethods.delete)
+FailedNotification.delete_by_sub = staticmethod(FailedNotificationMethods.delete_by_sub)
+FailedNotification.delete_exceeded = staticmethod(
+    FailedNotificationMethods.delete_exceeded
+)
+FailedNotification.get_stats = staticmethod(FailedNotificationMethods.get_stats)

@@ -24,8 +24,19 @@ class PluginConfig:
     rsshub_base_url: str = DEFAULT_RSSHUB_BASE_URL
     local_imports_dirname: str = DEFAULT_LOCAL_IMPORTS_DIRNAME
     download_image_before_send: bool = True
+    failed_queue_capacity: int = 50
+    failed_queue_max_retries: int = 3
+    sender_strategies: dict = None
+    deduplicate_multi_bot: bool = True
+    platform_shared_data: dict = None
     db_file: str = "rsshub.db"
     astrbot_config: AstrBotConfig | None = None
+
+    def __post_init__(self):
+        if self.sender_strategies is None:
+            self.sender_strategies = {"telegram": True, "aiocqhttp": True}
+        if self.platform_shared_data is None:
+            self.platform_shared_data = {"aiocqhttp": False}
 
     @classmethod
     def load(
@@ -52,6 +63,27 @@ class PluginConfig:
             config.download_image_before_send = bool(
                 astrbot_config.get("download_image_before_send", True)
             )
+            config.failed_queue_capacity = int(
+                astrbot_config.get("failed_queue_capacity", 50)
+            )
+            config.failed_queue_max_retries = int(
+                astrbot_config.get("failed_queue_max_retries", 3)
+            )
+            # Load sender strategies with defaults
+            raw_strategies = astrbot_config.get("sender_strategies", {})
+            config.sender_strategies = {
+                "telegram": bool(raw_strategies.get("telegram", True)),
+                "aiocqhttp": bool(raw_strategies.get("aiocqhttp", True)),
+            }
+            # Load multi-bot deduplication
+            config.deduplicate_multi_bot = bool(
+                astrbot_config.get("deduplicate_multi_bot", True)
+            )
+            # Load platform shared data
+            raw_shared = astrbot_config.get("platform_shared_data", {})
+            config.platform_shared_data = {
+                "aiocqhttp": bool(raw_shared.get("aiocqhttp", False)),
+            }
             return config
 
         legacy_path = data_dir / "config.json"
@@ -69,6 +101,27 @@ class PluginConfig:
                 config.download_image_before_send = bool(
                     data.get("download_image_before_send", True)
                 )
+                config.failed_queue_capacity = int(
+                    data.get("failed_queue_capacity", 50)
+                )
+                config.failed_queue_max_retries = int(
+                    data.get("failed_queue_max_retries", 3)
+                )
+                # Load sender strategies with defaults
+                raw_strategies = data.get("sender_strategies", {})
+                config.sender_strategies = {
+                    "telegram": bool(raw_strategies.get("telegram", True)),
+                    "aiocqhttp": bool(raw_strategies.get("aiocqhttp", True)),
+                }
+                # Load multi-bot deduplication
+                config.deduplicate_multi_bot = bool(
+                    data.get("deduplicate_multi_bot", True)
+                )
+                # Load platform shared data
+                raw_shared = data.get("platform_shared_data", {})
+                config.platform_shared_data = {
+                    "aiocqhttp": bool(raw_shared.get("aiocqhttp", False)),
+                }
                 logger.info(f"Loaded legacy config from {legacy_path}")
             except Exception as ex:
                 logger.warning(f"Failed to load legacy config file: {ex}")
@@ -88,6 +141,13 @@ class PluginConfig:
         self.astrbot_config["download_image_before_send"] = bool(
             self.download_image_before_send
         )
+        self.astrbot_config["failed_queue_capacity"] = int(self.failed_queue_capacity)
+        self.astrbot_config["failed_queue_max_retries"] = int(
+            self.failed_queue_max_retries
+        )
+        self.astrbot_config["sender_strategies"] = dict(self.sender_strategies)
+        self.astrbot_config["deduplicate_multi_bot"] = bool(self.deduplicate_multi_bot)
+        self.astrbot_config["platform_shared_data"] = dict(self.platform_shared_data)
         self.astrbot_config.save_config()
 
     @property
@@ -102,10 +162,32 @@ class PluginConfig:
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a config value by key."""
+        # Handle sender_strategy_* keys
+        if key == "sender_strategy_telegram":
+            return self.sender_strategies.get("telegram", True)
+        if key == "sender_strategy_aiocqhttp":
+            return self.sender_strategies.get("aiocqhttp", True)
+        # Handle platform_shared_data_* keys
+        if key == "platform_shared_data_aiocqhttp":
+            return self.platform_shared_data.get("aiocqhttp", False)
         return getattr(self, key, default)
 
     def set(self, key: str, value: Any) -> None:
         """Set known config and persist when possible."""
+        # Handle sender_strategy_* keys
+        if key == "sender_strategy_telegram":
+            self.sender_strategies["telegram"] = bool(value)
+            self.save()
+            return
+        if key == "sender_strategy_aiocqhttp":
+            self.sender_strategies["aiocqhttp"] = bool(value)
+            self.save()
+            return
+        # Handle platform_shared_data_* keys
+        if key == "platform_shared_data_aiocqhttp":
+            self.platform_shared_data["aiocqhttp"] = bool(value)
+            self.save()
+            return
         if hasattr(self, key):
             setattr(self, key, value)
             self.save()

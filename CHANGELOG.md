@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.0.9] - 2026-04-09
+
+### Added
+
+- 新增单会话多 BOT 去重功能：
+  - 配置项 `deduplicate_multi_bot`（默认 true）
+  - 当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息
+  - 避免重复推送问题
+- 新增平台共享数据源功能：
+  - 配置项 `platform_shared_data` 支持按平台开启共享模式
+  - 目前支持 `aiocqhttp` 平台
+  - 开启后，该平台下所有 BOT 的订阅数据共享
+  - 任意 BOT 掉线时，其他 BOT 可继续推送
+  - `/sub` `/unsub` `/sub_list` 命令均支持共享模式
+- 新增可配置的发送策略：
+  - 支持在配置中开启/关闭特定平台的发送策略
+  - 新增 `sender_strategies` 配置项，包含 `telegram` 和 `aiocqhttp` 两个子项
+  - 新增 `/rss_conf sender_strategy_telegram <true/false>` 命令控制 Telegram 策略
+  - 新增 `/rss_conf sender_strategy_aiocqhttp <true/false>` 命令控制 OneBot 策略
+  - 关闭特定平台策略后将自动使用默认发送策略
+
+## [1.0.8] - 2026-04-09
+
+### Added
+
+- 新增失败队列机制，解决平台连接断开时的消息丢失问题：
+  - 当推送因平台连接失败（如 Bot 被踢下线）时，消息会自动进入失败队列
+  - 每分钟监控任务会自动尝试重试失败队列中的消息
+  - 支持配置队列容量 `failed_queue_capacity`（默认 50 条/订阅）
+  - 新增 `/sub_failed_queue` 命令查看队列状态
+  - 新增配置项 `failed_queue_capacity` 可通过 `/rss_conf` 设置
+
 ## [1.0.7] - 2026-04-09
 
 ### Added

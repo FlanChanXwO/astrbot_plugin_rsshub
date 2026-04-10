@@ -31,7 +31,7 @@ from astrbot.core.provider.register import llm_tools
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from .api import close_shared_session
-from .db import Feed, Sub, User, close_db, init_db
+from .db import FailedNotification, Feed, Sub, User, close_db, init_db
 from .monitor import Monitor
 from .notifier import Notifier
 from .notifier.senders import set_bot_self_id_provider
@@ -84,6 +84,12 @@ PLUGIN_CONFIG_KEYS = {
     "timeout",
     "download_image_before_send",
     "rsshub_base_url",
+    "failed_queue_capacity",
+    "failed_queue_max_retries",
+    "sender_strategy_telegram",
+    "sender_strategy_aiocqhttp",
+    "deduplicate_multi_bot",
+    "platform_shared_data_aiocqhttp",
 }
 
 SESSION_DEFAULT_KV_PREFIX = "session_defaults::"
@@ -194,7 +200,38 @@ class RSSHubPlugin(Star):
             except ValueError as ex:
                 raise ValueError(f"rsshub_base_url 非法: {ex}") from ex
 
+        if normalized_key in {"failed_queue_capacity", "failed_queue_max_retries"}:
+            if not raw_value.isdigit() or int(raw_value) < 0:
+                raise ValueError(f"{normalized_key} 需要大于等于 0 的整数")
+            return int(raw_value)
+
+        if normalized_key in {
+            "sender_strategy_telegram",
+            "sender_strategy_aiocqhttp",
+            "deduplicate_multi_bot",
+            "platform_shared_data_aiocqhttp",
+        }:
+            lowered = raw_value.lower()
+            if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
+                return True
+            if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
+                return False
+            raise ValueError(f"{normalized_key} 仅支持布尔值: true/false")
+
         raise ValueError(f"不支持的插件配置项: {normalized_key}")
+
+    def _is_platform_shared(self, platform_name: str) -> bool:
+        """Check if platform shared data is enabled for the given platform.
+
+        Args:
+            platform_name: Platform name to check
+
+        Returns:
+            True if shared data is enabled for this platform
+        """
+        if self.config and self.config.platform_shared_data:
+            return bool(self.config.platform_shared_data.get(platform_name, False))
+        return False
 
     @staticmethod
     def _parse_llm_params_input(params: str) -> dict[str, str]:
@@ -1042,13 +1079,29 @@ class RSSHubPlugin(Star):
             yield event.plain_result(target_err)
             return
 
-        existing_sub = await Sub.get_by_user_and_link(user_id, url, target_session)
-        if existing_sub:
-            yield event.plain_result(f"您已经订阅了此源: {existing_sub.feed.title}")
-            return
+        platform_name = event.platform.name
+
+        # Check if platform shared data is enabled for this platform
+        shared_data_enabled = self._is_platform_shared(platform_name)
+
+        if shared_data_enabled:
+            # Use platform-level subscription check
+            existing_sub = await Sub.get_by_platform_and_link(
+                platform_name, url, target_session
+            )
+            if existing_sub:
+                yield event.plain_result(
+                    f"该源已在平台共享订阅中存在: {existing_sub.feed.title}"
+                )
+                return
+        else:
+            # Use user-level subscription check
+            existing_sub = await Sub.get_by_user_and_link(user_id, url, target_session)
+            if existing_sub:
+                yield event.plain_result(f"您已经订阅了此源: {existing_sub.feed.title}")
+                return
 
         feed = await Feed.get_or_create(link=url, title=title)
-        platform_name = event.platform.name
         sub = await Sub.create(
             user_id=user.id,
             feed_id=feed.id,
@@ -1098,11 +1151,20 @@ class RSSHubPlugin(Star):
             return
 
         if not event.is_admin():
+            # Check if platform shared data is enabled
+            platform_name = event.platform.name
+            shared_data_enabled = self._is_platform_shared(platform_name)
+
             is_owner = sub.user_id == user_id
             is_current_session = bool(sub.target_session) and (
                 sub.target_session == current_session
             )
-            if not (is_owner or is_current_session):
+            # In shared data mode, allow unsubscribing any subscription from the same platform
+            is_same_platform = (
+                shared_data_enabled and sub.platform_name == platform_name
+            )
+
+            if not (is_owner or is_current_session or is_same_platform):
                 yield event.plain_result("无权限删除该订阅")
                 return
 
@@ -1119,7 +1181,10 @@ class RSSHubPlugin(Star):
     ):
         """列出订阅列表。
 
-        Usage: /sub_list [all [page] [page_size]]
+        Usage:
+            /sub_list                          (查看当前会话的订阅)
+            /sub_list [page] [page_size]       (平台共享模式下分页查看)
+            /sub_list all [page] [page_size]   (管理员查看所有订阅)
         """
         user_id = event.get_sender_id()
 
@@ -1129,25 +1194,42 @@ class RSSHubPlugin(Star):
         scope_value = scope.strip().lower()
         show_all_sessions = scope_value == "all" and event.is_admin()
         current_session = event.unified_msg_origin
+        platform_name = event.platform.name
+
+        # Check if platform shared data is enabled
+        shared_data_enabled = self._is_platform_shared(platform_name)
 
         list_offset = 0
         total_count = 0
         page_int = 1
         page_size_int = 5
 
-        if show_all_sessions:
+        # Parse pagination parameters (used for both 'all' admin view and shared data mode)
+        if show_all_sessions or shared_data_enabled:
             try:
                 page_int = max(1, int(page.strip() or "1"))
                 page_size_int = int(page_size.strip() or "5")
             except ValueError:
-                yield event.plain_result(
+                usage_hint = (
                     "分页参数无效。用法: /sub_list all [page] [page_size]"
+                    if show_all_sessions
+                    else "分页参数无效。用法: /sub_list [page] [page_size]"
                 )
+                yield event.plain_result(usage_hint)
                 return
 
             page_size_int = max(1, min(page_size_int, 100))
             list_offset = (page_int - 1) * page_size_int
+
+        if show_all_sessions:
             subs, total_count = await Sub.get_all_active_paged(
+                page=page_int,
+                page_size=page_size_int,
+            )
+        elif shared_data_enabled:
+            # In shared data mode, use paginated query for this platform
+            subs, total_count = await Sub.get_by_platform_paged(
+                platform_name,
                 page=page_int,
                 page_size=page_size_int,
             )
@@ -1166,6 +1248,13 @@ class RSSHubPlugin(Star):
             total_pages = max(1, (total_count + page_size_int - 1) // page_size_int)
             lines = [
                 "订阅列表（全局，所有平台/会话）:",
+                f"页码: {page_int}/{total_pages}  每页: {page_size_int}  总数: {total_count}",
+            ]
+        elif shared_data_enabled:
+            filtered_subs = subs
+            total_pages = max(1, (total_count + page_size_int - 1) // page_size_int)
+            lines = [
+                f"订阅列表（平台共享模式 - {platform_name}）:",
                 f"页码: {page_int}/{total_pages}  每页: {page_size_int}  总数: {total_count}",
             ]
         else:
@@ -1187,7 +1276,7 @@ class RSSHubPlugin(Star):
             feed_link = sub.feed.link if sub.feed else ""
             custom_title = f" ({sub.title})" if sub.title else ""
             lines.append(f"{idx}. [{sub.id}] {feed_title}{custom_title}")
-            if show_all_sessions:
+            if show_all_sessions or shared_data_enabled:
                 lines.append(f"    user: {sub.user_id}")
                 lines.append(f"    platform: {sub.platform_name or '(unknown)'}")
                 lines.append(f"    target: {sub.target_session or '(未绑定)'}")
@@ -1764,6 +1853,8 @@ class RSSHubPlugin(Star):
         normalized_key = key.strip().lower()
 
         if not normalized_key:
+            strategies = self.config.sender_strategies if self.config else {}
+            shared_data = self.config.platform_shared_data if self.config else {}
             yield event.plain_result(
                 "当前 RSS 插件配置:\n"
                 f"proxy = {self.config.proxy or '(empty)'}\n"
@@ -1771,15 +1862,26 @@ class RSSHubPlugin(Star):
                 f"default_interval = {self.config.default_interval}\n"
                 f"minimal_interval = {self.config.minimal_interval}\n"
                 f"timeout = {self.config.timeout}\n"
+                f"failed_queue_capacity = {self.config.failed_queue_capacity}\n"
+                f"failed_queue_max_retries = {self.config.failed_queue_max_retries}\n"
+                f"deduplicate_multi_bot = {self.config.deduplicate_multi_bot}\n"
                 "download_image_before_send = "
-                f"{self.config.download_image_before_send}"
+                f"{self.config.download_image_before_send}\n"
+                "sender_strategies:\n"
+                f"  telegram = {strategies.get('telegram', True)}\n"
+                f"  aiocqhttp = {strategies.get('aiocqhttp', True)}\n"
+                "platform_shared_data:\n"
+                f"  aiocqhttp = {shared_data.get('aiocqhttp', False)}"
             )
             return
 
         if normalized_key not in PLUGIN_CONFIG_KEYS:
             yield event.plain_result(
                 "不支持的配置项。可用项: "
-                "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/download_image_before_send"
+                "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
+                "download_image_before_send/failed_queue_capacity/failed_queue_max_retries/"
+                "sender_strategy_telegram/sender_strategy_aiocqhttp/"
+                "deduplicate_multi_bot/platform_shared_data_aiocqhttp"
             )
             return
 
@@ -1798,6 +1900,51 @@ class RSSHubPlugin(Star):
         self.config.set(normalized_key, parsed_value)
         yield event.plain_result(f"插件配置已更新: {normalized_key} = {parsed_value}")
 
+    @filter.command("sub_failed_queue")
+    async def cmd_sub_failed_queue(self, event: AstrMessageEvent):
+        """查看失败队列状态
+
+        Usage: /sub_failed_queue
+        """
+        # Get max retries from config (default 3)
+        max_retries = 3
+        if self.config:
+            max_retries = int(getattr(self.config, "failed_queue_max_retries", 3))
+
+        # Get stats with configurable max_retries for consistency
+        stats = await FailedNotification.get_stats(max_retries=max_retries)
+        user_id = event.get_sender_id()
+
+        # Get user's pending notifications using batch query to avoid N+1
+        user_subs = await Sub.get_by_user(user_id)
+        user_sub_ids = [s.id for s in user_subs if s.id]
+
+        # Aggregate failed notification counts for all subs in a single query
+        failed_counts_by_sub = await FailedNotification.get_count_by_sub_ids(
+            user_sub_ids
+        )
+        user_pending = sum(failed_counts_by_sub.values())
+
+        result_lines = [
+            "失败队列状态:",
+            f"总待重试: {stats['pending']} 条",
+            f"总已耗尽: {stats['exhausted']} 条",
+            f"您的待重试: {user_pending} 条",
+            "",
+            "说明: 当推送因平台连接失败时，消息会进入失败队列等待重试。",
+            f"队列容量: {self.config.failed_queue_capacity if self.config else 50} 条/订阅",
+        ]
+
+        if event.is_admin():
+            result_lines.extend(
+                [
+                    "",
+                    "管理员: 每分钟监控任务会自动尝试重试失败队列中的消息。",
+                ]
+            )
+
+        yield event.plain_result("\n".join(result_lines))
+
     @filter.command("rsshelp")
     async def cmd_help(self, event: AstrMessageEvent):
         """RSS插件帮助"""
@@ -1814,6 +1961,7 @@ class RSSHubPlugin(Star):
             "会话默认配置: /sub_session_default_set <key> <value>",
             "查看会话默认配置: /sub_session_default_get",
             "插件配置: /rss_conf [key] [value]",
+            "失败队列: /sub_failed_queue  # 查看当前失败队列状态",
         ]
         if event.is_admin():
             command_lines.append(
@@ -1833,7 +1981,11 @@ class RSSHubPlugin(Star):
             + "- display_media: -1/0\n"
             + "- target_session: private/group/current 或完整 session\n\n"
             + "插件配置项:\n"
-            + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/download_image_before_send\n\n"
+            + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
+            + "download_image_before_send/failed_queue_capacity\n"
+            + "- sender_strategy_telegram/sender_strategy_aiocqhttp: 平台发送策略开关\n"
+            + "- deduplicate_multi_bot: 单会话多BOT去重（默认true）\n"
+            + "- platform_shared_data_aiocqhttp: aiocqhttp平台共享数据源（默认false）\n\n"
             + "会话级默认配置项:\n"
             + "- notify/send_mode/length_limit/link_preview/display_author/display_via/display_title/display_entry_tags/style/display_media/interval/title/tags\n\n"
             + "目标绑定:\n"

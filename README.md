@@ -87,7 +87,7 @@
 1. 克隆本仓库到 AstrBot 的插件目录：
    ```bash
    cd AstrBot/data/plugins
-   git clone https://github.com/your-repo/astrbot_plugin_rsshub.git
+   git clone https://github.com/FlanChanXwO/astrbot_plugin_rsshub.git
    ```
 
 2. 重启 AstrBot 或重载插件

@@ -1181,8 +1181,10 @@ class RSSHubPlugin(Star):
     ):
         """列出订阅列表。
 
-        Usage: /sub_list [all] [page] [page_size]
-               /sub_list all [page] [page_size]  (管理员查看所有)
+        Usage:
+            /sub_list                          (查看当前会话的订阅)
+            /sub_list [page] [page_size]       (平台共享模式下分页查看)
+            /sub_list all [page] [page_size]   (管理员查看所有订阅)
         """
         user_id = event.get_sender_id()
 

@@ -142,7 +142,9 @@ class PluginConfig:
             self.download_image_before_send
         )
         self.astrbot_config["failed_queue_capacity"] = int(self.failed_queue_capacity)
-        self.astrbot_config["failed_queue_max_retries"] = int(self.failed_queue_max_retries)
+        self.astrbot_config["failed_queue_max_retries"] = int(
+            self.failed_queue_max_retries
+        )
         self.astrbot_config["sender_strategies"] = dict(self.sender_strategies)
         self.astrbot_config["deduplicate_multi_bot"] = bool(self.deduplicate_multi_bot)
         self.astrbot_config["platform_shared_data"] = dict(self.platform_shared_data)

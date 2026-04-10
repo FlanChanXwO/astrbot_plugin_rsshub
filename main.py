@@ -204,7 +204,12 @@ class RSSHubPlugin(Star):
                 raise ValueError(f"{normalized_key} 需要大于等于 0 的整数")
             return int(raw_value)
 
-        if normalized_key in {"sender_strategy_telegram", "sender_strategy_aiocqhttp", "deduplicate_multi_bot", "platform_shared_data_aiocqhttp"}:
+        if normalized_key in {
+            "sender_strategy_telegram",
+            "sender_strategy_aiocqhttp",
+            "deduplicate_multi_bot",
+            "platform_shared_data_aiocqhttp",
+        }:
             lowered = raw_value.lower()
             if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
                 return True
@@ -1065,13 +1070,19 @@ class RSSHubPlugin(Star):
         # Check if platform shared data is enabled for this platform
         shared_data_enabled = False
         if self.config and self.config.platform_shared_data:
-            shared_data_enabled = self.config.platform_shared_data.get(platform_name, False)
+            shared_data_enabled = self.config.platform_shared_data.get(
+                platform_name, False
+            )
 
         if shared_data_enabled:
             # Use platform-level subscription check
-            existing_sub = await Sub.get_by_platform_and_link(platform_name, url, target_session)
+            existing_sub = await Sub.get_by_platform_and_link(
+                platform_name, url, target_session
+            )
             if existing_sub:
-                yield event.plain_result(f"该源已在平台共享订阅中存在: {existing_sub.feed.title}")
+                yield event.plain_result(
+                    f"该源已在平台共享订阅中存在: {existing_sub.feed.title}"
+                )
                 return
         else:
             # Use user-level subscription check
@@ -1134,14 +1145,18 @@ class RSSHubPlugin(Star):
             platform_name = event.platform.name
             shared_data_enabled = False
             if self.config and self.config.platform_shared_data:
-                shared_data_enabled = self.config.platform_shared_data.get(platform_name, False)
+                shared_data_enabled = self.config.platform_shared_data.get(
+                    platform_name, False
+                )
 
             is_owner = sub.user_id == user_id
             is_current_session = bool(sub.target_session) and (
                 sub.target_session == current_session
             )
             # In shared data mode, allow unsubscribing any subscription from the same platform
-            is_same_platform = shared_data_enabled and sub.platform_name == platform_name
+            is_same_platform = (
+                shared_data_enabled and sub.platform_name == platform_name
+            )
 
             if not (is_owner or is_current_session or is_same_platform):
                 yield event.plain_result("无权限删除该订阅")
@@ -1175,7 +1190,9 @@ class RSSHubPlugin(Star):
         # Check if platform shared data is enabled
         shared_data_enabled = False
         if self.config and self.config.platform_shared_data:
-            shared_data_enabled = self.config.platform_shared_data.get(platform_name, False)
+            shared_data_enabled = self.config.platform_shared_data.get(
+                platform_name, False
+            )
 
         list_offset = 0
         total_count = 0
@@ -1892,10 +1909,12 @@ class RSSHubPlugin(Star):
         ]
 
         if event.is_admin():
-            result_lines.extend([
-                "",
-                "管理员: 每分钟监控任务会自动尝试重试失败队列中的消息。",
-            ])
+            result_lines.extend(
+                [
+                    "",
+                    "管理员: 每分钟监控任务会自动尝试重试失败队列中的消息。",
+                ]
+            )
 
         yield event.plain_result("\n".join(result_lines))
 

@@ -143,7 +143,9 @@ class RSSMonitor:
                     if not sender_platform_name and notif.target_session:
                         sender_platform_name = notif.target_session.split(":", 1)[0]
 
-                    sender = get_sender_for_platform_name(sender_platform_name, self.config)
+                    sender = get_sender_for_platform_name(
+                        sender_platform_name, self.config
+                    )
                     timeout = self.config.timeout if self.config else 30
                     proxy = self.config.proxy if self.config else ""
                     sender.configure_runtime(
@@ -195,7 +197,9 @@ class RSSMonitor:
                             )
 
                 except Exception as ex:
-                    await FailedNotification.increment_retry(notif.id, fail_reason=str(ex))
+                    await FailedNotification.increment_retry(
+                        notif.id, fail_reason=str(ex)
+                    )
                     logger.error(
                         "Failed to process failed notification: notif=%s, error=%s",
                         notif.id,
@@ -405,8 +409,12 @@ class RSSMonitor:
                         fanout_subs = await Sub.get_active_by_feed_id(feed.id)
 
                     # Apply multi-bot deduplication if enabled
-                    if self.config and getattr(self.config, "deduplicate_multi_bot", True):
-                        fanout_subs = self._deduplicate_session_subscriptions(fanout_subs)
+                    if self.config and getattr(
+                        self.config, "deduplicate_multi_bot", True
+                    ):
+                        fanout_subs = self._deduplicate_session_subscriptions(
+                            fanout_subs
+                        )
 
                     await Notifier(
                         feed=feed,

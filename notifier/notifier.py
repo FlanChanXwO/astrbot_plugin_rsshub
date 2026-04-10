@@ -372,7 +372,9 @@ class Notifier:
                     if not sender_platform_name and notif.target_session:
                         sender_platform_name = notif.target_session.split(":", 1)[0]
 
-                    sender = get_sender_for_platform_name(sender_platform_name, self.config)
+                    sender = get_sender_for_platform_name(
+                        sender_platform_name, self.config
+                    )
                     sender.configure_runtime(
                         timeout_seconds=self.timeout_seconds,
                         proxy=self.proxy,
@@ -410,8 +412,12 @@ class Notifier:
                         )
 
                 except Exception as ex:
-                    await FailedNotification.increment_retry(notif.id, fail_reason=str(ex))
-                    logger.error("Retry processing failed: notif=%s, error=%s", notif.id, ex)
+                    await FailedNotification.increment_retry(
+                        notif.id, fail_reason=str(ex)
+                    )
+                    logger.error(
+                        "Retry processing failed: notif=%s, error=%s", notif.id, ex
+                    )
 
         except Exception as ex:
             logger.error("Failed to process failed queue for sub=%s: %s", sub.id, ex)

@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.10] - 2026-04-12
+
+### Added
+
+- 新增命令中文别名支持，所有命令现在支持中英文双语调用：
+  - `/订阅` → `/sub`
+  - `/取消订阅` → `/unsub`
+  - `/取消全部订阅` → `/unsub_all`
+  - `/订阅列表` → `/sub_list`
+  - `/测试订阅` → `/sub_test`
+  - `/导出订阅` → `/sub_export`
+  - `/导入订阅` → `/sub_import`
+  - `/设置订阅` → `/sub_set`
+  - `/设置默认订阅` → `/sub_set_default`
+  - `/绑定订阅` → `/sub_bind`
+  - `/设置会话默认` → `/sub_session_default_set`
+  - `/获取会话默认` → `/sub_session_default_get`
+  - `/RSS配置` → `/rss_conf`
+  - `/失败队列` → `/sub_failed_queue`
+  - `/RSS帮助` → `/rsshelp`
+
+### Changed
+
+- 优化订阅导出格式：导出时自动排除 `target_session` 字段（该字段根据当前会话实时计算）
+- 增强导入兼容性：检测并忽略导入文件中的 `id`/`sid`/`sub_id` 字段，确保跨 Bot 实例迁移时 ID 正确生成
+
 ## [1.0.9] - 2026-04-09
 
 ### Added

@@ -170,44 +170,46 @@
 
 ### 基础命令
 
-| 命令                                   | 说明                                               |
-|--------------------------------------|--------------------------------------------------|
-| `/sub <RSS链接> [目标]`                  | 新增订阅，目标可选 `private`/`group`/`current`/完整 session |
-| `/unsub <订阅ID>`                      | 删除单个订阅                                           |
-| `/unsub_all [global]`                | 删除订阅；默认仅清除当前会话，`global` 清除所有会话（需管理员）             |
-| `/sub_list [all [page] [page_size]]` | 查看当前用户订阅列表（管理员可用 `all` 查看所有会话）                   |
-| `/sub_export [all]`                  | 导出订阅到 TOML 文件，默认当前会话，`all`=所有订阅（管理员）             |
-| `/sub_import [文件路径]`                 | 从 TOML 文件导入订阅                                    |
+所有命令均支持中英文别名，例如 `/sub` 和 `/订阅` 等价：
+
+| 命令 | 中文别名 | 说明 |
+|------|---------|------|
+| `/sub <RSS链接> [目标]` | `/订阅` | 新增订阅，目标可选 `private`/`group`/`current`/完整 session |
+| `/unsub <订阅ID>` | `/取消订阅` | 删除单个订阅 |
+| `/unsub_all [global]` | `/取消全部订阅` | 删除订阅；默认仅清除当前会话，`global` 清除所有会话（需管理员） |
+| `/sub_list [all [page] [page_size]]` | `/订阅列表` | 查看当前用户订阅列表（管理员可用 `all` 查看所有会话） |
+| `/sub_export [all]` | `/导出订阅` | 导出订阅到 TOML 文件，默认当前会话，`all`=所有订阅（管理员） |
+| `/sub_import [文件路径]` | `/导入订阅` | 从 TOML 文件导入订阅 |
 
 ### 订阅设置
 
-| 命令                                       | 说明                            |
-|------------------------------------------|-------------------------------|
-| `/sub_set <订阅ID> <选项> <值>`               | 设置单个订阅选项（支持 `target_session`） |
-| `/sub_set_default <选项> <值>`              | 设置用户默认选项                      |
-| `/sub_bind <目标>`                         | 绑定当前用户默认推送目标                  |
-| `/sub_session_default_set <key> <value>` | 设置会话级订阅默认项（新订阅自动继承）           |
-| `/sub_session_default_get`               | 查看当前会话默认项                     |
+| 命令 | 中文别名 | 说明 |
+|------|---------|------|
+| `/sub_set <订阅ID> <选项> <值>` | `/设置订阅` | 设置单个订阅选项（支持 `target_session`） |
+| `/sub_set_default <选项> <值>` | `/设置默认订阅` | 设置用户默认选项 |
+| `/sub_bind <目标>` | `/绑定订阅` | 绑定当前用户默认推送目标 |
+| `/sub_session_default_set <key> <value>` | `/设置会话默认` | 设置会话级订阅默认项（新订阅自动继承） |
+| `/sub_session_default_get` | `/获取会话默认` | 查看当前会话默认项 |
 
 ### 插件配置
 
-| 命令                        | 说明       |
-|---------------------------|----------|
-| `/rss_conf`               | 查看当前插件配置 |
-| `/rss_conf <key>`         | 查看指定配置项  |
-| `/rss_conf <key> <value>` | 设置指定配置项  |
+| 命令 | 中文别名 | 说明 |
+|------|---------|------|
+| `/rss_conf` | `/RSS配置` | 查看当前插件配置 |
+| `/rss_conf <key>` | `/RSS配置 <key>` | 查看指定配置项 |
+| `/rss_conf <key> <value>` | `/RSS配置 <key> <value>` | 设置指定配置项 |
+
+### 管理命令
+
+| 命令 | 中文别名 | 说明 |
+|------|---------|------|
+| `/sub_test <订阅ID> [粒度]` | `/测试订阅` | 管理员手动触发测试推送，粒度可选 `latest`/`all`/`<数量>` |
+| `/sub_failed_queue` | `/失败队列` | 查看失败队列状态 |
+| `/rsshelp` | `/RSS帮助` | 查看帮助 |
 
 **可配置项：** `proxy`/`rsshub_base_url`/`default_interval`/`minimal_interval`/`timeout`/`download_image_before_send`/
 `failed_queue_capacity`/`sender_strategy_telegram`/`sender_strategy_aiocqhttp`/`deduplicate_multi_bot`/
 `platform_shared_data_aiocqhttp`
-
-### 管理命令
-
-| 命令                      | 说明                                     |
-|-------------------------|----------------------------------------|
-| `/sub_test <订阅ID> [粒度]` | 管理员手动触发测试推送，粒度可选 `latest`/`all`/`<数量>` |
-| `/sub_failed_queue`     | 查看失败队列状态                               |
-| `/rsshelp`              | 查看帮助                                   |
 
 ### 订阅选项说明
 

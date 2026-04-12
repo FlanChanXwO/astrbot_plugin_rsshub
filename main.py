@@ -1035,7 +1035,7 @@ class RSSHubPlugin(Star):
 
     # ===== 命令处理 =====
 
-    @filter.command("sub")
+    @filter.command("sub", alias={"订阅"})
     async def cmd_sub(
         self,
         event: AstrMessageEvent,
@@ -1121,7 +1121,7 @@ class RSSHubPlugin(Star):
             f"推送目标: {target_session or '未设置'}"
         )
 
-    @filter.command("unsub")
+    @filter.command("unsub", alias={"取消订阅"})
     async def cmd_unsub(self, event: AstrMessageEvent, sub_id: str = ""):
         """取消订阅
 
@@ -1171,7 +1171,7 @@ class RSSHubPlugin(Star):
         await Sub.delete(sub)
         yield event.plain_result(f"已取消订阅 (ID: {sub_id_int})")
 
-    @filter.command("sub_list")
+    @filter.command("sub_list", alias={"订阅列表"})
     async def cmd_list(
         self,
         event: AstrMessageEvent,
@@ -1287,7 +1287,7 @@ class RSSHubPlugin(Star):
         yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("sub_test")
+    @filter.command("sub_test", alias={"测试订阅"})
     async def cmd_sub_test(
         self,
         event: AstrMessageEvent,
@@ -1369,7 +1369,7 @@ class RSSHubPlugin(Star):
             f"首条: {first_title}"
         )
 
-    @filter.command("unsub_all")
+    @filter.command("unsub_all", alias={"取消全部订阅"})
     async def cmd_unsub_all(self, event: AstrMessageEvent, scope: str = ""):
         """取消当前会话或所有订阅
 
@@ -1447,7 +1447,7 @@ class RSSHubPlugin(Star):
 
         yield event.plain_result(f"已取消{scope_desc}订阅，共删除 {deleted_count} 条")
 
-    @filter.command("sub_export")
+    @filter.command("sub_export", alias={"导出订阅"})
     async def cmd_sub_export(
         self,
         event: AstrMessageEvent,
@@ -1533,7 +1533,7 @@ class RSSHubPlugin(Star):
                     cleanup_ex,
                 )
 
-    @filter.command("sub_import", alias={"import"})
+    @filter.command("sub_import", alias={"import", "导入订阅"})
     async def cmd_sub_import(self, event: AstrMessageEvent, import_path: str = ""):
         """Import subscriptions from TOML file.
 
@@ -1678,7 +1678,7 @@ class RSSHubPlugin(Star):
                 async with self._import_session_lock:
                     self._import_sessions.pop(session_key, None)
 
-    @filter.command("sub_set")
+    @filter.command("sub_set", alias={"设置订阅"})
     async def cmd_set_sub_option(
         self, event: AstrMessageEvent, sub_id: str = "", key: str = "", value: str = ""
     ):
@@ -1728,7 +1728,7 @@ class RSSHubPlugin(Star):
             f"订阅 [{sub_id_int}] 已更新: {option_key} = {parsed_value}"
         )
 
-    @filter.command("sub_set_default")
+    @filter.command("sub_set_default", alias={"设置默认订阅"})
     async def cmd_set_default_option(
         self, event: AstrMessageEvent, key: str = "", value: str = ""
     ):
@@ -1762,7 +1762,7 @@ class RSSHubPlugin(Star):
         await User.update_defaults(user_id, **{option_key: parsed_value})
         yield event.plain_result(f"默认选项已更新: {option_key} = {parsed_value}")
 
-    @filter.command("sub_bind")
+    @filter.command("sub_bind", alias={"绑定订阅"})
     async def cmd_sub_bind(self, event: AstrMessageEvent, target: str = ""):
         """绑定当前用户默认推送目标
 
@@ -1783,7 +1783,7 @@ class RSSHubPlugin(Star):
         await User.set_default_target(user_id, target_session)
         yield event.plain_result(f"已绑定默认推送目标: {target_session}")
 
-    @filter.command("sub_session_default_set")
+    @filter.command("sub_session_default_set", alias={"设置会话默认"})
     async def cmd_sub_session_default_set(
         self,
         event: AstrMessageEvent,
@@ -1823,7 +1823,7 @@ class RSSHubPlugin(Star):
             f"会话默认配置已更新: {normalized_key} = {parsed_value}"
         )
 
-    @filter.command("sub_session_default_get")
+    @filter.command("sub_session_default_get", alias={"获取会话默认"})
     async def cmd_sub_session_default_get(self, event: AstrMessageEvent):
         """Get session-level defaults in current session.
 
@@ -1838,7 +1838,7 @@ class RSSHubPlugin(Star):
             "当前会话订阅默认项:\n" + json.dumps(defaults, ensure_ascii=False, indent=2)
         )
 
-    @filter.command("rss_conf")
+    @filter.command("rss_conf", alias={"RSS配置"})
     async def cmd_rss_conf(
         self, event: AstrMessageEvent, key: str = "", value: str = ""
     ):
@@ -1900,7 +1900,7 @@ class RSSHubPlugin(Star):
         self.config.set(normalized_key, parsed_value)
         yield event.plain_result(f"插件配置已更新: {normalized_key} = {parsed_value}")
 
-    @filter.command("sub_failed_queue")
+    @filter.command("sub_failed_queue", alias={"失败队列"})
     async def cmd_sub_failed_queue(self, event: AstrMessageEvent):
         """查看失败队列状态
 
@@ -1945,7 +1945,7 @@ class RSSHubPlugin(Star):
 
         yield event.plain_result("\n".join(result_lines))
 
-    @filter.command("rsshelp")
+    @filter.command("rsshelp", alias={"RSS帮助"})
     async def cmd_help(self, event: AstrMessageEvent):
         """RSS插件帮助"""
         command_lines = [

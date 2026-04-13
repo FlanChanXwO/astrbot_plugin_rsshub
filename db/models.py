@@ -334,6 +334,7 @@ async def _migrate_user_id_to_text(conn) -> None:
     """将 user_id 列从 INTEGER 迁移到 TEXT 类型。
 
     SQLite 不支持直接 ALTER COLUMN，需要重建表。
+    迁移过程中会保留索引和触发器。
     """
 
     async def _table_exists(table: str) -> bool:
@@ -341,6 +342,28 @@ async def _migrate_user_id_to_text(conn) -> None:
             f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
         )
         return result.fetchone() is not None
+
+    async def _get_indexes(table: str) -> list[dict]:
+        """获取表的所有索引定义（除主键索引外）。"""
+        result = await conn.exec_driver_sql(
+            f"SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='{table}'"
+        )
+        rows = result.fetchall()
+        indexes = []
+        for row in rows:
+            name, sql = row[0], row[1]
+            # 跳过 SQLite 自动创建的索引（如 sqlite_autoindex_*）
+            if name and sql and not name.startswith("sqlite_autoindex"):
+                indexes.append({"name": name, "sql": sql})
+        return indexes
+
+    async def _get_triggers(table: str) -> list[dict]:
+        """获取表的所有触发器定义。"""
+        result = await conn.exec_driver_sql(
+            f"SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='{table}'"
+        )
+        rows = result.fetchall()
+        return [{"name": row[0], "sql": row[1]} for row in rows if row[1]]
 
     # 检查 rsshub_user.id 列类型
     if not await _table_exists("rsshub_user"):
@@ -357,10 +380,23 @@ async def _migrate_user_id_to_text(conn) -> None:
 
     logger.info("开始迁移 user_id 从 INTEGER 到 TEXT...")
 
+    # 备份索引和触发器
+    user_indexes = await _get_indexes("rsshub_user")
+    sub_indexes = await _get_indexes("rsshub_sub")
+    failed_indexes = await _get_indexes("rsshub_failed_notification")
+
+    user_triggers = await _get_triggers("rsshub_user")
+    sub_triggers = await _get_triggers("rsshub_sub")
+    failed_triggers = await _get_triggers("rsshub_failed_notification")
+
+    logger.debug(f"备份索引: user={len(user_indexes)}, sub={len(sub_indexes)}, failed={len(failed_indexes)}")
+    logger.debug(f"备份触发器: user={len(user_triggers)}, sub={len(sub_triggers)}, failed={len(failed_triggers)}")
+
     # 使用 SQLAlchemy 事务上下文管理器
     async with conn.begin():
         try:
-            # 1. 创建新表
+            # === 迁移 rsshub_user 表 ===
+            # 1. 创建新表（从当前表结构复制）
             await conn.exec_driver_sql("""
                 CREATE TABLE rsshub_user_new (
                     id TEXT PRIMARY KEY,
@@ -399,9 +435,25 @@ async def _migrate_user_id_to_text(conn) -> None:
             await conn.exec_driver_sql("DROP TABLE rsshub_user")
             await conn.exec_driver_sql("ALTER TABLE rsshub_user_new RENAME TO rsshub_user")
 
+            # 4. 重建索引
+            for idx in user_indexes:
+                try:
+                    await conn.exec_driver_sql(idx["sql"])
+                    logger.debug(f"重建索引: {idx['name']}")
+                except Exception as e:
+                    logger.warning(f"重建索引 {idx['name']} 失败: {e}")
+
+            # 5. 重建触发器
+            for trig in user_triggers:
+                try:
+                    await conn.exec_driver_sql(trig["sql"])
+                    logger.debug(f"重建触发器: {trig['name']}")
+                except Exception as e:
+                    logger.warning(f"重建触发器 {trig['name']} 失败: {e}")
+
             logger.info("rsshub_user 表迁移完成")
 
-            # 迁移 rsshub_sub 表
+            # === 迁移 rsshub_sub 表 ===
             # 1. 创建新表
             await conn.exec_driver_sql("""
                 CREATE TABLE rsshub_sub_new (
@@ -445,9 +497,25 @@ async def _migrate_user_id_to_text(conn) -> None:
             await conn.exec_driver_sql("DROP TABLE rsshub_sub")
             await conn.exec_driver_sql("ALTER TABLE rsshub_sub_new RENAME TO rsshub_sub")
 
+            # 4. 重建索引
+            for idx in sub_indexes:
+                try:
+                    await conn.exec_driver_sql(idx["sql"])
+                    logger.debug(f"重建索引: {idx['name']}")
+                except Exception as e:
+                    logger.warning(f"重建索引 {idx['name']} 失败: {e}")
+
+            # 5. 重建触发器
+            for trig in sub_triggers:
+                try:
+                    await conn.exec_driver_sql(trig["sql"])
+                    logger.debug(f"重建触发器: {trig['name']}")
+                except Exception as e:
+                    logger.warning(f"重建触发器 {trig['name']} 失败: {e}")
+
             logger.info("rsshub_sub 表迁移完成")
 
-            # 迁移 rsshub_failed_notification 表
+            # === 迁移 rsshub_failed_notification 表 ===
             # 1. 创建新表
             await conn.exec_driver_sql("""
                 CREATE TABLE rsshub_failed_notification_new (
@@ -486,6 +554,22 @@ async def _migrate_user_id_to_text(conn) -> None:
             await conn.exec_driver_sql(
                 "ALTER TABLE rsshub_failed_notification_new RENAME TO rsshub_failed_notification"
             )
+
+            # 4. 重建索引
+            for idx in failed_indexes:
+                try:
+                    await conn.exec_driver_sql(idx["sql"])
+                    logger.debug(f"重建索引: {idx['name']}")
+                except Exception as e:
+                    logger.warning(f"重建索引 {idx['name']} 失败: {e}")
+
+            # 5. 重建触发器
+            for trig in failed_triggers:
+                try:
+                    await conn.exec_driver_sql(trig["sql"])
+                    logger.debug(f"重建触发器: {trig['name']}")
+                except Exception as e:
+                    logger.warning(f"重建触发器 {trig['name']} 失败: {e}")
 
             logger.info("rsshub_failed_notification 表迁移完成")
 

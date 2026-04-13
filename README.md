@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/FlanChanXwO/astrbot_plugin_rsshub/master/assets/logo.png" width="400" alt="rsshub"/>
+
 <br/>
 
 **AstrBot RSS 订阅插件。**

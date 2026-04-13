@@ -39,7 +39,7 @@ class User(RSSHubModel, table=True):
     """用户模型，存储用户信息及其默认订阅选项。"""
 
     __tablename__ = "rsshub_user"
-    id: int = Field(default=None, primary_key=True, description="用户ID")
+    id: str = Field(default=None, primary_key=True, description="用户ID")
     state: int = Field(
         default=0, description="用户状态: -1=封禁, 0=访客, 1=用户, 100=管理员"
     )
@@ -117,7 +117,7 @@ class Sub(RSSHubModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     state: int = Field(default=1, description="订阅状态: 0=停用, 1=启用")
 
-    user_id: int = Field(foreign_key="rsshub_user.id", description="用户ID")
+    user_id: str = Field(foreign_key="rsshub_user.id", description="用户ID")
     feed_id: int = Field(foreign_key="rsshub_feed.id", description="FeedID")
 
     title: str | None = Field(default=None, max_length=1024, description="订阅标题")
@@ -176,7 +176,7 @@ class FailedNotification(RSSHubModel, table=True):
     __tablename__ = "rsshub_failed_notification"
     id: int | None = Field(default=None, primary_key=True)
     sub_id: int = Field(foreign_key="rsshub_sub.id", description="Subscription ID")
-    user_id: int = Field(foreign_key="rsshub_user.id", description="User ID")
+    user_id: str = Field(foreign_key="rsshub_user.id", description="User ID")
 
     # Message content (JSON serialized)
     content: str = Field(default="", description="Message content")
@@ -290,12 +290,20 @@ def resolve_effective_options(
 
 
 async def _ensure_schema_compat(conn) -> None:
-    """为旧数据库补齐迁移过程尚未纳入的新增列。"""
+    """为旧数据库补齐迁移过程尚未纳入的新增列，并处理 user_id 类型迁移。"""
 
     async def _has_column(table: str, column: str) -> bool:
         rows = (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
         return any(row[1] == column for row in rows)
 
+    async def _get_column_type(table: str, column: str) -> str:
+        rows = (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
+        for row in rows:
+            if row[1] == column:
+                return row[2].upper()
+        return ""
+
+    # 新增列兼容（旧版本迁移）
     if not await _has_column("rsshub_sub", "target_session"):
         await conn.exec_driver_sql(
             "ALTER TABLE rsshub_sub ADD COLUMN target_session TEXT"
@@ -316,13 +324,200 @@ async def _ensure_schema_compat(conn) -> None:
             "ALTER TABLE rsshub_sub ADD COLUMN platform_name TEXT"
         )
 
+    # User ID 类型迁移: INTEGER -> TEXT
+    await _migrate_user_id_to_text(conn)
+
+
+async def _migrate_user_id_to_text(conn) -> None:
+    """将 user_id 列从 INTEGER 迁移到 TEXT 类型。
+
+    SQLite 不支持直接 ALTER COLUMN，需要重建表。
+    """
+
+    async def _get_column_type(table: str, column: str) -> str:
+        rows = (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
+        for row in rows:
+            if row[1] == column:
+                return row[2].upper()
+        return ""
+
+    async def _table_exists(table: str) -> bool:
+        result = await conn.exec_driver_sql(
+            f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
+        )
+        return result.fetchone() is not None
+
+    # 检查 rsshub_user.id 列类型
+    if not await _table_exists("rsshub_user"):
+        return
+
+    user_id_type = await _get_column_type("rsshub_user", "id")
+    if user_id_type == "TEXT":
+        # 已经是 TEXT 类型，无需迁移
+        return
+
+    if user_id_type != "INTEGER":
+        logger.warning(f"rsshub_user.id 列类型为 {user_id_type}，无法自动迁移到 TEXT")
+        return
+
+    logger.info("开始迁移 user_id 从 INTEGER 到 TEXT...")
+
+    # 迁移 rsshub_user 表
+    await conn.exec_driver_sql("BEGIN TRANSACTION")
+    try:
+        # 1. 创建新表
+        await conn.exec_driver_sql("""
+            CREATE TABLE rsshub_user_new (
+                id TEXT PRIMARY KEY,
+                state INTEGER NOT NULL DEFAULT 0,
+                lang TEXT NOT NULL DEFAULT 'zh-Hans',
+                sub_limit INTEGER,
+                interval INTEGER,
+                notify INTEGER NOT NULL DEFAULT 1,
+                send_mode INTEGER NOT NULL DEFAULT 0,
+                length_limit INTEGER NOT NULL DEFAULT 0,
+                link_preview INTEGER NOT NULL DEFAULT 0,
+                display_author INTEGER NOT NULL DEFAULT 0,
+                display_via INTEGER NOT NULL DEFAULT 0,
+                display_title INTEGER NOT NULL DEFAULT 0,
+                display_entry_tags INTEGER NOT NULL DEFAULT -1,
+                style INTEGER NOT NULL DEFAULT 0,
+                display_media INTEGER NOT NULL DEFAULT 0,
+                default_target_session TEXT,
+                needs_binding_notice INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 2. 迁移数据
+        await conn.exec_driver_sql("""
+            INSERT INTO rsshub_user_new
+            SELECT CAST(id AS TEXT), state, lang, sub_limit, interval, notify, send_mode,
+                   length_limit, link_preview, display_author, display_via, display_title,
+                   display_entry_tags, style, display_media, default_target_session,
+                   needs_binding_notice, created_at, updated_at
+            FROM rsshub_user
+        """)
+
+        # 3. 删除旧表，重命名新表
+        await conn.exec_driver_sql("DROP TABLE rsshub_user")
+        await conn.exec_driver_sql("ALTER TABLE rsshub_user_new RENAME TO rsshub_user")
+
+        logger.info("rsshub_user 表迁移完成")
+    except Exception as e:
+        await conn.exec_driver_sql("ROLLBACK")
+        logger.error(f"rsshub_user 表迁移失败: {e}")
+        raise
+
+    # 迁移 rsshub_sub 表
+    try:
+        # 1. 创建新表
+        await conn.exec_driver_sql("""
+            CREATE TABLE rsshub_sub_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                state INTEGER NOT NULL DEFAULT 1,
+                user_id TEXT NOT NULL,
+                feed_id INTEGER NOT NULL,
+                title TEXT,
+                tags TEXT,
+                target_session TEXT,
+                platform_name TEXT,
+                interval INTEGER,
+                notify INTEGER NOT NULL DEFAULT -100,
+                send_mode INTEGER NOT NULL DEFAULT -100,
+                length_limit INTEGER NOT NULL DEFAULT -100,
+                link_preview INTEGER NOT NULL DEFAULT -100,
+                display_author INTEGER NOT NULL DEFAULT -100,
+                display_via INTEGER NOT NULL DEFAULT -100,
+                display_title INTEGER NOT NULL DEFAULT -100,
+                display_entry_tags INTEGER NOT NULL DEFAULT -100,
+                style INTEGER NOT NULL DEFAULT -100,
+                display_media INTEGER NOT NULL DEFAULT -100,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES rsshub_user (id),
+                FOREIGN KEY (feed_id) REFERENCES rsshub_feed (id)
+            )
+        """)
+
+        # 2. 迁移数据
+        await conn.exec_driver_sql("""
+            INSERT INTO rsshub_sub_new
+            SELECT id, state, CAST(user_id AS TEXT), feed_id, title, tags, target_session,
+                   platform_name, interval, notify, send_mode, length_limit, link_preview,
+                   display_author, display_via, display_title, display_entry_tags, style,
+                   display_media, created_at, updated_at
+            FROM rsshub_sub
+        """)
+
+        # 3. 删除旧表，重命名新表
+        await conn.exec_driver_sql("DROP TABLE rsshub_sub")
+        await conn.exec_driver_sql("ALTER TABLE rsshub_sub_new RENAME TO rsshub_sub")
+
+        logger.info("rsshub_sub 表迁移完成")
+    except Exception as e:
+        await conn.exec_driver_sql("ROLLBACK")
+        logger.error(f"rsshub_sub 表迁移失败: {e}")
+        raise
+
+    # 迁移 rsshub_failed_notification 表
+    try:
+        # 1. 创建新表
+        await conn.exec_driver_sql("""
+            CREATE TABLE rsshub_failed_notification_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sub_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                media_urls TEXT,
+                entry_title TEXT,
+                entry_link TEXT,
+                feed_title TEXT,
+                feed_link TEXT,
+                platform_name TEXT,
+                target_session TEXT,
+                options TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                fail_reason TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (sub_id) REFERENCES rsshub_sub (id),
+                FOREIGN KEY (user_id) REFERENCES rsshub_user (id)
+            )
+        """)
+
+        # 2. 迁移数据
+        await conn.exec_driver_sql("""
+            INSERT INTO rsshub_failed_notification_new
+            SELECT id, sub_id, CAST(user_id AS TEXT), content, media_urls, entry_title,
+                   entry_link, feed_title, feed_link, platform_name, target_session,
+                   options, retry_count, fail_reason, created_at, updated_at
+            FROM rsshub_failed_notification
+        """)
+
+        # 3. 删除旧表，重命名新表
+        await conn.exec_driver_sql("DROP TABLE rsshub_failed_notification")
+        await conn.exec_driver_sql(
+            "ALTER TABLE rsshub_failed_notification_new RENAME TO rsshub_failed_notification"
+        )
+
+        logger.info("rsshub_failed_notification 表迁移完成")
+    except Exception as e:
+        await conn.exec_driver_sql("ROLLBACK")
+        logger.error(f"rsshub_failed_notification 表迁移失败: {e}")
+        raise
+
+    await conn.exec_driver_sql("COMMIT")
+    logger.info("user_id 类型迁移完成 (INTEGER -> TEXT)")
+
 
 class SubMethods:
     """Sub辅助方法。"""
 
     @staticmethod
     async def create(
-        user_id: int,
+        user_id: str,
         feed_id: int,
         target_session: str | None = None,
         platform_name: str | None = None,
@@ -340,7 +535,7 @@ class SubMethods:
             return sub
 
     @staticmethod
-    async def get_by_user(user_id: int) -> list[Sub]:
+    async def get_by_user(user_id: str) -> list[Sub]:
         async with get_session() as session:
             from sqlmodel import select
 
@@ -446,7 +641,7 @@ class SubMethods:
             return {sub.id: sub for sub in subs if sub.id is not None}
 
     @staticmethod
-    async def get_by_id_and_user(sub_id: int, user_id: int) -> Sub | None:
+    async def get_by_id_and_user(sub_id: int, user_id: str) -> Sub | None:
         async with get_session() as session:
             from sqlmodel import select
 
@@ -456,7 +651,7 @@ class SubMethods:
 
     @staticmethod
     async def get_by_user_and_link(
-        user_id: int,
+        user_id: str,
         feed_link: str,
         target_session: str | None = None,
     ) -> Sub | None:
@@ -579,7 +774,7 @@ class SubMethods:
                 await session.commit()
 
     @staticmethod
-    async def delete_all_by_user(user_id: int) -> int:
+    async def delete_all_by_user(user_id: str) -> int:
         async with get_session() as session:
             from sqlmodel import select
 
@@ -598,7 +793,7 @@ class SubMethods:
             return count
 
     @staticmethod
-    async def update_options(sub_id: int, user_id: int, **kwargs) -> Sub | None:
+    async def update_options(sub_id: int, user_id: str, **kwargs) -> Sub | None:
         async with get_session() as session:
             from sqlmodel import select
 
@@ -620,7 +815,7 @@ class UserMethods:
     """User辅助方法。"""
 
     @staticmethod
-    async def get_or_create(user_id: int) -> User:
+    async def get_or_create(user_id: str) -> User:
         async with get_session() as session:
             user = await session.get(User, user_id)
             if not user:
@@ -631,7 +826,7 @@ class UserMethods:
             return user
 
     @staticmethod
-    async def update_defaults(user_id: int, **kwargs) -> User:
+    async def update_defaults(user_id: str, **kwargs) -> User:
         async with get_session() as session:
             user = await session.get(User, user_id)
             if not user:
@@ -645,7 +840,7 @@ class UserMethods:
             return user
 
     @staticmethod
-    async def set_default_target(user_id: int, target_session: str) -> User:
+    async def set_default_target(user_id: str, target_session: str) -> User:
         return await UserMethods.update_defaults(
             user_id,
             default_target_session=target_session,
@@ -653,11 +848,11 @@ class UserMethods:
         )
 
     @staticmethod
-    async def mark_binding_notice(user_id: int) -> User:
+    async def mark_binding_notice(user_id: str) -> User:
         return await UserMethods.update_defaults(user_id, needs_binding_notice=1)
 
     @staticmethod
-    async def consume_binding_notice(user_id: int) -> bool:
+    async def consume_binding_notice(user_id: str) -> bool:
         async with get_session() as session:
             user = await session.get(User, user_id)
             if not user or user.needs_binding_notice == 0:
@@ -745,7 +940,7 @@ class FailedNotificationMethods:
     @staticmethod
     async def enqueue(
         sub_id: int,
-        user_id: int,
+        user_id: str,
         content: str,
         media_urls: list[str] | None = None,
         entry_title: str | None = None,

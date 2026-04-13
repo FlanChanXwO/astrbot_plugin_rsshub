@@ -52,8 +52,8 @@ async def delete_subscriptions(subscriptions: list) -> int:
 async def apply_import_payload(
     *,
     payload: SubscriptionImportPayload,
-    user_id: int,
-    user_db_id: int,
+    user_id: str,
+    user_db_id: str,
     current_session: str,
     default_platform_name: str,
     validate_options: Callable[
@@ -99,7 +99,7 @@ async def apply_import_payload(
 
         validated.pop("target_session", None)
         if validated:
-            updated = await Sub.update_options(sub.id, user_id, **validated)
+            updated = await Sub.update_options(sub.id, user_db_id, **validated)
             if not updated:
                 result.failed += 1
                 result.details.append(f"[{index}] 导入后写入选项失败: {record.link}")

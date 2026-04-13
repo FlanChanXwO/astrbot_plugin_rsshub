@@ -277,7 +277,7 @@ class Notifier:
         return None
 
     @staticmethod
-    async def _mark_binding_needed(user_id: int) -> None:
+    async def _mark_binding_needed(user_id: str) -> None:
         try:
             await User.mark_binding_notice(user_id)
         except Exception as ex:

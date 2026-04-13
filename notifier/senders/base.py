@@ -204,10 +204,11 @@ class MessageSender:
                     continue
                 image_components.append(Image(file=media_file_value, url=media_url))
                 image_count += 1
+            elif media_type == "video":
+                # 视频放在消息上方（与图片一致）
+                image_components.append(Video(file=media_file_value))
             elif media_type == "audio":
                 tail_components.append(Record(file=media_file_value, text="audio"))
-            elif media_type == "video":
-                tail_components.append(Video(file=media_file_value))
             elif media_type == "file":
                 parsed = urlparse(media_url)
                 filename = unquote(parsed.path.rsplit("/", 1)[-1]) or "attachment"

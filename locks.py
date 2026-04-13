@@ -30,7 +30,7 @@ class LockManager:
         self._db_write_lock = asyncio.Lock()
 
         # 用户操作锁（防止用户同时执行多个命令）
-        self._user_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._user_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         # Feed 更新锁（防止同一 Feed 被同时更新）
         self._feed_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -63,7 +63,7 @@ class LockManager:
         """获取数据库写锁"""
         return self._db_write_lock
 
-    def user_lock(self, user_id: int) -> asyncio.Lock:
+    def user_lock(self, user_id: str) -> asyncio.Lock:
         """
         获取用户操作锁
 
@@ -102,7 +102,7 @@ class LockManager:
         async with sem:
             return await coro
 
-    async def with_user_lock(self, user_id: int, coro):
+    async def with_user_lock(self, user_id: str, coro):
         """
         使用用户锁执行协程
 
@@ -140,7 +140,7 @@ def global_web_semaphore() -> asyncio.Semaphore:
     return get_lock_manager().global_web_semaphore
 
 
-def user_lock(user_id: int) -> asyncio.Lock:
+def user_lock(user_id: str) -> asyncio.Lock:
     """获取用户锁"""
     return get_lock_manager().user_lock(user_id)
 

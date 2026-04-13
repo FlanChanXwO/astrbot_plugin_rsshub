@@ -389,8 +389,12 @@ async def _migrate_user_id_to_text(conn) -> None:
     sub_triggers = await _get_triggers("rsshub_sub")
     failed_triggers = await _get_triggers("rsshub_failed_notification")
 
-    logger.debug(f"备份索引: user={len(user_indexes)}, sub={len(sub_indexes)}, failed={len(failed_indexes)}")
-    logger.debug(f"备份触发器: user={len(user_triggers)}, sub={len(sub_triggers)}, failed={len(failed_triggers)}")
+    logger.debug(
+        f"备份索引: user={len(user_indexes)}, sub={len(sub_indexes)}, failed={len(failed_indexes)}"
+    )
+    logger.debug(
+        f"备份触发器: user={len(user_triggers)}, sub={len(sub_triggers)}, failed={len(failed_triggers)}"
+    )
 
     # 使用 SQLAlchemy 事务上下文管理器
     async with conn.begin():

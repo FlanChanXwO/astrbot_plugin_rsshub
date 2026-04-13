@@ -88,7 +88,7 @@ class FeedNotFoundError(RSSError):
 class SubscriptionNotFoundError(RSSError):
     """订阅未找到错误"""
 
-    def __init__(self, sub_id: int = None, user_id: int = None):
+    def __init__(self, sub_id: int = None, user_id: str | None = None):
         self.sub_id = sub_id
         self.user_id = user_id
         message = "Subscription not found"

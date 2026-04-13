@@ -1079,7 +1079,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(target_err)
             return
 
-        platform_name = event.platform.name
+        platform_name = event.platform_meta.name
 
         # Check if platform shared data is enabled for this platform
         shared_data_enabled = self._is_platform_shared(platform_name)
@@ -1152,7 +1152,7 @@ class RSSHubPlugin(Star):
 
         if not event.is_admin():
             # Check if platform shared data is enabled
-            platform_name = event.platform.name
+            platform_name = event.platform_meta.name
             shared_data_enabled = self._is_platform_shared(platform_name)
 
             is_owner = sub.user_id == user_id
@@ -1194,7 +1194,7 @@ class RSSHubPlugin(Star):
         scope_value = scope.strip().lower()
         show_all_sessions = scope_value == "all" and event.is_admin()
         current_session = event.unified_msg_origin
-        platform_name = event.platform.name
+        platform_name = event.platform_meta.name
 
         # Check if platform shared data is enabled
         shared_data_enabled = self._is_platform_shared(platform_name)
@@ -1601,7 +1601,7 @@ class RSSHubPlugin(Star):
             user_id=user_id,
             user_db_id=user.id,
             current_session=event.unified_msg_origin,
-            default_platform_name=event.platform.name,
+            default_platform_name=event.platform_meta.name,
             validate_options=lambda options: self._validate_import_record_options(
                 event,
                 options,

@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.11] - 2026-04-13
+
+### Changed
+
+- **破坏性变更**: 数据库 `user_id` 字段类型从 `INTEGER` 改为 `TEXT`，以适配多平台差异：
+  - 微信个人号平台的 `user_id` 为字符串类型
+  - QQ 和 Telegram 平台的 `user_id` 为整数类型
+  - 所有平台的 `user_id` 现在统一以字符串形式存储
+  - 插件启动时自动检测并迁移旧数据库（INTEGER → TEXT）
+
+### Fixed
+
+- 修复微信个人号平台因 `user_id` 类型不匹配导致的订阅/查询失败问题
+
 ## [1.0.10] - 2026-04-12
 
 ### Added
@@ -176,4 +190,3 @@
 - 移除 `get_session_id` 工具函数（改用 `event.unified_msg_origin`）
 - 移除 `get_sender_for_session` 函数（改用 `get_sender_for_platform_name`）
 - 移除 `bot_self_id` 数据库字段（改为通过 provider 动态解析）
-

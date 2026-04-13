@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .aiocqhttp import AiocqhttpMessageSender
 from .base import MessageSender
+from .qq_official import QQOfficialMessageSender
 from .telegram import TelegramMessageSender
 
 
@@ -23,7 +24,7 @@ def get_sender_for_platform_name(
     # Check if config has sender_strategies
     strategies = getattr(config, "sender_strategies", None) if config else None
     if strategies is None:
-        strategies = {"telegram": True, "aiocqhttp": True}
+        strategies = {"telegram": True, "aiocqhttp": True, "qq_official": True}
 
     # Telegram strategy
     if normalized in {"telegram", "tg"} or "telegram" in normalized:
@@ -39,6 +40,16 @@ def get_sender_for_platform_name(
     if "aiocqhttp" in normalized or "onebot" in normalized:
         if strategies.get("aiocqhttp", True):
             return AiocqhttpMessageSender
+        return MessageSender
+
+    # QQ Official strategy
+    if normalized in {"qq_official", "qqofficial", "qq"}:
+        if strategies.get("qq_official", True):
+            return QQOfficialMessageSender
+        return MessageSender
+    if "qq_official" in normalized or "qqofficial" in normalized:
+        if strategies.get("qq_official", True):
+            return QQOfficialMessageSender
         return MessageSender
 
     return MessageSender

@@ -11,6 +11,11 @@
 
 ### Fixed
 
+- 修复 SQLite 架构兼容检查中的 `PRAGMA table_info(?)` 语法问题：
+  - 改为使用经过标识符校验的 `PRAGMA table_info("table")` 调用
+  - 避免插件启动时出现 `near "?": syntax error` 导致载入失败
+  - 增加动态表名合法性校验，降低 SQL 注入风险
+
 - 修复 `selectinload` 类型注解警告，使用字符串形式避免 SQLAlchemy 2.0 类型检查问题
 
 ## [1.0.12] - 2026-04-13
@@ -212,4 +217,3 @@
 - 移除 `get_session_id` 工具函数（改用 `event.unified_msg_origin`）
 - 移除 `get_sender_for_session` 函数（改用 `get_sender_for_platform_name`）
 - 移除 `bot_self_id` 数据库字段（改为通过 provider 动态解析）
-

@@ -2,6 +2,7 @@
 """RSS-to-AstrBot Database Models"""
 
 import os
+import re
 from datetime import datetime
 
 from sqlalchemy import JSON, Column, func
@@ -33,11 +34,20 @@ EFFECTIVE_OPTION_KEYS = (
 )
 
 
+# Restrict dynamic SQLite identifiers used in PRAGMA statements.
+_SQLITE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+async def _get_table_info_rows(conn, table: str) -> list:
+    """Return PRAGMA table_info rows for a validated table name."""
+    if not _SQLITE_IDENTIFIER_RE.fullmatch(table):
+        raise ValueError(f"Invalid SQLite identifier: {table}")
+    return (await conn.exec_driver_sql(f'PRAGMA table_info("{table}")')).fetchall()
+
+
 async def _get_column_type(conn, table: str, column: str) -> str:
     """获取指定表的列类型"""
-    rows = (await conn.exec_driver_sql(
-        f"PRAGMA table_info({table})"
-    )).fetchall()
+    rows = await _get_table_info_rows(conn, table)
     for row in rows:
         if row[1] == column:
             return row[2].upper()
@@ -302,9 +312,7 @@ async def _ensure_schema_compat(conn) -> None:
     """为旧数据库补齐迁移过程尚未纳入的新增列，并处理 user_id 类型迁移。"""
 
     async def _has_column(table: str, column: str) -> bool:
-        rows = (await conn.exec_driver_sql(
-            f"PRAGMA table_info({table})"
-        )).fetchall()
+        rows = await _get_table_info_rows(conn, table)
         return any(row[1] == column for row in rows)
 
     # 新增列兼容（旧版本迁移）

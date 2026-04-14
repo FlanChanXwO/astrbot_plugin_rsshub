@@ -96,6 +96,21 @@
 
 ---
 
+## 免费 RSS 源实例（公共可用）
+
+> 以下实例为公共服务，稳定性和可用性会随时间变化，建议优先自建或准备备用地址。
+
+| 名称 | 地址 | 类型 | 说明 |
+|------|------|------|------|
+| RSSHub 官方 | `https://rsshub.app` | RSSHub 实例 | 默认推荐，覆盖路由广 |
+| Feedly | `https://feedly.com/i/subscription/feed%2F<URL编码后的RSS链接>` | 在线阅读器 | 免费版可用于管理订阅 |
+| Inoreader | `https://www.inoreader.com` | 在线阅读器 | 免费版可聚合多源 |
+| Follow | `https://app.follow.is` | 在线阅读器 | 新一代 RSS 聚合器，支持多端 |
+
+> 提示：在本插件中通常将 `rsshub_base_url` 默认设置为可用的 RSSHub 实例地址（如 `https://rsshub.app`）。
+
+---
+
 ## 🛠️ 配置项
 
 在 AstrBot 管理面板的「配置」页面，找到 `RSSHub` 插件配置：

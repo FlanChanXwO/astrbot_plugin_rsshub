@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.14] - 2026-04-14
+
+### Added
+
+- 新增免费 RSS 源实例文档 [README.md](README.md)
+
 ## [1.0.13] - 2026-04-14
 
 ### Changed

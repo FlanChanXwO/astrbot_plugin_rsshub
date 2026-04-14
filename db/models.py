@@ -33,21 +33,25 @@ EFFECTIVE_OPTION_KEYS = (
     "display_media",
 )
 
-
-# Restrict dynamic SQLite identifiers used in PRAGMA statements.
 _SQLITE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-async def _get_table_info_rows(conn, table: str) -> list:
-    """Return PRAGMA table_info rows for a validated table name."""
+def _sqlite_table_info_sql(table: str) -> str:
+    """Build PRAGMA table_info SQL with a validated table identifier."""
     if not _SQLITE_IDENTIFIER_RE.fullmatch(table):
-        raise ValueError(f"Invalid SQLite identifier: {table}")
-    return (await conn.exec_driver_sql(f'PRAGMA table_info("{table}")')).fetchall()
+        raise ValueError(f"Invalid sqlite table identifier: {table!r}")
+    return f'PRAGMA table_info("{table}")'
+
+
+def _is_text_compatible_sqlite_type(column_type: str) -> bool:
+    """Return True when a SQLite declared type has TEXT affinity."""
+    normalized = (column_type or "").upper()
+    return any(token in normalized for token in ("TEXT", "CHAR", "CLOB"))
 
 
 async def _get_column_type(conn, table: str, column: str) -> str:
     """获取指定表的列类型"""
-    rows = await _get_table_info_rows(conn, table)
+    rows = (await conn.exec_driver_sql(_sqlite_table_info_sql(table))).fetchall()
     for row in rows:
         if row[1] == column:
             return row[2].upper()
@@ -312,7 +316,7 @@ async def _ensure_schema_compat(conn) -> None:
     """为旧数据库补齐迁移过程尚未纳入的新增列，并处理 user_id 类型迁移。"""
 
     async def _has_column(table: str, column: str) -> bool:
-        rows = await _get_table_info_rows(conn, table)
+        rows = (await conn.exec_driver_sql(_sqlite_table_info_sql(table))).fetchall()
         return any(row[1] == column for row in rows)
 
     # 新增列兼容（旧版本迁移）
@@ -382,8 +386,8 @@ async def _migrate_user_id_to_text(conn) -> None:
         return
 
     user_id_type = await _get_column_type(conn, "rsshub_user", "id")
-    if user_id_type == "TEXT":
-        # 已经是 TEXT 类型，无需迁移
+    if _is_text_compatible_sqlite_type(user_id_type):
+        # TEXT affinity types in SQLite are already compatible (e.g. TEXT/VARCHAR).
         return
 
     if user_id_type != "INTEGER":

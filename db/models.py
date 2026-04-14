@@ -36,7 +36,7 @@ EFFECTIVE_OPTION_KEYS = (
 async def _get_column_type(conn, table: str, column: str) -> str:
     """获取指定表的列类型"""
     rows = (await conn.exec_driver_sql(
-        "PRAGMA table_info(?)", (table,)
+        f"PRAGMA table_info({table})"
     )).fetchall()
     for row in rows:
         if row[1] == column:
@@ -303,7 +303,7 @@ async def _ensure_schema_compat(conn) -> None:
 
     async def _has_column(table: str, column: str) -> bool:
         rows = (await conn.exec_driver_sql(
-            "PRAGMA table_info(?)", (table,)
+            f"PRAGMA table_info({table})"
         )).fetchall()
         return any(row[1] == column for row in rows)
 

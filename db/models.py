@@ -35,7 +35,9 @@ EFFECTIVE_OPTION_KEYS = (
 
 async def _get_column_type(conn, table: str, column: str) -> str:
     """获取指定表的列类型"""
-    rows = (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
+    rows = (await conn.exec_driver_sql(
+        "PRAGMA table_info(?)", (table,)
+    )).fetchall()
     for row in rows:
         if row[1] == column:
             return row[2].upper()
@@ -300,7 +302,9 @@ async def _ensure_schema_compat(conn) -> None:
     """为旧数据库补齐迁移过程尚未纳入的新增列，并处理 user_id 类型迁移。"""
 
     async def _has_column(table: str, column: str) -> bool:
-        rows = (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
+        rows = (await conn.exec_driver_sql(
+            "PRAGMA table_info(?)", (table,)
+        )).fetchall()
         return any(row[1] == column for row in rows)
 
     # 新增列兼容（旧版本迁移）
@@ -337,14 +341,16 @@ async def _migrate_user_id_to_text(conn) -> None:
 
     async def _table_exists(table: str) -> bool:
         result = await conn.exec_driver_sql(
-            f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,)
         )
         return result.fetchone() is not None
 
     async def _get_indexes(table: str) -> list[dict]:
         """获取表的所有索引定义（除主键索引外）。"""
         result = await conn.exec_driver_sql(
-            f"SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='{table}'"
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=?",
+            (table,)
         )
         rows = result.fetchall()
         indexes = []
@@ -358,7 +364,8 @@ async def _migrate_user_id_to_text(conn) -> None:
     async def _get_triggers(table: str) -> list[dict]:
         """获取表的所有触发器定义。"""
         result = await conn.exec_driver_sql(
-            f"SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='{table}'"
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?",
+            (table,)
         )
         rows = result.fetchall()
         return [{"name": row[0], "sql": row[1]} for row in rows if row[1]]

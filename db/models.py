@@ -43,6 +43,12 @@ def _sqlite_table_info_sql(table: str) -> str:
     return f'PRAGMA table_info("{table}")'
 
 
+def _is_text_compatible_sqlite_type(column_type: str) -> bool:
+    """Return True when a SQLite declared type has TEXT affinity."""
+    normalized = (column_type or "").upper()
+    return any(token in normalized for token in ("TEXT", "CHAR", "CLOB"))
+
+
 async def _get_column_type(conn, table: str, column: str) -> str:
     """获取指定表的列类型"""
     rows = (await conn.exec_driver_sql(_sqlite_table_info_sql(table))).fetchall()
@@ -380,8 +386,8 @@ async def _migrate_user_id_to_text(conn) -> None:
         return
 
     user_id_type = await _get_column_type(conn, "rsshub_user", "id")
-    if user_id_type == "TEXT":
-        # 已经是 TEXT 类型，无需迁移
+    if _is_text_compatible_sqlite_type(user_id_type):
+        # TEXT affinity types in SQLite are already compatible (e.g. TEXT/VARCHAR).
         return
 
     if user_id_type != "INTEGER":

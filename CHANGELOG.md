@@ -217,3 +217,4 @@
 - 移除 `get_session_id` 工具函数（改用 `event.unified_msg_origin`）
 - 移除 `get_sender_for_session` 函数（改用 `get_sender_for_platform_name`）
 - 移除 `bot_self_id` 数据库字段（改为通过 provider 动态解析）
+

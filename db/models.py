@@ -349,8 +349,7 @@ async def _migrate_user_id_to_text(conn) -> None:
 
     async def _table_exists(table: str) -> bool:
         result = await conn.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table,)
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
         )
         return result.fetchone() is not None
 
@@ -358,7 +357,7 @@ async def _migrate_user_id_to_text(conn) -> None:
         """获取表的所有索引定义（除主键索引外）。"""
         result = await conn.exec_driver_sql(
             "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=?",
-            (table,)
+            (table,),
         )
         rows = result.fetchall()
         indexes = []
@@ -373,7 +372,7 @@ async def _migrate_user_id_to_text(conn) -> None:
         """获取表的所有触发器定义。"""
         result = await conn.exec_driver_sql(
             "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?",
-            (table,)
+            (table,),
         )
         rows = result.fetchall()
         return [{"name": row[0], "sql": row[1]} for row in rows if row[1]]

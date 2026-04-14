@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.13] - 2026-04-14
+
+### Changed
+
+- 优化数据库迁移逻辑：
+  - 修复 `_migrate_user_id_to_text` 中的嵌套事务问题，避免 SQLAlchemy 事务状态冲突
+  - 添加索引和触发器的备份恢复机制，表重建后自动恢复原有索引和触发器
+  - 提取 `_get_column_type` 为模块级辅助函数，供多个迁移函数共享
+
+### Fixed
+
+- 修复 `selectinload` 类型注解警告，使用字符串形式避免 SQLAlchemy 2.0 类型检查问题
+
 ## [1.0.12] - 2026-04-13
 
 ### Added

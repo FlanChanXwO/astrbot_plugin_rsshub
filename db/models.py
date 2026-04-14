@@ -1,6 +1,5 @@
 # ruff: noqa: UP037
-"""RSS-to-AstrBot Database Models
-"""
+"""RSS-to-AstrBot Database Models"""
 
 import os
 from datetime import datetime
@@ -435,9 +434,7 @@ async def _migrate_user_id_to_text(conn) -> None:
 
         # 3. 删除旧表，重命名新表
         await conn.exec_driver_sql("DROP TABLE rsshub_user")
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_user_new RENAME TO rsshub_user"
-        )
+        await conn.exec_driver_sql("ALTER TABLE rsshub_user_new RENAME TO rsshub_user")
 
         # 4. 重建索引
         for idx in user_indexes:
@@ -499,9 +496,7 @@ async def _migrate_user_id_to_text(conn) -> None:
 
         # 3. 删除旧表，重命名新表
         await conn.exec_driver_sql("DROP TABLE rsshub_sub")
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_sub_new RENAME TO rsshub_sub"
-        )
+        await conn.exec_driver_sql("ALTER TABLE rsshub_sub_new RENAME TO rsshub_sub")
 
         # 4. 重建索引
         for idx in sub_indexes:

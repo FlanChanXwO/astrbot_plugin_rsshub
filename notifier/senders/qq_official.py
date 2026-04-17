@@ -34,7 +34,9 @@ class QQOfficialMessageSender(MessageSender):
         return local_path or None
 
     @classmethod
-    def _log_media_component_file_check(cls, component: object, session_id: str) -> None:
+    def _log_media_component_file_check(
+        cls, component: object, session_id: str
+    ) -> None:
         file_value = str(getattr(component, "file", "") or "")
         local_path = cls._resolve_local_file_path(file_value)
         resolved_path = local_path or file_value
@@ -68,7 +70,9 @@ class QQOfficialMessageSender(MessageSender):
         )
 
     @classmethod
-    def _normalize_media_component_file(cls, component: object, session_id: str) -> None:
+    def _normalize_media_component_file(
+        cls, component: object, session_id: str
+    ) -> None:
         if not isinstance(component, (Image, Video, File, Record)):
             return
         file_value = str(getattr(component, "file", "") or "")
@@ -146,7 +150,6 @@ class QQOfficialMessageSender(MessageSender):
         cls._log_chain_media_files(chain, session_id)
         return cls._sanitize_nonexistent_local_media(chain, session_id)
 
-
     @classmethod
     def _normalize_chain_media_files(cls, chain: list, session_id: str) -> list:
         for component in chain:
@@ -223,7 +226,9 @@ class QQOfficialMessageSender(MessageSender):
                         session_id,
                     )
                     if missing_sources:
-                        message = cls._append_failed_media_links(message, missing_sources)
+                        message = cls._append_failed_media_links(
+                            message, missing_sources
+                        )
                     if not prepared_chain:
                         continue
                     video_result = await cls._send_chain(session_id, prepared_chain)
@@ -252,7 +257,9 @@ class QQOfficialMessageSender(MessageSender):
                 )
                 if missing_sources:
                     message = cls._append_failed_media_links(message, missing_sources)
-                    prepared_chain = [c for c in prepared_chain if not isinstance(c, Plain)]
+                    prepared_chain = [
+                        c for c in prepared_chain if not isinstance(c, Plain)
+                    ]
                     if message:
                         prepared_chain.append(Plain(message))
                 if not prepared_chain:
@@ -267,7 +274,9 @@ class QQOfficialMessageSender(MessageSender):
                         session_id,
                     )
                     if missing_sources:
-                        message = cls._append_failed_media_links(message, missing_sources)
+                        message = cls._append_failed_media_links(
+                            message, missing_sources
+                        )
                     if not prepared_chain:
                         continue
                     img_result = await cls._send_chain(session_id, prepared_chain)
@@ -294,7 +303,9 @@ class QQOfficialMessageSender(MessageSender):
                         session_id,
                     )
                     if missing_sources:
-                        message = cls._append_failed_media_links(message, missing_sources)
+                        message = cls._append_failed_media_links(
+                            message, missing_sources
+                        )
                         prepared_text_chain = [
                             c for c in prepared_text_chain if not isinstance(c, Plain)
                         ]
@@ -318,7 +329,9 @@ class QQOfficialMessageSender(MessageSender):
                 )
                 if missing_sources:
                     message = cls._append_failed_media_links(message, missing_sources)
-                    prepared_chain = [c for c in prepared_chain if not isinstance(c, Plain)]
+                    prepared_chain = [
+                        c for c in prepared_chain if not isinstance(c, Plain)
+                    ]
                     if message:
                         prepared_chain.append(Plain(message))
                 if not prepared_chain:

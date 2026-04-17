@@ -634,9 +634,8 @@ class RSSMonitor:
                 stable_aliases.add(stable_hash[4:])
 
             known_by_stable = any(alias in known_hashes for alias in stable_aliases)
-            known_by_compat = (
-                not known_by_stable
-                and any(entry_hash in known_hashes for entry_hash in entry_hashes)
+            known_by_compat = not known_by_stable and any(
+                entry_hash in known_hashes for entry_hash in entry_hashes
             )
 
             if not known_by_stable and not known_by_compat:
@@ -649,7 +648,6 @@ class RSSMonitor:
                 known_hashes.add(entry_hash)
 
         return new_hashes, updated_entries
-
 
     @staticmethod
     def _normalize_text(value: str, max_length: int = 1024) -> str:
@@ -803,7 +801,6 @@ class RSSMonitor:
 
         return "\n".join([guid, link, title, summary, first_content_value])
 
-
     def _hash_entry(self, entry) -> list[str]:
         """Calculate a robust dedupe fingerprint set for one entry."""
         upstream_material = self._upstream_compatible_material(entry)
@@ -835,7 +832,9 @@ class RSSMonitor:
 
         stable_material = f"v3|{stable_key}"
         content_material = f"v3|title={title}|link={link}|summary={summary[:512]}"
-        timestamp_material = f"v3|{stable_key}|ts={published_ts}" if published_ts else ""
+        timestamp_material = (
+            f"v3|{stable_key}|ts={published_ts}" if published_ts else ""
+        )
 
         fingerprints: list[str] = []
 

@@ -129,6 +129,7 @@
 |--------------------|----|-------------------------------|------|
 | `default_interval` | 整数 | 默认监控间隔（分钟），订阅未设置 interval 时使用 | `10` |
 | `minimal_interval` | 整数 | 最小监控间隔（分钟），限制命令/WebUI 设置的最小值  | `1`  |
+| `bootstrap_skip_history` | 布尔值 | 首轮是否跳过历史条目，开启后首次仅建立去重历史不推送旧消息 | `true` |
 
 ### 去重配置
 
@@ -225,8 +226,10 @@
 | `/rsshelp` | `/RSS帮助` | 查看帮助 |
 
 **可配置项：** `proxy`/`rsshub_base_url`/`default_interval`/`minimal_interval`/`timeout`/`download_image_before_send`/
-`failed_queue_capacity`/`sender_strategy_telegram`/`sender_strategy_aiocqhttp`/`deduplicate_multi_bot`/
-`platform_shared_data_aiocqhttp`
+`bootstrap_skip_history`/`failed_queue_capacity`/`failed_queue_max_retries`/`sender_strategy_telegram`/`sender_strategy_aiocqhttp`/
+`deduplicate_multi_bot`/`platform_shared_data_aiocqhttp`
+
+> 说明：监控主循环没有固定“每周期条目上限”。实际可见推送量受 RSS 源更新量、失败队列容量（`failed_queue_capacity`）、最大重试次数（`failed_queue_max_retries`）以及平台发送限流共同影响。
 
 ### 订阅选项说明
 

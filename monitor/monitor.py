@@ -341,13 +341,16 @@ class RSSMonitor:
                     feed_updated_fields.add("title")
 
                 old_hashes = list(feed.entry_hashes or [])
+                fetched_entries = len(rss_d.entries)
                 new_hashes, updated_entries = self._calculate_update(
                     old_hashes, rss_d.entries
                 )
+                dedup_new_count = len(updated_entries)
+                dedup_skipped_count = max(0, fetched_entries - dedup_new_count)
                 merged_hashes = self._merge_hash_history(
                     old_hashes,
                     new_hashes,
-                    len(rss_d.entries),
+                    fetched_entries,
                 )
 
                 if not old_hashes:
@@ -356,7 +359,63 @@ class RSSMonitor:
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
                     schedule_action = ("success", None)
                     self._stat.not_updated()
-                    logger.info(f"Feed首次初始化完成（不推送历史内容）: {feed.link}")
+                    if self._config_value("bootstrap_skip_history", True):
+                        logger.info(
+                            "Feed首次初始化完成（不推送历史内容）: %s, fetched_entries=%s, bootstrap_skipped_count=%s",
+                            feed.link,
+                            fetched_entries,
+                            fetched_entries,
+                        )
+                    else:
+                        logger.info(
+                            "Feed首次初始化推送历史内容: %s, fetched_entries=%s, bootstrap_sent_count=%s",
+                            feed.link,
+                            fetched_entries,
+                            dedup_new_count,
+                        )
+                        ordered_entries = list(reversed(updated_entries))
+                        fanout_subs = subs
+                        if feed.id is not None:
+                            fanout_subs = await Sub.get_active_by_feed_id(feed.id)
+
+                        dedup_before_sub_count = len(fanout_subs)
+                        if self.config and getattr(
+                            self.config, "deduplicate_multi_bot", True
+                        ):
+                            fanout_subs = self._deduplicate_session_subscriptions(
+                                fanout_subs
+                            )
+                        fanout_sub_count = len(fanout_subs)
+
+                        notifier = Notifier(
+                            feed=feed,
+                            subs=fanout_subs,
+                            entries=ordered_entries,
+                            timeout_seconds=self.config.timeout if self.config else 30,
+                            proxy=self.config.proxy if self.config else "",
+                            download_media_before_send=(
+                                self.config.download_image_before_send
+                                if self.config
+                                else True
+                            ),
+                            config=self.config,
+                        )
+                        await notifier.notify_all()
+                        logger.info(
+                            "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
+                            feed.link,
+                            fetched_entries,
+                            dedup_new_count,
+                            dedup_skipped_count,
+                            fanout_sub_count,
+                            dedup_before_sub_count,
+                            notifier.stats["enqueue_failed_count"],
+                            notifier.stats["failed_drop_count"],
+                            notifier.stats["failed_process_count"],
+                            notifier.stats["failed_process_success_count"],
+                            notifier.stats["failed_process_retry_count"],
+                            notifier.stats["failed_process_exhausted_count"],
+                        )
 
                 elif not updated_entries:
                     if merged_hashes != old_hashes:
@@ -380,6 +439,7 @@ class RSSMonitor:
                         # avoiding chunk-based preemption between sessions/platforms.
                         fanout_subs = await Sub.get_active_by_feed_id(feed.id)
 
+                    dedup_before_sub_count = len(fanout_subs)
                     # Apply multi-bot deduplication if enabled
                     if self.config and getattr(
                         self.config, "deduplicate_multi_bot", True
@@ -387,8 +447,9 @@ class RSSMonitor:
                         fanout_subs = self._deduplicate_session_subscriptions(
                             fanout_subs
                         )
+                    fanout_sub_count = len(fanout_subs)
 
-                    await Notifier(
+                    notifier = Notifier(
                         feed=feed,
                         subs=fanout_subs,
                         entries=ordered_entries,
@@ -400,7 +461,23 @@ class RSSMonitor:
                             else True
                         ),
                         config=self.config,
-                    ).notify_all()
+                    )
+                    await notifier.notify_all()
+                    logger.info(
+                        "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
+                        feed.link,
+                        fetched_entries,
+                        dedup_new_count,
+                        dedup_skipped_count,
+                        fanout_sub_count,
+                        dedup_before_sub_count,
+                        notifier.stats["enqueue_failed_count"],
+                        notifier.stats["failed_drop_count"],
+                        notifier.stats["failed_process_count"],
+                        notifier.stats["failed_process_success_count"],
+                        notifier.stats["failed_process_retry_count"],
+                        notifier.stats["failed_process_exhausted_count"],
+                    )
                     schedule_action = ("success", None)
                     self._stat.updated()
         finally:
@@ -540,22 +617,39 @@ class RSSMonitor:
     ) -> tuple[list[str], list]:
         """计算哪些条目是新的。"""
         old_hashes_set = {h for h in old_hashes if h}
+        known_hashes = set(old_hashes_set)
         new_hashes = []
         new_hashes_seen: set[str] = set()
         updated_entries = []
 
         for entry in entries:
             entry_hashes = self._hash_entry(entry)
+            stable_hash = next(
+                (h for h in entry_hashes if self._is_identity_hash(h)),
+                entry_hashes[0] if entry_hashes else "",
+            )
 
-            if not any(entry_hash in old_hashes_set for entry_hash in entry_hashes):
+            stable_aliases = {stable_hash} if stable_hash else set()
+            if stable_hash.startswith("sid:"):
+                stable_aliases.add(stable_hash[4:])
+
+            known_by_stable = any(alias in known_hashes for alias in stable_aliases)
+            known_by_compat = (
+                not known_by_stable
+                and any(entry_hash in known_hashes for entry_hash in entry_hashes)
+            )
+
+            if not known_by_stable and not known_by_compat:
                 updated_entries.append(entry)
 
             for entry_hash in entry_hashes:
                 if entry_hash not in new_hashes_seen:
                     new_hashes_seen.add(entry_hash)
                     new_hashes.append(entry_hash)
+                known_hashes.add(entry_hash)
 
         return new_hashes, updated_entries
+
 
     @staticmethod
     def _normalize_text(value: str, max_length: int = 1024) -> str:
@@ -669,6 +763,10 @@ class RSSMonitor:
         return ""
 
     @staticmethod
+    def _is_identity_hash(value: str) -> bool:
+        return value.startswith("sid:")
+
+    @staticmethod
     def _sha256(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
 
@@ -682,8 +780,39 @@ class RSSMonitor:
         )
         return str(zlib.crc32(hash_base.encode()))
 
+    @staticmethod
+    def _upstream_compatible_material(entry) -> str:
+        """Build upstream-compatible identity material.
+
+        Order: guid -> link -> title -> summary -> first content.value.
+        """
+        guid = str(entry.get("guid") or "").strip()
+        link = str(entry.get("link") or "").strip()
+        title = str(entry.get("title") or "").strip()
+        summary = str(entry.get("summary") or "").strip()
+
+        content_items = entry.get("content") or []
+        first_content_value = ""
+        if isinstance(content_items, list):
+            for content in content_items:
+                if isinstance(content, dict):
+                    value = content.get("value")
+                    if value:
+                        first_content_value = str(value).strip()
+                        break
+
+        return "\n".join([guid, link, title, summary, first_content_value])
+
+
     def _hash_entry(self, entry) -> list[str]:
         """Calculate a robust dedupe fingerprint set for one entry."""
+        upstream_material = self._upstream_compatible_material(entry)
+        upstream_crc = (
+            hex(zlib.crc32(upstream_material.encode("utf-8", errors="ignore")))[2:]
+            if upstream_material
+            else ""
+        )
+
         entry_id = self._normalize_identifier(
             str(entry.get("id") or entry.get("guid") or "")
         )
@@ -695,27 +824,35 @@ class RSSMonitor:
         )
         published_ts = self._format_entry_timestamp(entry)
 
-        if entry_id:
-            stable_key = f"id={entry_id}"
-        elif link:
+        if link:
             stable_key = f"link={link}"
+        elif entry_id:
+            stable_key = f"id={entry_id}"
         elif title:
             stable_key = f"title={title}"
         else:
             stable_key = f"summary={summary[:256]}"
 
-        # Primary fingerprint prefers stable identity fields and normalized timestamp.
-        primary_material = f"v2|{stable_key}|ts={published_ts}"
+        stable_material = f"v3|{stable_key}"
+        content_material = f"v3|title={title}|link={link}|summary={summary[:512]}"
+        timestamp_material = f"v3|{stable_key}|ts={published_ts}" if published_ts else ""
 
-        # Secondary fingerprint keeps content context to reduce false positives.
-        secondary_material = (
-            f"v2|title={title}|link={link}|summary={summary[:512]}|ts={published_ts}"
-        )
+        fingerprints: list[str] = []
 
-        fingerprints = [self._sha256(primary_material)]
-        secondary_hash = self._sha256(secondary_material)
-        if secondary_hash != fingerprints[0]:
-            fingerprints.append(secondary_hash)
+        stable_hash = f"sid:{self._sha256(stable_material)}"
+        fingerprints.append(stable_hash)
+
+        content_hash = self._sha256(content_material)
+        if content_hash not in fingerprints:
+            fingerprints.append(content_hash)
+
+        if upstream_crc and upstream_crc not in fingerprints:
+            fingerprints.append(upstream_crc)
+
+        if timestamp_material:
+            timestamp_hash = self._sha256(timestamp_material)
+            if timestamp_hash not in fingerprints:
+                fingerprints.append(timestamp_hash)
 
         # Keep legacy v1 crc32 fingerprint to avoid full re-push after upgrading.
         legacy_hash = self._legacy_entry_crc32(entry)

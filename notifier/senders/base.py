@@ -105,9 +105,10 @@ class MessageSender:
                 )
                 failure_by_url[media_url] = True
                 logger.warning(
-                    "Prepare media failed: type=%s, url=%s, err=%s",
+                    "Prepare media failed: type=%s, url=%s, err_type=%s, err=%r",
                     media_type,
                     media_url,
+                    type(ex).__name__,
                     ex,
                 )
 
@@ -197,6 +198,14 @@ class MessageSender:
 
             local_file_path = str(local_path.resolve()) if local_path else ""
             local_file_uri = local_path.resolve().as_uri() if local_path else ""
+            if local_path is not None:
+                logger.debug(
+                    "Prepared local media path: type=%s, url=%s, resolved=%s, exists=%s",
+                    media_type,
+                    media_url,
+                    local_file_path,
+                    local_path.exists(),
+                )
             media_file_value = local_file_uri if local_path else media_url
 
             if media_type == "image":
@@ -241,6 +250,76 @@ class MessageSender:
         return "\n".join(lines)
 
     @staticmethod
+    def _resolve_local_file_path(file_value: str) -> str | None:
+        if not file_value or not isinstance(file_value, str):
+            return None
+        if not file_value.startswith("file:///"):
+            return None
+        parsed = urlparse(file_value)
+        if parsed.scheme != "file":
+            return None
+        local_path = unquote(parsed.path or "")
+        if local_path.startswith("/") and len(local_path) >= 3 and local_path[2] == ":":
+            local_path = local_path[1:]
+        return local_path or None
+
+    @staticmethod
+    def _collect_normalizable_components(items: list) -> list[object]:
+        collected: list[object] = []
+
+        def _walk(value: object) -> None:
+            if value is None:
+                return
+            if isinstance(value, (list, tuple)):
+                for nested in value:
+                    _walk(nested)
+                return
+            nodes = getattr(value, "nodes", None)
+            if isinstance(nodes, list):
+                _walk(nodes)
+                return
+            content = getattr(value, "content", None)
+            if isinstance(content, list):
+                _walk(content)
+            collected.append(value)
+
+        _walk(items)
+        return collected
+
+    @classmethod
+    def _normalize_chain_media_files(cls, chain: list, session_id: str) -> list:
+        for component in cls._collect_normalizable_components(chain):
+            file_value = getattr(component, "file", None)
+            if not isinstance(file_value, str) or not file_value:
+                continue
+            if file_value.startswith(("http://", "https://", "base64://")):
+                continue
+            local_path = cls._resolve_local_file_path(file_value) or file_value
+            try:
+                resolved = str(Path(local_path).resolve())
+                exists = Path(resolved).exists()
+            except Exception as ex:
+                logger.warning(
+                    "Sender media normalize failed: session=%s, component=%s, file=%s, err=%s",
+                    session_id,
+                    type(component).__name__,
+                    file_value,
+                    ex,
+                )
+                continue
+            if resolved != file_value:
+                setattr(component, "file", resolved)
+            logger.debug(
+                "Sender media normalized: session=%s, component=%s, original=%s, normalized=%s, exists=%s",
+                session_id,
+                type(component).__name__,
+                file_value,
+                resolved,
+                exists,
+            )
+        return chain
+
+    @staticmethod
     def _format_media_urls(media: list[tuple[str, str]] | None) -> str:
         if not media:
             return "[]"
@@ -261,9 +340,12 @@ class MessageSender:
         )
         return any(keyword in text for keyword in keywords)
 
-    @staticmethod
-    async def _send_chain(session_id: str, chain: list) -> SendResult:
-        message_chain = MessageChain(chain)
+    @classmethod
+    async def _send_chain(cls, session_id: str, chain: list) -> SendResult:
+        normalized_chain = cls._normalize_chain_media_files(chain, session_id)
+        if normalized_chain is None:
+            normalized_chain = []
+        message_chain = MessageChain(chain=normalized_chain)
         sent = await StarTools.send_message(session_id, message_chain)
         if not sent:
             return SendResult(ok=False, needs_rebind=True, detail="platform_or_session")

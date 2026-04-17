@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
 from astrbot.api import logger
-from astrbot.api.message_components import Image, Plain, Video
+from astrbot.api.message_components import File, Image, Plain, Record, Video
 
 from .base import MessageSender
 from .types import NotifierContext, PreparedMedia, SendResult
@@ -15,6 +18,146 @@ class QQOfficialMessageSender(MessageSender):
     - Multiple images: send images one by one, then send text separately
     - Video: send video first, then send text description separately
     """
+
+    @staticmethod
+    def _resolve_local_file_path(file_value: str) -> str | None:
+        if not file_value or not isinstance(file_value, str):
+            return None
+        if not file_value.startswith("file:///"):
+            return None
+        parsed = urlparse(file_value)
+        if parsed.scheme != "file":
+            return None
+        local_path = unquote(parsed.path or "")
+        if local_path.startswith("/") and len(local_path) >= 3 and local_path[2] == ":":
+            local_path = local_path[1:]
+        return local_path or None
+
+    @classmethod
+    def _log_media_component_file_check(cls, component: object, session_id: str) -> None:
+        file_value = str(getattr(component, "file", "") or "")
+        local_path = cls._resolve_local_file_path(file_value)
+        resolved_path = local_path or file_value
+        if not resolved_path:
+            return
+        if isinstance(component, str):
+            return
+        if isinstance(component, (Plain,)):
+            return
+        if file_value.startswith(("http://", "https://", "base64://")):
+            return
+        try:
+            exists = Path(resolved_path).exists()
+        except Exception as ex:
+            logger.warning(
+                "QQOfficial media path check failed: session=%s, component=%s, file=%s, resolved=%s, err=%s",
+                session_id,
+                type(component).__name__,
+                file_value,
+                resolved_path,
+                ex,
+            )
+            return
+        logger.debug(
+            "QQOfficial media path check: session=%s, component=%s, file=%s, resolved=%s, exists=%s",
+            session_id,
+            type(component).__name__,
+            file_value,
+            resolved_path,
+            exists,
+        )
+
+    @classmethod
+    def _normalize_media_component_file(cls, component: object, session_id: str) -> None:
+        if not isinstance(component, (Image, Video, File, Record)):
+            return
+        file_value = str(getattr(component, "file", "") or "")
+        if not file_value:
+            return
+        if file_value.startswith(("http://", "https://", "base64://")):
+            return
+        local_path = cls._resolve_local_file_path(file_value) or file_value
+        try:
+            resolved = str(Path(local_path).resolve())
+            if resolved != file_value:
+                component.file = resolved
+                logger.debug(
+                    "QQOfficial media file normalized: session=%s, component=%s, original=%s, normalized=%s",
+                    session_id,
+                    type(component).__name__,
+                    file_value,
+                    resolved,
+                )
+        except Exception as ex:
+            logger.warning(
+                "QQOfficial media file normalize failed: session=%s, component=%s, file=%s, err=%s",
+                session_id,
+                type(component).__name__,
+                file_value,
+                ex,
+            )
+
+    @classmethod
+    def _sanitize_nonexistent_local_media(
+        cls,
+        chain: list,
+        session_id: str,
+    ) -> tuple[list, list[str]]:
+        sanitized: list = []
+        missing_sources: list[str] = []
+        for component in chain:
+            if isinstance(component, Plain):
+                sanitized.append(component)
+                continue
+            file_value = str(getattr(component, "file", "") or "")
+            if not file_value:
+                sanitized.append(component)
+                continue
+            if file_value.startswith(("http://", "https://", "base64://")):
+                sanitized.append(component)
+                continue
+            resolved_candidate = cls._resolve_local_file_path(file_value) or file_value
+            try:
+                exists = Path(resolved_candidate).exists()
+            except Exception:
+                exists = False
+            if exists:
+                sanitized.append(component)
+                continue
+            source_for_fallback = str(getattr(component, "url", "") or file_value)
+            missing_sources.append(source_for_fallback)
+            logger.warning(
+                "QQOfficial media dropped before send: session=%s, component=%s, file=%s, resolved=%s, fallback=%s",
+                session_id,
+                type(component).__name__,
+                file_value,
+                resolved_candidate,
+                source_for_fallback,
+            )
+        return sanitized, missing_sources
+
+    @classmethod
+    def _prepare_chain_for_send(
+        cls,
+        chain: list,
+        session_id: str,
+    ) -> tuple[list, list[str]]:
+        cls._normalize_chain_media_files(chain, session_id)
+        cls._log_chain_media_files(chain, session_id)
+        return cls._sanitize_nonexistent_local_media(chain, session_id)
+
+
+    @classmethod
+    def _normalize_chain_media_files(cls, chain: list, session_id: str) -> list:
+        for component in chain:
+            cls._normalize_media_component_file(component, session_id)
+        return chain
+
+    @classmethod
+    def _log_chain_media_files(cls, chain: list, session_id: str) -> None:
+        for component in chain:
+            if isinstance(component, (Image, Video)):
+                cls._log_media_component_file_check(component, session_id)
 
     @classmethod
     async def send_to_user(
@@ -75,7 +218,15 @@ class QQOfficialMessageSender(MessageSender):
             # 1. Send video first if exists (video + text in one chain)
             if has_video:
                 for video in video_components:
-                    video_result = await cls._send_chain(session_id, [video])
+                    prepared_chain, missing_sources = cls._prepare_chain_for_send(
+                        [video],
+                        session_id,
+                    )
+                    if missing_sources:
+                        message = cls._append_failed_media_links(message, missing_sources)
+                    if not prepared_chain:
+                        continue
+                    video_result = await cls._send_chain(session_id, prepared_chain)
                     if not video_result.ok:
                         logger.warning(
                             "QQOfficial video send failed: session=%s, err=%s",
@@ -95,12 +246,31 @@ class QQOfficialMessageSender(MessageSender):
                 if message:
                     chain.append(Plain(message))
                 chain.extend(tail_components)
-                return await cls._send_chain(session_id, chain)
+                prepared_chain, missing_sources = cls._prepare_chain_for_send(
+                    chain,
+                    session_id,
+                )
+                if missing_sources:
+                    message = cls._append_failed_media_links(message, missing_sources)
+                    prepared_chain = [c for c in prepared_chain if not isinstance(c, Plain)]
+                    if message:
+                        prepared_chain.append(Plain(message))
+                if not prepared_chain:
+                    return SendResult(ok=False, detail="empty_message")
+                return await cls._send_chain(session_id, prepared_chain)
 
             elif total_images > 1:
                 # Multiple images: send one by one
                 for img in image_components:
-                    img_result = await cls._send_chain(session_id, [img])
+                    prepared_chain, missing_sources = cls._prepare_chain_for_send(
+                        [img],
+                        session_id,
+                    )
+                    if missing_sources:
+                        message = cls._append_failed_media_links(message, missing_sources)
+                    if not prepared_chain:
+                        continue
+                    img_result = await cls._send_chain(session_id, prepared_chain)
                     if not img_result.ok:
                         logger.warning(
                             "QQOfficial image send failed: session=%s, err=%s",
@@ -119,7 +289,20 @@ class QQOfficialMessageSender(MessageSender):
                     if message:
                         text_chain.append(Plain(message))
                     text_chain.extend(tail_components)
-                    return await cls._send_chain(session_id, text_chain)
+                    prepared_text_chain, missing_sources = cls._prepare_chain_for_send(
+                        text_chain,
+                        session_id,
+                    )
+                    if missing_sources:
+                        message = cls._append_failed_media_links(message, missing_sources)
+                        prepared_text_chain = [
+                            c for c in prepared_text_chain if not isinstance(c, Plain)
+                        ]
+                        if message:
+                            prepared_text_chain.append(Plain(message))
+                    if not prepared_text_chain:
+                        return SendResult(ok=True)
+                    return await cls._send_chain(session_id, prepared_text_chain)
 
                 return SendResult(ok=True)
 
@@ -129,16 +312,27 @@ class QQOfficialMessageSender(MessageSender):
                 if message:
                     chain.append(Plain(message))
                 chain.extend(tail_components)
-                if not chain:
+                prepared_chain, missing_sources = cls._prepare_chain_for_send(
+                    chain,
+                    session_id,
+                )
+                if missing_sources:
+                    message = cls._append_failed_media_links(message, missing_sources)
+                    prepared_chain = [c for c in prepared_chain if not isinstance(c, Plain)]
+                    if message:
+                        prepared_chain.append(Plain(message))
+                if not prepared_chain:
                     return SendResult(ok=False, detail="empty_message")
-                return await cls._send_chain(session_id, chain)
+                return await cls._send_chain(session_id, prepared_chain)
 
         except Exception as err:
-            err_text = str(err)
+            err_text = repr(err)
             logger.warning(
-                "QQOfficial send failed: session=%s, err=%s",
+                "QQOfficial send failed: session=%s, err_type=%s, err=%r",
                 session_id,
+                type(err).__name__,
                 err,
+                exc_info=True,
             )
 
             # Fallback: convert media to links in text

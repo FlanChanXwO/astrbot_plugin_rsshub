@@ -1140,7 +1140,7 @@ class FailedNotificationMethods:
             )
             result = await session.execute(stmt)
             rows = result.all()
-            return len(rows) > capacity
+            return len(rows) >= capacity
 
     @staticmethod
     async def count_by_sub_ids(sub_ids: list[int]) -> dict[int, int]:

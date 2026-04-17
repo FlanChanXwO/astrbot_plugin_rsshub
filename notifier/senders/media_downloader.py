@@ -6,6 +6,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
@@ -59,6 +60,20 @@ def _guess_suffix(url: str) -> str:
     return ".bin"
 
 
+def _expand_download_candidates(url: str) -> list[str]:
+    candidates = [url]
+    try:
+        parsed = urlparse(url)
+        wrapped_values = parse_qs(parsed.query).get("url", [])
+        for wrapped in wrapped_values:
+            if wrapped.startswith("http://") or wrapped.startswith("https://"):
+                if wrapped not in candidates:
+                    candidates.append(wrapped)
+    except Exception:
+        pass
+    return candidates
+
+
 async def download_media_to_temp(
     *,
     url: str,
@@ -67,38 +82,78 @@ async def download_media_to_temp(
 ) -> Path:
     timeout = aiohttp.ClientTimeout(total=max(1, int(timeout_seconds)))
 
-    async with aiohttp.ClientSession(
-        timeout=timeout,
-        trust_env=True,
-        connector=build_tls_connector(),
-    ) as session:
-        async with session.get(
+    last_err: Exception | None = None
+    for candidate_url in _expand_download_candidates(url):
+        logger.debug(
+            "Media download attempt: origin=%s, candidate=%s, timeout_seconds=%s, proxy_enabled=%s",
             url,
-            proxy=proxy or None,
-            allow_redirects=True,
-            max_redirects=10,
-        ) as resp:
-            if resp.history:
-                logger.debug(
-                    "Media redirect followed: origin=%s, final=%s, hops=%s",
-                    url,
-                    str(resp.url),
-                    len(resp.history),
-                )
-            if resp.status >= 400:
-                raise RuntimeError(f"download failed: status={resp.status}, url={url}")
-            data = await resp.read()
-            if not data:
-                raise RuntimeError(f"download failed: empty response, url={url}")
+            candidate_url,
+            timeout_seconds,
+            bool(proxy),
+        )
+        try:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                trust_env=True,
+                connector=build_tls_connector(),
+            ) as session:
+                async with session.get(
+                    candidate_url,
+                    proxy=proxy or None,
+                    allow_redirects=True,
+                    max_redirects=10,
+                ) as resp:
+                    if resp.history:
+                        logger.debug(
+                            "Media redirect followed: origin=%s, candidate=%s, final=%s, hops=%s",
+                            url,
+                            candidate_url,
+                            str(resp.url),
+                            len(resp.history),
+                        )
+                    if resp.status >= 400:
+                        raise RuntimeError(
+                            f"download failed: status={resp.status}, url={candidate_url}"
+                        )
+                    data = await resp.read()
+                    if not data:
+                        raise RuntimeError(
+                            f"download failed: empty response, url={candidate_url}"
+                        )
 
-    fd, tmp_name = tempfile.mkstemp(prefix="rsshub_media_", suffix=_guess_suffix(url))
-    try:
-        with os.fdopen(fd, "wb") as fp:
-            fp.write(data)
-    except Exception:
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
-    return Path(tmp_name)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix="rsshub_media_",
+                suffix=_guess_suffix(candidate_url),
+            )
+            try:
+                with os.fdopen(fd, "wb") as fp:
+                    fp.write(data)
+            except Exception:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
+            logger.debug(
+                "Media download success: origin=%s, candidate=%s, bytes=%s, tmp=%s",
+                url,
+                candidate_url,
+                len(data),
+                tmp_name,
+            )
+            return Path(tmp_name)
+        except Exception as ex:
+            last_err = ex
+            logger.warning(
+                "Media download attempt failed: origin=%s, candidate=%s, err_type=%s, err=%r",
+                url,
+                candidate_url,
+                type(ex).__name__,
+                ex,
+            )
+
+    if last_err is not None:
+        raise RuntimeError(
+            f"download failed for all candidates, url={url}, last_error={last_err!r}"
+        ) from last_err
+    raise RuntimeError(f"download failed for all candidates, url={url}")
 
 
 def safe_unlink(path: Path | None) -> None:
@@ -242,15 +297,38 @@ def _read_cache(url: str) -> Path | None:
     file_path = _cache_file_path(url)
     meta_path = _cache_meta_path(url)
     if not file_path.exists() or not meta_path.exists():
+        logger.debug(
+            "Media cache miss: url=%s, file_exists=%s, meta_exists=%s, file=%s, meta=%s",
+            url,
+            file_path.exists(),
+            meta_path.exists(),
+            file_path,
+            meta_path,
+        )
         return None
 
     try:
         expire_ts = float(meta_path.read_text(encoding="utf-8").strip())
     except Exception:
+        logger.debug(
+            "Media cache meta invalid: url=%s, meta=%s",
+            url,
+            meta_path,
+        )
         return None
 
-    if expire_ts < time.time():
+    now_ts = time.time()
+    if expire_ts < now_ts:
+        logger.debug(
+            "Media cache expired: url=%s, now=%s, expire=%s, file=%s",
+            url,
+            now_ts,
+            expire_ts,
+            file_path,
+        )
         return None
+
+    logger.debug("Media cache hit: url=%s, file=%s", url, file_path)
     return file_path
 
 
@@ -261,6 +339,15 @@ def _write_cache(url: str, source: Path) -> Path:
     cache_path.write_bytes(source.read_bytes())
     expire_ts = time.time() + _CACHE_TTL_SECONDS
     meta_path.write_text(str(expire_ts), encoding="utf-8")
+    logger.debug(
+        "Media cache write: url=%s, cache=%s, meta=%s, cache_exists=%s, meta_exists=%s, expire=%s",
+        url,
+        cache_path,
+        meta_path,
+        cache_path.exists(),
+        meta_path.exists(),
+        expire_ts,
+    )
     return cache_path
 
 
@@ -275,19 +362,39 @@ async def get_or_download_media_to_cache(
     async with _cache_io_lock:
         cached = _read_cache(url)
         if cached is not None:
+            logger.debug("Media cache return existing: url=%s, path=%s", url, cached)
             return cached
 
+    logger.debug(
+        "Media cache download start: url=%s, timeout_seconds=%s, proxy_enabled=%s",
+        url,
+        timeout_seconds,
+        bool(proxy),
+    )
     tmp_path = await download_media_to_temp(
         url=url,
         timeout_seconds=timeout_seconds,
         proxy=proxy,
+    )
+    logger.debug(
+        "Media cache download complete: url=%s, tmp=%s, tmp_exists=%s",
+        url,
+        tmp_path,
+        tmp_path.exists(),
     )
     try:
         async with _cache_io_lock:
             # Another task may have filled cache while we were downloading.
             cached = _read_cache(url)
             if cached is not None:
+                logger.debug(
+                    "Media cache filled by peer task: url=%s, path=%s",
+                    url,
+                    cached,
+                )
                 return cached
-            return _write_cache(url, tmp_path)
+            written = _write_cache(url, tmp_path)
+            logger.debug("Media cache return new write: url=%s, path=%s", url, written)
+            return written
     finally:
         safe_unlink(tmp_path)

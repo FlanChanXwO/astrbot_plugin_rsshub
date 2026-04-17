@@ -83,20 +83,20 @@ async def download_media_to_temp(
     timeout = aiohttp.ClientTimeout(total=max(1, int(timeout_seconds)))
 
     last_err: Exception | None = None
-    for candidate_url in _expand_download_candidates(url):
-        logger.debug(
-            "Media download attempt: origin=%s, candidate=%s, timeout_seconds=%s, proxy_enabled=%s",
-            url,
-            candidate_url,
-            timeout_seconds,
-            bool(proxy),
-        )
-        try:
-            async with aiohttp.ClientSession(
-                timeout=timeout,
-                trust_env=True,
-                connector=build_tls_connector(),
-            ) as session:
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        trust_env=True,
+        connector=build_tls_connector(),
+    ) as session:
+        for candidate_url in _expand_download_candidates(url):
+            logger.debug(
+                "Media download attempt: origin=%s, candidate=%s, timeout_seconds=%s, proxy_enabled=%s",
+                url,
+                candidate_url,
+                timeout_seconds,
+                bool(proxy),
+            )
+            try:
                 async with session.get(
                     candidate_url,
                     proxy=proxy or None,
@@ -121,33 +121,33 @@ async def download_media_to_temp(
                             f"download failed: empty response, url={candidate_url}"
                         )
 
-            fd, tmp_name = tempfile.mkstemp(
-                prefix="rsshub_media_",
-                suffix=_guess_suffix(candidate_url),
-            )
-            try:
-                with os.fdopen(fd, "wb") as fp:
-                    fp.write(data)
-            except Exception:
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
-            logger.debug(
-                "Media download success: origin=%s, candidate=%s, bytes=%s, tmp=%s",
-                url,
-                candidate_url,
-                len(data),
-                tmp_name,
-            )
-            return Path(tmp_name)
-        except Exception as ex:
-            last_err = ex
-            logger.warning(
-                "Media download attempt failed: origin=%s, candidate=%s, err_type=%s, err=%r",
-                url,
-                candidate_url,
-                type(ex).__name__,
-                ex,
-            )
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix="rsshub_media_",
+                    suffix=_guess_suffix(candidate_url),
+                )
+                try:
+                    with os.fdopen(fd, "wb") as fp:
+                        fp.write(data)
+                except Exception:
+                    Path(tmp_name).unlink(missing_ok=True)
+                    raise
+                logger.debug(
+                    "Media download success: origin=%s, candidate=%s, bytes=%s, tmp=%s",
+                    url,
+                    candidate_url,
+                    len(data),
+                    tmp_name,
+                )
+                return Path(tmp_name)
+            except Exception as ex:
+                last_err = ex
+                logger.warning(
+                    "Media download attempt failed: origin=%s, candidate=%s, err_type=%s, err=%r",
+                    url,
+                    candidate_url,
+                    type(ex).__name__,
+                    ex,
+                )
 
     if last_err is not None:
         raise RuntimeError(

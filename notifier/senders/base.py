@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 from astrbot.api import logger
 from astrbot.api.message_components import File, Image, Plain, Record, Video
@@ -9,6 +8,7 @@ from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.star.star_tools import StarTools
 
 from .media_downloader import get_or_download_media_to_cache
+from .media_paths import normalize_local_media_file_value
 from .types import PreparedMedia, SendResult
 
 
@@ -250,20 +250,6 @@ class MessageSender:
         return "\n".join(lines)
 
     @staticmethod
-    def _resolve_local_file_path(file_value: str) -> str | None:
-        if not file_value or not isinstance(file_value, str):
-            return None
-        if not file_value.startswith("file:///"):
-            return None
-        parsed = urlparse(file_value)
-        if parsed.scheme != "file":
-            return None
-        local_path = unquote(parsed.path or "")
-        if local_path.startswith("/") and len(local_path) >= 3 and local_path[2] == ":":
-            local_path = local_path[1:]
-        return local_path or None
-
-    @staticmethod
     def _collect_normalizable_components(items: list) -> list[object]:
         collected: list[object] = []
 
@@ -281,7 +267,9 @@ class MessageSender:
             content = getattr(value, "content", None)
             if isinstance(content, list):
                 _walk(content)
-            collected.append(value)
+            file_value = getattr(value, "file", None)
+            if isinstance(file_value, str):
+                collected.append(value)
 
         _walk(items)
         return collected
@@ -294,9 +282,8 @@ class MessageSender:
                 continue
             if file_value.startswith(("http://", "https://", "base64://")):
                 continue
-            local_path = cls._resolve_local_file_path(file_value) or file_value
             try:
-                resolved = str(Path(local_path).resolve())
+                resolved = normalize_local_media_file_value(file_value)
                 exists = Path(resolved).exists()
             except Exception as ex:
                 logger.warning(

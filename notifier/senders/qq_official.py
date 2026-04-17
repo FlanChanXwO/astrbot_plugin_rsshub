@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 from astrbot.api import logger
 from astrbot.api.message_components import File, Image, Plain, Record, Video
 
 from .base import MessageSender
+from .media_paths import normalize_local_media_file_value, resolve_local_file_path
 from .types import NotifierContext, PreparedMedia, SendResult
 
 
@@ -19,24 +19,10 @@ class QQOfficialMessageSender(MessageSender):
     - Video: send video first, then send text description separately
     """
 
-    @staticmethod
-    def _resolve_local_file_path(file_value: str) -> str | None:
-        if not file_value or not isinstance(file_value, str):
-            return None
-        if not file_value.startswith("file:///"):
-            return None
-        parsed = urlparse(file_value)
-        if parsed.scheme != "file":
-            return None
-        local_path = unquote(parsed.path or "")
-        if local_path.startswith("/") and len(local_path) >= 3 and local_path[2] == ":":
-            local_path = local_path[1:]
-        return local_path or None
-
     @classmethod
     def _log_media_component_file_check(cls, component: object, session_id: str) -> None:
         file_value = str(getattr(component, "file", "") or "")
-        local_path = cls._resolve_local_file_path(file_value)
+        local_path = resolve_local_file_path(file_value)
         resolved_path = local_path or file_value
         if not resolved_path:
             return
@@ -76,9 +62,8 @@ class QQOfficialMessageSender(MessageSender):
             return
         if file_value.startswith(("http://", "https://", "base64://")):
             return
-        local_path = cls._resolve_local_file_path(file_value) or file_value
         try:
-            resolved = str(Path(local_path).resolve())
+            resolved = normalize_local_media_file_value(file_value)
             if resolved != file_value:
                 component.file = resolved
                 logger.debug(
@@ -116,7 +101,7 @@ class QQOfficialMessageSender(MessageSender):
             if file_value.startswith(("http://", "https://", "base64://")):
                 sanitized.append(component)
                 continue
-            resolved_candidate = cls._resolve_local_file_path(file_value) or file_value
+            resolved_candidate = resolve_local_file_path(file_value) or file_value
             try:
                 exists = Path(resolved_candidate).exists()
             except Exception:

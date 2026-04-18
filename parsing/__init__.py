@@ -1,6 +1,4 @@
-# RSS-to-AstrBot Parsing Module
-# RSS内容解析模块
-
+from .formatter_factory import get_formatter_for_platform
 from .html_parser import (
     HTMLParser,
     ImageContent,
@@ -10,12 +8,15 @@ from .html_parser import (
     VideoContent,
     parse_html,
 )
-from .post_formatter import PostFormatter
+from .post_formatter import MarkdownPostFormatter, PostFormatter, SimplePostFormatter
 from .splitter import MessageChunk, needs_split, smart_split, split_text
 from .utils import EntryParsed, parse_entry
 
 __all__ = [
     "PostFormatter",
+    "SimplePostFormatter",
+    "MarkdownPostFormatter",
+    "get_formatter_for_platform",
     "HTMLParser",
     "parse_html",
     "ParsedResult",

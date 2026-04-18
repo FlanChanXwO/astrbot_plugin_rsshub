@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 from astrbot.api import logger
 from astrbot.api.message_components import File, Image, Plain, Record, Video
@@ -79,39 +78,6 @@ class TelegramMessageSender(MessageSender):
                     item.media_type,
                     cls._hash_for_log(item.original_url),
                 )
-
-    @staticmethod
-    def _uri_to_local_path(file_value: str) -> str:
-        if not file_value.startswith("file:///"):
-            return file_value
-
-        parsed = urlsplit(file_value)
-        path = unquote(parsed.path or "")
-        # On Windows, file:///C:/... is parsed as /C:/...
-        if len(path) >= 3 and path[0] == "/" and path[2] == ":":
-            return path[1:]
-        return path
-
-    @classmethod
-    def _normalize_component_file_value(
-        cls,
-        component: Image | Video | Record | File,
-    ) -> None:
-        file_value = getattr(component, "file", None)
-        if isinstance(file_value, str):
-            component.file = cls._uri_to_local_path(file_value)
-
-    @classmethod
-    def _normalize_components_for_telegram(
-        cls,
-        image_components: list[Image | Video | Record | File],
-        tail_components: list[Image | Video | Record | File],
-    ) -> None:
-        for component in image_components:
-            cls._normalize_component_file_value(component)
-
-        for component in tail_components:
-            cls._normalize_component_file_value(component)
 
     @classmethod
     def _component_file_size(
@@ -218,10 +184,8 @@ class TelegramMessageSender(MessageSender):
                     tail_components,
                     failed_media_urls,
                 ) = await cls._build_media_components(effective_prepared)
-                cls._normalize_components_for_telegram(
-                    image_components,
-                    tail_components,
-                )
+                cls._normalize_chain_media_files(image_components, session_id)
+                cls._normalize_chain_media_files(tail_components, session_id)
                 image_components, tail_components = (
                     cls._apply_telegram_media_size_limits(
                         image_components,

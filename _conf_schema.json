@@ -85,6 +85,41 @@
     "hint": "失败消息的最大重试次数，超过此次数的消息将被视为已耗尽",
     "default": 3
   },
+
+  "deduplicate_multi_bot": {
+    "type": "bool",
+    "description": "单会话多 BOT 去重",
+    "hint": "开启后，当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息，避免重复推送",
+    "default": true
+  },
+  "bootstrap_skip_history": {
+    "type": "bool",
+    "description": "首轮跳过历史条目",
+    "hint": "开启后，首次监控仅建立去重历史不推送旧条目；关闭后首次监控会按抓取结果推送历史条目",
+    "default": true
+  },
+  "debug_payload": {
+    "type": "bool",
+    "description": "推送调试字段",
+    "hint": "开启后，会在每条推送末尾附加调试信息，便于观察 guid/id/link/published/updated 等原始字段",
+    "default": false
+  },
+  "platform_shared_data": {
+    "type": "object",
+    "description": "平台共享数据源配置",
+    "hint": "配置特定平台是否开启共享数据源。开启后，该平台下不同 BOT 的订阅操作被视为共享数据",
+    "default": {
+      "aiocqhttp": false
+    },
+    "items": {
+      "aiocqhttp": {
+        "type": "bool",
+        "description": "aiocqhttp 平台共享数据源",
+        "hint": "开启后，aiocqhttp 平台下所有 BOT 的订阅数据共享，任意 BOT 掉线时其他 BOT 可继续推送",
+        "default": false
+      }
+    }
+  },
   "sender_strategies": {
     "type": "object",
     "description": "平台发送策略配置",
@@ -112,34 +147,6 @@
         "description": "启用微信个人号专用发送策略",
         "hint": "启用后将使用微信个人号优化策略（单组件顺序发送）。关闭则使用默认策略",
         "default": true
-      }
-    }
-  },
-  "deduplicate_multi_bot": {
-    "type": "bool",
-    "description": "单会话多 BOT 去重",
-    "hint": "开启后，当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息，避免重复推送",
-    "default": true
-  },
-  "bootstrap_skip_history": {
-    "type": "bool",
-    "description": "首轮跳过历史条目",
-    "hint": "开启后，首次监控仅建立去重历史不推送旧条目；关闭后首次监控会按抓取结果推送历史条目",
-    "default": true
-  },
-  "platform_shared_data": {
-    "type": "object",
-    "description": "平台共享数据源配置",
-    "hint": "配置特定平台是否开启共享数据源。开启后，该平台下不同 BOT 的订阅操作被视为共享数据",
-    "default": {
-      "aiocqhttp": false
-    },
-    "items": {
-      "aiocqhttp": {
-        "type": "bool",
-        "description": "aiocqhttp 平台共享数据源",
-        "hint": "开启后，aiocqhttp 平台下所有 BOT 的订阅数据共享，任意 BOT 掉线时其他 BOT 可继续推送",
-        "default": false
       }
     }
   },

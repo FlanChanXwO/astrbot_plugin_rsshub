@@ -27,6 +27,8 @@ class EntryParsed:
     author: str = ""
     content: str = ""
     summary: str = ""
+    guid: str = ""
+    entry_id: str = ""
     tags: list[str] = field(default_factory=list)
     enclosures: list[Enclosure] = field(default_factory=list)
     published: datetime | None = None
@@ -50,6 +52,8 @@ async def parse_entry(entry, feed_link: str = None) -> EntryParsed:
     result.title = _get_text(entry.get("title", ""))
     result.link = _get_link(entry, feed_link)
     result.author = _get_text(entry.get("author", ""))
+    result.guid = _get_text(entry.get("guid", ""))
+    result.entry_id = _get_text(entry.get("id", ""))
 
     # 内容
     content = entry.get("content", [])

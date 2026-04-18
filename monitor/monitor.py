@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from itertools import chain, repeat
 from typing import TYPE_CHECKING, Final
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -343,7 +343,9 @@ class RSSMonitor:
                 old_hashes = list(feed.entry_hashes or [])
                 fetched_entries = len(rss_d.entries)
                 new_hashes, updated_entries = self._calculate_update(
-                    old_hashes, rss_d.entries
+                    old_hashes,
+                    rss_d.entries,
+                    feed_link=feed.link,
                 )
                 dedup_new_count = len(updated_entries)
                 dedup_skipped_count = max(0, fetched_entries - dedup_new_count)
@@ -613,32 +615,41 @@ class RSSMonitor:
         return max(1, int(plugin_default))
 
     def _calculate_update(
-        self, old_hashes: list[str], entries: list
+        self,
+        old_hashes: list[str],
+        entries: list,
+        feed_link: str | None = None,
     ) -> tuple[list[str], list]:
         """计算哪些条目是新的。"""
         old_hashes_set = {h for h in old_hashes if h}
         known_hashes = set(old_hashes_set)
+        known_identity_hashes = {h for h in old_hashes_set if self._is_identity_hash(h)}
         new_hashes = []
         new_hashes_seen: set[str] = set()
         updated_entries = []
 
         for entry in entries:
-            entry_hashes = self._hash_entry(entry)
+            entry_hashes = self._hash_entry(entry, feed_link=feed_link)
             stable_hash = next(
-                (h for h in entry_hashes if self._is_identity_hash(h)),
-                entry_hashes[0] if entry_hashes else "",
+                (
+                    entry_hash
+                    for entry_hash in entry_hashes
+                    if self._is_identity_hash(entry_hash)
+                ),
+                "",
             )
 
-            stable_aliases = {stable_hash} if stable_hash else set()
-            if stable_hash.startswith("sid:"):
-                stable_aliases.add(stable_hash[4:])
-
-            known_by_stable = any(alias in known_hashes for alias in stable_aliases)
-            known_by_compat = not known_by_stable and any(
-                entry_hash in known_hashes for entry_hash in entry_hashes
+            known_by_identity = (
+                bool(stable_hash) and stable_hash in known_identity_hashes
             )
+            known_by_compat = False
+            if not known_by_identity and not stable_hash:
+                known_by_compat = any(
+                    entry_hash in known_hashes for entry_hash in entry_hashes
+                )
+            known_entry = known_by_identity or known_by_compat
 
-            if not known_by_stable and not known_by_compat:
+            if not known_entry:
                 updated_entries.append(entry)
 
             for entry_hash in entry_hashes:
@@ -646,6 +657,8 @@ class RSSMonitor:
                     new_hashes_seen.add(entry_hash)
                     new_hashes.append(entry_hash)
                 known_hashes.add(entry_hash)
+                if self._is_identity_hash(entry_hash):
+                    known_identity_hashes.add(entry_hash)
 
         return new_hashes, updated_entries
 
@@ -801,7 +814,15 @@ class RSSMonitor:
 
         return "\n".join([guid, link, title, summary, first_content_value])
 
-    def _hash_entry(self, entry) -> list[str]:
+    def _resolve_entry_link(self, entry, feed_link: str | None = None) -> str:
+        link = str(entry.get("link") or entry.get("guid") or "").strip()
+        if not link:
+            return ""
+        if feed_link and not link.startswith("http"):
+            link = urljoin(feed_link, link)
+        return self._normalize_link(link)
+
+    def _hash_entry(self, entry, feed_link: str | None = None) -> list[str]:
         """Calculate a robust dedupe fingerprint set for one entry."""
         upstream_material = self._upstream_compatible_material(entry)
         upstream_crc = (
@@ -813,33 +834,29 @@ class RSSMonitor:
         entry_id = self._normalize_identifier(
             str(entry.get("id") or entry.get("guid") or "")
         )
-        link = self._normalize_link(str(entry.get("link") or ""))
+        link = self._resolve_entry_link(entry, feed_link)
         title = self._normalize_text(str(entry.get("title") or ""))
         summary = self._normalize_text(
             str(entry.get("summary") or entry.get("description") or ""),
             max_length=2048,
         )
-        published_ts = self._format_entry_timestamp(entry)
 
-        if link:
-            stable_key = f"link={link}"
-        elif entry_id:
-            stable_key = f"id={entry_id}"
+        stable_material = ""
+        if entry_id:
+            stable_material = f"v3|id={entry_id}"
+        elif link:
+            stable_material = f"v3|link={link}"
         elif title:
-            stable_key = f"title={title}"
-        else:
-            stable_key = f"summary={summary[:256]}"
+            stable_material = f"v3|title={title}"
+        elif summary:
+            stable_material = f"v3|summary={summary[:256]}"
 
-        stable_material = f"v3|{stable_key}"
         content_material = f"v3|title={title}|link={link}|summary={summary[:512]}"
-        timestamp_material = (
-            f"v3|{stable_key}|ts={published_ts}" if published_ts else ""
-        )
 
         fingerprints: list[str] = []
-
-        stable_hash = f"sid:{self._sha256(stable_material)}"
-        fingerprints.append(stable_hash)
+        if stable_material:
+            stable_hash = f"sid:{self._sha256(stable_material)}"
+            fingerprints.append(stable_hash)
 
         content_hash = self._sha256(content_material)
         if content_hash not in fingerprints:
@@ -847,11 +864,6 @@ class RSSMonitor:
 
         if upstream_crc and upstream_crc not in fingerprints:
             fingerprints.append(upstream_crc)
-
-        if timestamp_material:
-            timestamp_hash = self._sha256(timestamp_material)
-            if timestamp_hash not in fingerprints:
-                fingerprints.append(timestamp_hash)
 
         # Keep legacy v1 crc32 fingerprint to avoid full re-push after upgrading.
         legacy_hash = self._legacy_entry_crc32(entry)

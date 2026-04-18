@@ -306,7 +306,9 @@ class RSSMonitor:
 
         async with feed_lock(feed.id):
             headers = {
-                "If-Modified-Since": format_datetime(feed.last_modified or feed.updated_at)
+                "If-Modified-Since": format_datetime(
+                    feed.last_modified or feed.updated_at
+                )
             }
             if feed.etag:
                 headers["If-None-Match"] = feed.etag

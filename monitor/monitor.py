@@ -292,7 +292,17 @@ class RSSMonitor:
     async def _monitor_feed_with_subs(self, session, feed: Feed, subs: list[Sub]):
         """抓取一次 feed 并按订阅粒度更新调度与通知。"""
         if feed.id is None:
+            logger.warning(
+                "跳过未持久化的 Feed 监控: link=%s, title=%s, sub_count=%s",
+                feed.link,
+                feed.title,
+                len(subs),
+            )
             return
+
+        # 调度操作延迟到 session commit 之后执行，避免嵌套 session
+        schedule_action: tuple[str, str | None] | None = None
+        notifier_to_run: Notifier | None = None
 
         async with feed_lock(feed.id):
             headers = {
@@ -311,10 +321,6 @@ class RSSMonitor:
             rss_d = wf.rss_d
 
             feed_updated_fields: set[str] = set()
-            # 调度操作延迟到 session commit 之后执行
-            schedule_action: tuple[str, str | None] | None = (
-                None  # ("success" | "error", reason)
-            )
 
             try:
                 if wf.status == 304:
@@ -365,8 +371,8 @@ class RSSMonitor:
                         feed.entry_hashes = merged_hashes
                         feed_updated_fields.update({"last_modified", "entry_hashes"})
                         schedule_action = ("success", None)
-                        self._stat.not_updated()
                         if self._config_value("bootstrap_skip_history", True):
+                            self._stat.not_updated()
                             logger.info(
                                 "Feed首次初始化完成（不推送历史内容）: %s, fetched_entries=%s, bootstrap_skipped_count=%s",
                                 feed.link,
@@ -380,50 +386,19 @@ class RSSMonitor:
                                 fetched_entries,
                                 dedup_new_count,
                             )
-                            ordered_entries = list(reversed(updated_entries))
-                            fanout_subs = subs
-                            fanout_feed_id = feed.id
-                            if fanout_feed_id is not None:
-                                fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
-
-                            dedup_before_sub_count = len(fanout_subs)
-                            if self.config and getattr(
-                                self.config, "deduplicate_multi_bot", True
-                            ):
-                                fanout_subs = self._deduplicate_session_subscriptions(
-                                    fanout_subs
-                                )
-                            fanout_sub_count = len(fanout_subs)
-
-                            notifier = Notifier(
+                            notifier_to_run = await self._build_feed_notifier(
                                 feed=feed,
-                                subs=fanout_subs,
-                                entries=ordered_entries,
-                                timeout_seconds=self.config.timeout if self.config else 30,
-                                proxy=self.config.proxy if self.config else "",
-                                download_media_before_send=(
-                                    self.config.download_image_before_send
-                                    if self.config
-                                    else True
-                                ),
-                                config=self.config,
+                                subs=subs,
+                                entries=updated_entries,
                             )
-                            await notifier.notify_all()
-                            logger.info(
-                                "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
-                                feed.link,
-                                fetched_entries,
-                                dedup_new_count,
-                                dedup_skipped_count,
-                                fanout_sub_count,
-                                dedup_before_sub_count,
-                                notifier.stats["enqueue_failed_count"],
-                                notifier.stats["failed_drop_count"],
-                                notifier.stats["failed_process_count"],
-                                notifier.stats["failed_process_success_count"],
-                                notifier.stats["failed_process_retry_count"],
-                                notifier.stats["failed_process_exhausted_count"],
+                            self._log_feed_polling_stats(
+                                feed=feed,
+                                fetched_entries=fetched_entries,
+                                dedup_new_count=dedup_new_count,
+                                dedup_skipped_count=dedup_skipped_count,
+                                notifier=notifier_to_run,
                             )
+                            self._stat.updated()
 
                     elif not updated_entries:
                         if merged_hashes != old_hashes:
@@ -439,53 +414,17 @@ class RSSMonitor:
                         feed.last_modified = wf.last_modified
                         feed.entry_hashes = merged_hashes
                         feed_updated_fields.update({"last_modified", "entry_hashes"})
-
-                        ordered_entries = list(reversed(updated_entries))
-                        fanout_subs = subs
-                        fanout_feed_id = feed.id
-                        if fanout_feed_id is not None:
-                            # Fan out once to all active subscribers of this feed,
-                            # avoiding chunk-based preemption between sessions/platforms.
-                            fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
-
-                        dedup_before_sub_count = len(fanout_subs)
-                        # Apply multi-bot deduplication if enabled
-                        if self.config and getattr(
-                            self.config, "deduplicate_multi_bot", True
-                        ):
-                            fanout_subs = self._deduplicate_session_subscriptions(
-                                fanout_subs
-                            )
-                        fanout_sub_count = len(fanout_subs)
-
-                        notifier = Notifier(
+                        notifier_to_run = await self._build_feed_notifier(
                             feed=feed,
-                            subs=fanout_subs,
-                            entries=ordered_entries,
-                            timeout_seconds=self.config.timeout if self.config else 30,
-                            proxy=self.config.proxy if self.config else "",
-                            download_media_before_send=(
-                                self.config.download_image_before_send
-                                if self.config
-                                else True
-                            ),
-                            config=self.config,
+                            subs=subs,
+                            entries=updated_entries,
                         )
-                        await notifier.notify_all()
-                        logger.info(
-                            "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
-                            feed.link,
-                            fetched_entries,
-                            dedup_new_count,
-                            dedup_skipped_count,
-                            fanout_sub_count,
-                            dedup_before_sub_count,
-                            notifier.stats["enqueue_failed_count"],
-                            notifier.stats["failed_drop_count"],
-                            notifier.stats["failed_process_count"],
-                            notifier.stats["failed_process_success_count"],
-                            notifier.stats["failed_process_retry_count"],
-                            notifier.stats["failed_process_exhausted_count"],
+                        self._log_feed_polling_stats(
+                            feed=feed,
+                            fetched_entries=fetched_entries,
+                            dedup_new_count=dedup_new_count,
+                            dedup_skipped_count=dedup_skipped_count,
+                            notifier=notifier_to_run,
                         )
                         schedule_action = ("success", None)
                         self._stat.updated()
@@ -495,13 +434,15 @@ class RSSMonitor:
                     await session.commit()
                     logger.debug(f"Feed {feed.id} 已更新字段: {feed_updated_fields}")
 
-            # 在 session commit 之后再执行调度操作，避免嵌套 session
-            if schedule_action:
-                action, reason = schedule_action
-                if action == "success":
-                    await self._schedule_after_success(subs)
-                elif action == "error" and reason:
-                    await self._schedule_after_error(subs, reason)
+        if notifier_to_run is not None:
+            await notifier_to_run.notify_all()
+
+        if schedule_action:
+            action, reason = schedule_action
+            if action == "success":
+                await self._schedule_after_success(subs)
+            elif action == "error" and reason:
+                await self._schedule_after_error(subs, reason)
 
     @staticmethod
     def _all_subs_blocked(subs: list[Sub]) -> bool:
@@ -546,6 +487,62 @@ class RSSMonitor:
                 len(no_session_subs),
             )
         return deduplicated
+
+    async def _build_feed_notifier(
+        self, feed: Feed, subs: list[Sub], entries: list
+    ) -> Notifier:
+        ordered_entries = list(reversed(entries))
+        fanout_subs = subs
+        fanout_feed_id = feed.id
+        if fanout_feed_id is not None:
+            # Fan out once to all active subscribers of this feed,
+            # avoiding chunk-based preemption between sessions/platforms.
+            fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
+
+        dedup_before_sub_count = len(fanout_subs)
+        if self.config and getattr(self.config, "deduplicate_multi_bot", True):
+            fanout_subs = self._deduplicate_session_subscriptions(fanout_subs)
+        fanout_sub_count = len(fanout_subs)
+
+        notifier = Notifier(
+            feed=feed,
+            subs=fanout_subs,
+            entries=ordered_entries,
+            timeout_seconds=self.config.timeout if self.config else 30,
+            proxy=self.config.proxy if self.config else "",
+            download_media_before_send=(
+                self.config.download_image_before_send if self.config else True
+            ),
+            config=self.config,
+        )
+        notifier.stats.setdefault("fanout_sub_count", fanout_sub_count)
+        notifier.stats.setdefault("dedup_before_sub_count", dedup_before_sub_count)
+        return notifier
+
+    def _log_feed_polling_stats(
+        self,
+        *,
+        feed: Feed,
+        fetched_entries: int,
+        dedup_new_count: int,
+        dedup_skipped_count: int,
+        notifier: Notifier,
+    ) -> None:
+        logger.info(
+            "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
+            feed.link,
+            fetched_entries,
+            dedup_new_count,
+            dedup_skipped_count,
+            notifier.stats.get("fanout_sub_count", len(notifier.subs)),
+            notifier.stats.get("dedup_before_sub_count", len(notifier.subs)),
+            notifier.stats["enqueue_failed_count"],
+            notifier.stats["failed_drop_count"],
+            notifier.stats["failed_process_count"],
+            notifier.stats["failed_process_success_count"],
+            notifier.stats["failed_process_retry_count"],
+            notifier.stats["failed_process_exhausted_count"],
+        )
 
     async def _schedule_after_success(self, subs: list[Sub]) -> None:
         """成功后按订阅生效 interval 刷新 next_check_time 并重置 error。"""

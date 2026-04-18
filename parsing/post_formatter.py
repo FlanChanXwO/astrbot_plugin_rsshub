@@ -37,11 +37,7 @@ class Mention:
 
 
 class PostFormatter:
-    """
-    RSS内容格式化器
-
-    将RSS条目格式化为适合各平台发送的消息格式
-    """
+    """RSS内容格式化基类。"""
 
     def __init__(
         self,
@@ -65,11 +61,9 @@ class PostFormatter:
         self.media: list[Media] = []
         self.mentions: list[Mention] = []
 
-        # 先收集附件媒体，正文媒体在格式化时通过 HTML 解析补齐
         self._parse_enclosures()
 
     def _parse_enclosures(self):
-        """从附件中解析媒体"""
         for enc in self.enclosures:
             if not hasattr(enc, "url"):
                 continue
@@ -86,7 +80,6 @@ class PostFormatter:
             self.media.append(Media(url=enc.url, type=media_type))
 
     def _append_media(self, url: str, media_type: str) -> None:
-        """按 URL 去重添加媒体"""
         if not url:
             return
         if any(m.url == url for m in self.media):
@@ -94,7 +87,6 @@ class PostFormatter:
         self.media.append(Media(url=url, type=media_type))
 
     def _append_mention(self, mention: MentionContent) -> None:
-        """按 target 去重提及组件"""
         target = (mention.target or "").strip()
         if not target:
             return
@@ -104,13 +96,21 @@ class PostFormatter:
 
     @staticmethod
     def _strip_media_placeholders(text: str) -> str:
-        """移除正文里无意义的媒体占位文本。"""
         if not text:
             return ""
         text = re.sub(r"\[图片(?::[^]]*)?]", "", text)
         text = re.sub(r"\[(视频|音频|文件(?::[^]]*)?)]", "", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
+
+    def _build_via_line(
+        self,
+        *,
+        entry_link: str,
+        display_via: int,
+        display_author: int,
+    ) -> str:
+        raise NotImplementedError
 
     async def get_formatted_post(
         self,
@@ -126,16 +126,9 @@ class PostFormatter:
         style: int = 0,
         display_media: int = 0,
     ) -> tuple[str, bool, bool] | None:
-        """
-        获取格式化后的帖子内容
-
-        Returns:
-            (格式化内容, 是否需要媒体, 是否需要链接预览) 或 None
-        """
         parsed = await parse_html(self.html, self.feed_link)
         content = self._strip_media_placeholders(parsed.html_tree.get_plain())
 
-        # 合并正文解析出的媒体
         for parsed_media_item in parsed.media:
             if isinstance(parsed_media_item, ImageContent):
                 self._append_media(parsed_media_item.url, "image")
@@ -173,23 +166,18 @@ class PostFormatter:
                 parts.append("\n")
             parts.append(content)
 
-        via_line = ""
         entry_link = self.link if self.link else ""
-        if display_via > -2 and entry_link:
-            via_line = f"via {entry_link}"
-            if self.feed_title:
-                via_line += f" | {self.feed_title}"
-            if display_author >= 0 and self.author:
-                via_line += f" (author: {self.author})"
-        elif display_author >= 0 and self.author:
-            via_line = f"author: {self.author}"
+        via_line = self._build_via_line(
+            entry_link=entry_link,
+            display_via=display_via,
+            display_author=display_author,
+        )
 
         if via_line:
             if parts:
                 parts.append("\n\n")
             parts.append(via_line)
         elif entry_link:
-            # display_via 关闭时，保留原始链接
             if parts:
                 parts.append("\n\n")
             parts.append(entry_link)
@@ -208,3 +196,49 @@ class PostFormatter:
         need_link_preview = self.link is not None and link_preview >= 0
 
         return result, need_media, need_link_preview
+
+
+class SimplePostFormatter(PostFormatter):
+    """默认纯文本 formatter。"""
+
+    def _build_via_line(
+        self,
+        *,
+        entry_link: str,
+        display_via: int,
+        display_author: int,
+    ) -> str:
+        via_line = ""
+        if display_via > -2 and entry_link:
+            via_line = f"via {entry_link}"
+            if self.feed_title:
+                via_line += f" | {self.feed_title}"
+            if display_author >= 0 and self.author:
+                via_line += f" (author: {self.author})"
+        elif display_author >= 0 and self.author:
+            via_line = f"author: {self.author}"
+        return via_line
+
+
+class MarkdownPostFormatter(PostFormatter):
+    """适用于支持 markdown 的平台。"""
+
+    def _build_via_line(
+        self,
+        *,
+        entry_link: str,
+        display_via: int,
+        display_author: int,
+    ) -> str:
+        title = (self.feed_title or "via").strip() or "via"
+
+        if display_via > -2 and entry_link:
+            via_line = f"via [{title}]({entry_link})"
+            if display_author >= 0 and self.author:
+                via_line += f" | author: {self.author}"
+            return via_line
+
+        if display_author >= 0 and self.author:
+            return f"author: {self.author}"
+
+        return ""

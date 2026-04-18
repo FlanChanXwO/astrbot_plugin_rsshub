@@ -5,10 +5,12 @@ Message notify orchestration for RSS updates.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from astrbot.api import logger
 
 from ..db import FailedNotification, Feed, Sub, User
-from ..parsing import PostFormatter, parse_entry
+from ..parsing import get_formatter_for_platform, parse_entry
 from ..utils.retry_helper import process_failed_notification
 from .senders import (
     ChannelInfo,
@@ -20,6 +22,27 @@ from .senders import (
 
 class Notifier:
     """RSS update notifier orchestrating formatting and platform sender strategy."""
+
+    @staticmethod
+    def _format_debug_datetime(value: datetime | None) -> str:
+        if value is None:
+            return ""
+        return value.isoformat(sep=" ", timespec="seconds")
+
+    def _build_debug_payload(self, entry_parsed) -> str:
+        debug_lines = [
+            "",
+            "---",
+            "[debug]",
+            f"guid: {entry_parsed.guid or '(empty)'}",
+            f"id: {entry_parsed.entry_id or '(empty)'}",
+            f"link: {entry_parsed.link or '(empty)'}",
+            "published: "
+            f"{self._format_debug_datetime(entry_parsed.published) or '(empty)'}",
+            "updated: "
+            f"{self._format_debug_datetime(entry_parsed.updated) or '(empty)'}",
+        ]
+        return "\n".join(debug_lines)
 
     def __init__(
         self,
@@ -134,20 +157,9 @@ class Notifier:
         try:
             entry_parsed = await parse_entry(entry, self.feed.link)
 
-            formatter = PostFormatter(
-                html=entry_parsed.content or entry_parsed.summary,
-                title=entry_parsed.title,
-                feed_title=self.feed.title,
-                link=entry_parsed.link,
-                author=entry_parsed.author,
-                tags=entry_parsed.tags,
-                feed_link=self.feed.link,
-                enclosures=entry_parsed.enclosures,
-            )
-
             for sub in self.subs:
                 try:
-                    await self._send_to_subscriber(sub, formatter, entry_parsed)
+                    await self._send_to_subscriber(sub, entry_parsed)
                 except Exception as err:
                     logger.error(
                         "发送更新通知给订阅者 %s 失败: %s",
@@ -158,14 +170,29 @@ class Notifier:
         except Exception as err:
             logger.error("处理条目通知失败: %s", err, exc_info=True)
 
-    async def _send_to_subscriber(
-        self, sub: Sub, formatter: PostFormatter, entry_parsed
-    ) -> None:
+    async def _send_to_subscriber(self, sub: Sub, entry_parsed) -> None:
         user = await User.get_or_create(sub.user_id)
+        session_id = self._resolve_target_session(sub, user)
+        sender_platform_name = (sub.platform_name or "").strip()
+        if not sender_platform_name and session_id:
+            sender_platform_name = session_id.split(":", 1)[0]
+
         effective = Sub.resolve_effective_options(sub, user)
 
         if effective["notify"] == 0:
             return
+
+        formatter_cls = get_formatter_for_platform(sender_platform_name)
+        formatter = formatter_cls(
+            html=entry_parsed.content or entry_parsed.summary,
+            title=entry_parsed.title,
+            feed_title=self.feed.title,
+            link=entry_parsed.link,
+            author=entry_parsed.author,
+            tags=entry_parsed.tags,
+            feed_link=self.feed.link,
+            enclosures=entry_parsed.enclosures,
+        )
 
         formatted = await formatter.get_formatted_post(
             sub_title=sub.title,
@@ -185,6 +212,8 @@ class Notifier:
             return
 
         content, need_media, _need_link_preview = formatted
+        if self.config and bool(getattr(self.config, "debug_payload", False)):
+            content = f"{content}\n{self._build_debug_payload(entry_parsed)}"
 
         media_items: list[tuple[str, str]] = []
         if need_media and formatter.media:

@@ -29,6 +29,7 @@ class PluginConfig:
     sender_strategies: dict = None
     deduplicate_multi_bot: bool = True
     bootstrap_skip_history: bool = True
+    debug_payload: bool = False
     platform_shared_data: dict = None
     db_file: str = "rsshub.db"
     astrbot_config: AstrBotConfig | None = None
@@ -88,6 +89,7 @@ class PluginConfig:
             config.bootstrap_skip_history = bool(
                 astrbot_config.get("bootstrap_skip_history", True)
             )
+            config.debug_payload = bool(astrbot_config.get("debug_payload", False))
             # Load platform shared data
             raw_shared = astrbot_config.get("platform_shared_data", {})
             config.platform_shared_data = {
@@ -130,6 +132,7 @@ class PluginConfig:
                 config.bootstrap_skip_history = bool(
                     data.get("bootstrap_skip_history", True)
                 )
+                config.debug_payload = bool(data.get("debug_payload", False))
                 # Load platform shared data
                 raw_shared = data.get("platform_shared_data", {})
                 config.platform_shared_data = {
@@ -163,6 +166,7 @@ class PluginConfig:
         self.astrbot_config["bootstrap_skip_history"] = bool(
             self.bootstrap_skip_history
         )
+        self.astrbot_config["debug_payload"] = bool(self.debug_payload)
         self.astrbot_config["platform_shared_data"] = dict(self.platform_shared_data)
         self.astrbot_config.save_config()
 

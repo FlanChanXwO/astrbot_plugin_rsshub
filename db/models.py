@@ -303,9 +303,9 @@ def get_session() -> AsyncSession:
 def resolve_effective_options(
     sub: "Sub",
     user: "User",
-) -> dict[str, int]:
+) -> dict[str, int | str | None]:
     """解析订阅生效选项：订阅值优先，-100 继承用户默认。"""
-    options: dict[str, int] = {}
+    options: dict[str, int | str | None] = {}
     for key in EFFECTIVE_OPTION_KEYS:
         sub_val = getattr(sub, key)
         options[key] = getattr(user, key) if sub_val == INHERIT_VALUE else sub_val

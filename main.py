@@ -91,6 +91,7 @@ PLUGIN_CONFIG_KEYS = {
     "sender_strategy_weixin_oc",
     "deduplicate_multi_bot",
     "bootstrap_skip_history",
+    "debug_payload",
     "platform_shared_data_aiocqhttp",
 }
 
@@ -200,6 +201,14 @@ class RSSHubPlugin(Star):
             if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
                 return False
             raise ValueError("bootstrap_skip_history 仅支持布尔值: true/false")
+
+        if normalized_key == "debug_payload":
+            lowered = raw_value.lower()
+            if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
+                return True
+            if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
+                return False
+            raise ValueError("debug_payload 仅支持布尔值: true/false")
 
         if normalized_key == "proxy":
             return raw_value
@@ -833,7 +842,7 @@ class RSSHubPlugin(Star):
         for key, raw_value in defaults.items():
             if key not in SESSION_DEFAULT_KEYS:
                 continue
-            if key == "title" or key == "tags":
+            if key in {"title", "tags"}:
                 update_payload[key] = str(raw_value)
             else:
                 update_payload[key] = int(raw_value)
@@ -1371,6 +1380,7 @@ class RSSHubPlugin(Star):
             download_media_before_send=(
                 self.config.download_image_before_send if self.config else True
             ),
+            config=self.config,
         ).notify_all()
 
         first_title = selected_entries[0].get("title") or "(无标题)"
@@ -1704,7 +1714,8 @@ class RSSHubPlugin(Star):
             yield event.plain_result(
                 "用法: /sub_set <订阅ID> <选项名> <值>\n"
                 "可用选项: notify/send_mode/length_limit/link_preview/display_author/"
-                "display_via/display_title/display_entry_tags/style/display_media/interval/title/tags/target_session"
+                "display_via/display_title/display_entry_tags/style/display_media/"
+                "interval/title/tags/target_session"
             )
             return
 
@@ -1809,7 +1820,8 @@ class RSSHubPlugin(Star):
             yield event.plain_result(
                 "用法: /sub_session_default_set <key> <value>\n"
                 "可用 key: notify/send_mode/length_limit/link_preview/display_author/"
-                "display_via/display_title/display_entry_tags/style/display_media/interval/title/tags"
+                "display_via/display_title/display_entry_tags/style/display_media/"
+                "interval/title/tags"
             )
             return
 
@@ -1877,6 +1889,7 @@ class RSSHubPlugin(Star):
                 f"failed_queue_max_retries = {self.config.failed_queue_max_retries}\n"
                 f"deduplicate_multi_bot = {self.config.deduplicate_multi_bot}\n"
                 f"bootstrap_skip_history = {self.config.bootstrap_skip_history}\n"
+                f"debug_payload = {self.config.debug_payload}\n"
                 "download_image_before_send = "
                 f"{self.config.download_image_before_send}\n"
                 "sender_strategies:\n"
@@ -1894,6 +1907,7 @@ class RSSHubPlugin(Star):
                 "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
                 "download_image_before_send/bootstrap_skip_history/"
                 "failed_queue_capacity/failed_queue_max_retries/"
+                "debug_payload/"
                 "sender_strategy_telegram/sender_strategy_aiocqhttp/"
                 "sender_strategy_weixin_oc/"
                 "deduplicate_multi_bot/platform_shared_data_aiocqhttp"

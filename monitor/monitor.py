@@ -23,6 +23,7 @@ from astrbot.api import logger
 
 from ..api import feed_get
 from ..db import FailedNotification, Feed, MonitorSchedule, Sub, User, get_session
+from ..locks import feed_lock
 from ..notifier import Notifier
 from ..utils.monitor_helpers import (
     looks_like_bare_domain_scheme,
@@ -290,97 +291,165 @@ class RSSMonitor:
 
     async def _monitor_feed_with_subs(self, session, feed: Feed, subs: list[Sub]):
         """抓取一次 feed 并按订阅粒度更新调度与通知。"""
-        headers = {
-            "If-Modified-Since": format_datetime(feed.last_modified or feed.updated_at)
-        }
-        if feed.etag:
-            headers["If-None-Match"] = feed.etag
+        if feed.id is None:
+            return
 
-        wf = await feed_get(
-            feed.link,
-            headers=headers,
-            verbose=False,
-            timeout=self.config.timeout if self.config else None,
-            proxy=self.config.proxy if self.config else "",
-        )
-        rss_d = wf.rss_d
+        async with feed_lock(feed.id):
+            headers = {
+                "If-Modified-Since": format_datetime(feed.last_modified or feed.updated_at)
+            }
+            if feed.etag:
+                headers["If-None-Match"] = feed.etag
 
-        feed_updated_fields: set[str] = set()
-        # 调度操作延迟到 session commit 之后执行
-        schedule_action: tuple[str, str | None] | None = (
-            None  # ("success" | "error", reason)
-        )
+            wf = await feed_get(
+                feed.link,
+                headers=headers,
+                verbose=False,
+                timeout=self.config.timeout if self.config else None,
+                proxy=self.config.proxy if self.config else "",
+            )
+            rss_d = wf.rss_d
 
-        try:
-            if wf.status == 304:
-                schedule_action = ("success", None)
-                self._stat.cached()
+            feed_updated_fields: set[str] = set()
+            # 调度操作延迟到 session commit 之后执行
+            schedule_action: tuple[str, str | None] | None = (
+                None  # ("success" | "error", reason)
+            )
 
-            elif rss_d is None:
-                schedule_action = (
-                    "error",
-                    wf.error.error_name if wf.error else "未知错误",
-                )
-                if self._all_subs_blocked(subs):
-                    feed.state = 0
-                    feed_updated_fields.add("state")
-                self._stat.failed()
-
-            elif not rss_d.entries:
-                schedule_action = ("success", None)
-                self._stat.empty()
-
-            else:
-                if (etag := wf.etag) != feed.etag:
-                    feed.etag = etag
-                    feed_updated_fields.add("etag")
-
-                title = rss_d.feed.get("title", "")
-                if title and title != feed.title:
-                    feed.title = title[:1024]
-                    feed_updated_fields.add("title")
-
-                old_hashes = list(feed.entry_hashes or [])
-                fetched_entries = len(rss_d.entries)
-                new_hashes, updated_entries = self._calculate_update(
-                    old_hashes,
-                    rss_d.entries,
-                    feed_link=feed.link,
-                )
-                dedup_new_count = len(updated_entries)
-                dedup_skipped_count = max(0, fetched_entries - dedup_new_count)
-                merged_hashes = self._merge_hash_history(
-                    old_hashes,
-                    new_hashes,
-                    fetched_entries,
-                )
-
-                if not old_hashes:
-                    feed.last_modified = wf.last_modified
-                    feed.entry_hashes = merged_hashes
-                    feed_updated_fields.update({"last_modified", "entry_hashes"})
+            try:
+                if wf.status == 304:
                     schedule_action = ("success", None)
-                    self._stat.not_updated()
-                    if self._config_value("bootstrap_skip_history", True):
-                        logger.info(
-                            "Feed首次初始化完成（不推送历史内容）: %s, fetched_entries=%s, bootstrap_skipped_count=%s",
-                            feed.link,
-                            fetched_entries,
-                            fetched_entries,
-                        )
+                    self._stat.cached()
+
+                elif rss_d is None:
+                    schedule_action = (
+                        "error",
+                        wf.error.error_name if wf.error else "未知错误",
+                    )
+                    if self._all_subs_blocked(subs):
+                        feed.state = 0
+                        feed_updated_fields.add("state")
+                    self._stat.failed()
+
+                elif not rss_d.entries:
+                    schedule_action = ("success", None)
+                    self._stat.empty()
+
+                else:
+                    if (etag := wf.etag) != feed.etag:
+                        feed.etag = etag
+                        feed_updated_fields.add("etag")
+
+                    title = rss_d.feed.get("title", "")
+                    if title and title != feed.title:
+                        feed.title = title[:1024]
+                        feed_updated_fields.add("title")
+
+                    old_hashes = list(feed.entry_hashes or [])
+                    fetched_entries = len(rss_d.entries)
+                    new_hashes, updated_entries = self._calculate_update(
+                        old_hashes,
+                        rss_d.entries,
+                        feed_link=feed.link,
+                    )
+                    dedup_new_count = len(updated_entries)
+                    dedup_skipped_count = max(0, fetched_entries - dedup_new_count)
+                    merged_hashes = self._merge_hash_history(
+                        old_hashes,
+                        new_hashes,
+                        fetched_entries,
+                    )
+
+                    if not old_hashes:
+                        feed.last_modified = wf.last_modified
+                        feed.entry_hashes = merged_hashes
+                        feed_updated_fields.update({"last_modified", "entry_hashes"})
+                        schedule_action = ("success", None)
+                        self._stat.not_updated()
+                        if self._config_value("bootstrap_skip_history", True):
+                            logger.info(
+                                "Feed首次初始化完成（不推送历史内容）: %s, fetched_entries=%s, bootstrap_skipped_count=%s",
+                                feed.link,
+                                fetched_entries,
+                                fetched_entries,
+                            )
+                        else:
+                            logger.info(
+                                "Feed首次初始化推送历史内容: %s, fetched_entries=%s, bootstrap_sent_count=%s",
+                                feed.link,
+                                fetched_entries,
+                                dedup_new_count,
+                            )
+                            ordered_entries = list(reversed(updated_entries))
+                            fanout_subs = subs
+                            fanout_feed_id = feed.id
+                            if fanout_feed_id is not None:
+                                fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
+
+                            dedup_before_sub_count = len(fanout_subs)
+                            if self.config and getattr(
+                                self.config, "deduplicate_multi_bot", True
+                            ):
+                                fanout_subs = self._deduplicate_session_subscriptions(
+                                    fanout_subs
+                                )
+                            fanout_sub_count = len(fanout_subs)
+
+                            notifier = Notifier(
+                                feed=feed,
+                                subs=fanout_subs,
+                                entries=ordered_entries,
+                                timeout_seconds=self.config.timeout if self.config else 30,
+                                proxy=self.config.proxy if self.config else "",
+                                download_media_before_send=(
+                                    self.config.download_image_before_send
+                                    if self.config
+                                    else True
+                                ),
+                                config=self.config,
+                            )
+                            await notifier.notify_all()
+                            logger.info(
+                                "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
+                                feed.link,
+                                fetched_entries,
+                                dedup_new_count,
+                                dedup_skipped_count,
+                                fanout_sub_count,
+                                dedup_before_sub_count,
+                                notifier.stats["enqueue_failed_count"],
+                                notifier.stats["failed_drop_count"],
+                                notifier.stats["failed_process_count"],
+                                notifier.stats["failed_process_success_count"],
+                                notifier.stats["failed_process_retry_count"],
+                                notifier.stats["failed_process_exhausted_count"],
+                            )
+
+                    elif not updated_entries:
+                        if merged_hashes != old_hashes:
+                            feed.entry_hashes = merged_hashes
+                            feed_updated_fields.add("entry_hashes")
+                        schedule_action = ("success", None)
+                        self._stat.not_updated()
+
                     else:
                         logger.info(
-                            "Feed首次初始化推送历史内容: %s, fetched_entries=%s, bootstrap_sent_count=%s",
-                            feed.link,
-                            fetched_entries,
-                            dedup_new_count,
+                            f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
                         )
+                        feed.last_modified = wf.last_modified
+                        feed.entry_hashes = merged_hashes
+                        feed_updated_fields.update({"last_modified", "entry_hashes"})
+
                         ordered_entries = list(reversed(updated_entries))
                         fanout_subs = subs
-                        if feed.id is not None:
-                            fanout_subs = await Sub.get_active_by_feed_id(feed.id)
+                        fanout_feed_id = feed.id
+                        if fanout_feed_id is not None:
+                            # Fan out once to all active subscribers of this feed,
+                            # avoiding chunk-based preemption between sessions/platforms.
+                            fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
 
                         dedup_before_sub_count = len(fanout_subs)
+                        # Apply multi-bot deduplication if enabled
                         if self.config and getattr(
                             self.config, "deduplicate_multi_bot", True
                         ):
@@ -418,83 +487,21 @@ class RSSMonitor:
                             notifier.stats["failed_process_retry_count"],
                             notifier.stats["failed_process_exhausted_count"],
                         )
+                        schedule_action = ("success", None)
+                        self._stat.updated()
+            finally:
+                if feed_updated_fields:
+                    session.add(feed)
+                    await session.commit()
+                    logger.debug(f"Feed {feed.id} 已更新字段: {feed_updated_fields}")
 
-                elif not updated_entries:
-                    if merged_hashes != old_hashes:
-                        feed.entry_hashes = merged_hashes
-                        feed_updated_fields.add("entry_hashes")
-                    schedule_action = ("success", None)
-                    self._stat.not_updated()
-
-                else:
-                    logger.info(
-                        f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
-                    )
-                    feed.last_modified = wf.last_modified
-                    feed.entry_hashes = merged_hashes
-                    feed_updated_fields.update({"last_modified", "entry_hashes"})
-
-                    ordered_entries = list(reversed(updated_entries))
-                    fanout_subs = subs
-                    if feed.id is not None:
-                        # Fan out once to all active subscribers of this feed,
-                        # avoiding chunk-based preemption between sessions/platforms.
-                        fanout_subs = await Sub.get_active_by_feed_id(feed.id)
-
-                    dedup_before_sub_count = len(fanout_subs)
-                    # Apply multi-bot deduplication if enabled
-                    if self.config and getattr(
-                        self.config, "deduplicate_multi_bot", True
-                    ):
-                        fanout_subs = self._deduplicate_session_subscriptions(
-                            fanout_subs
-                        )
-                    fanout_sub_count = len(fanout_subs)
-
-                    notifier = Notifier(
-                        feed=feed,
-                        subs=fanout_subs,
-                        entries=ordered_entries,
-                        timeout_seconds=self.config.timeout if self.config else 30,
-                        proxy=self.config.proxy if self.config else "",
-                        download_media_before_send=(
-                            self.config.download_image_before_send
-                            if self.config
-                            else True
-                        ),
-                        config=self.config,
-                    )
-                    await notifier.notify_all()
-                    logger.info(
-                        "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
-                        feed.link,
-                        fetched_entries,
-                        dedup_new_count,
-                        dedup_skipped_count,
-                        fanout_sub_count,
-                        dedup_before_sub_count,
-                        notifier.stats["enqueue_failed_count"],
-                        notifier.stats["failed_drop_count"],
-                        notifier.stats["failed_process_count"],
-                        notifier.stats["failed_process_success_count"],
-                        notifier.stats["failed_process_retry_count"],
-                        notifier.stats["failed_process_exhausted_count"],
-                    )
-                    schedule_action = ("success", None)
-                    self._stat.updated()
-        finally:
-            if feed_updated_fields:
-                session.add(feed)
-                await session.commit()
-                logger.debug(f"Feed {feed.id} 已更新字段: {feed_updated_fields}")
-
-        # 在 session commit 之后再执行调度操作，避免嵌套 session
-        if schedule_action:
-            action, reason = schedule_action
-            if action == "success":
-                await self._schedule_after_success(subs)
-            elif action == "error" and reason:
-                await self._schedule_after_error(subs, reason)
+            # 在 session commit 之后再执行调度操作，避免嵌套 session
+            if schedule_action:
+                action, reason = schedule_action
+                if action == "success":
+                    await self._schedule_after_success(subs)
+                elif action == "error" and reason:
+                    await self._schedule_after_error(subs, reason)
 
     @staticmethod
     def _all_subs_blocked(subs: list[Sub]) -> bool:

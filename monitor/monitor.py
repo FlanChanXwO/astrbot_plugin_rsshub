@@ -631,14 +631,22 @@ class RSSMonitor:
         for entry in entries:
             entry_hashes = self._hash_entry(entry, feed_link=feed_link)
             stable_hash = next(
-                (entry_hash for entry_hash in entry_hashes if self._is_identity_hash(entry_hash)),
+                (
+                    entry_hash
+                    for entry_hash in entry_hashes
+                    if self._is_identity_hash(entry_hash)
+                ),
                 "",
             )
 
-            known_by_identity = bool(stable_hash) and stable_hash in known_identity_hashes
+            known_by_identity = (
+                bool(stable_hash) and stable_hash in known_identity_hashes
+            )
             known_by_compat = False
             if not known_by_identity and not stable_hash:
-                known_by_compat = any(entry_hash in known_hashes for entry_hash in entry_hashes)
+                known_by_compat = any(
+                    entry_hash in known_hashes for entry_hash in entry_hashes
+                )
             known_entry = known_by_identity or known_by_compat
 
             if not known_entry:

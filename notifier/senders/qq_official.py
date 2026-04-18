@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from astrbot.api import logger
-from astrbot.api.message_components import File, Image, Plain, Record, Video
+from astrbot.api.message_components import Image, Plain, Video
 
 from .base import MessageSender
-from .media_paths import normalize_local_media_file_value, resolve_local_file_path
+from .media_paths import resolve_local_file_path
 from .types import NotifierContext, PreparedMedia, SendResult
 
 
@@ -56,37 +56,6 @@ class QQOfficialMessageSender(MessageSender):
         )
 
     @classmethod
-    def _normalize_media_component_file(
-        cls, component: object, session_id: str
-    ) -> None:
-        if not isinstance(component, (Image, Video, File, Record)):
-            return
-        file_value = str(getattr(component, "file", "") or "")
-        if not file_value:
-            return
-        if file_value.startswith(("http://", "https://", "base64://")):
-            return
-        try:
-            resolved = normalize_local_media_file_value(file_value)
-            if resolved != file_value:
-                component.file = resolved
-                logger.debug(
-                    "QQOfficial media file normalized: session=%s, component=%s, original=%s, normalized=%s",
-                    session_id,
-                    type(component).__name__,
-                    file_value,
-                    resolved,
-                )
-        except Exception as ex:
-            logger.warning(
-                "QQOfficial media file normalize failed: session=%s, component=%s, file=%s, err=%s",
-                session_id,
-                type(component).__name__,
-                file_value,
-                ex,
-            )
-
-    @classmethod
     def _sanitize_nonexistent_local_media(
         cls,
         chain: list,
@@ -131,15 +100,9 @@ class QQOfficialMessageSender(MessageSender):
         chain: list,
         session_id: str,
     ) -> tuple[list, list[str]]:
-        cls._normalize_chain_media_files(chain, session_id)
+        super()._normalize_chain_media_files(chain, session_id)
         cls._log_chain_media_files(chain, session_id)
         return cls._sanitize_nonexistent_local_media(chain, session_id)
-
-    @classmethod
-    def _normalize_chain_media_files(cls, chain: list, session_id: str) -> list:
-        for component in chain:
-            cls._normalize_media_component_file(component, session_id)
-        return chain
 
     @classmethod
     def _log_chain_media_files(cls, chain: list, session_id: str) -> None:

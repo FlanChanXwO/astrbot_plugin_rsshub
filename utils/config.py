@@ -28,13 +28,18 @@ class PluginConfig:
     failed_queue_max_retries: int = 3
     sender_strategies: dict = None
     deduplicate_multi_bot: bool = True
+    bootstrap_skip_history: bool = True
     platform_shared_data: dict = None
     db_file: str = "rsshub.db"
     astrbot_config: AstrBotConfig | None = None
 
     def __post_init__(self):
         if self.sender_strategies is None:
-            self.sender_strategies = {"telegram": True, "aiocqhttp": True}
+            self.sender_strategies = {
+                "telegram": True,
+                "aiocqhttp": True,
+                "weixin_oc": True,
+            }
         if self.platform_shared_data is None:
             self.platform_shared_data = {"aiocqhttp": False}
 
@@ -74,10 +79,14 @@ class PluginConfig:
             config.sender_strategies = {
                 "telegram": bool(raw_strategies.get("telegram", True)),
                 "aiocqhttp": bool(raw_strategies.get("aiocqhttp", True)),
+                "weixin_oc": bool(raw_strategies.get("weixin_oc", True)),
             }
             # Load multi-bot deduplication
             config.deduplicate_multi_bot = bool(
                 astrbot_config.get("deduplicate_multi_bot", True)
+            )
+            config.bootstrap_skip_history = bool(
+                astrbot_config.get("bootstrap_skip_history", True)
             )
             # Load platform shared data
             raw_shared = astrbot_config.get("platform_shared_data", {})
@@ -112,10 +121,14 @@ class PluginConfig:
                 config.sender_strategies = {
                     "telegram": bool(raw_strategies.get("telegram", True)),
                     "aiocqhttp": bool(raw_strategies.get("aiocqhttp", True)),
+                    "weixin_oc": bool(raw_strategies.get("weixin_oc", True)),
                 }
                 # Load multi-bot deduplication
                 config.deduplicate_multi_bot = bool(
                     data.get("deduplicate_multi_bot", True)
+                )
+                config.bootstrap_skip_history = bool(
+                    data.get("bootstrap_skip_history", True)
                 )
                 # Load platform shared data
                 raw_shared = data.get("platform_shared_data", {})
@@ -147,6 +160,9 @@ class PluginConfig:
         )
         self.astrbot_config["sender_strategies"] = dict(self.sender_strategies)
         self.astrbot_config["deduplicate_multi_bot"] = bool(self.deduplicate_multi_bot)
+        self.astrbot_config["bootstrap_skip_history"] = bool(
+            self.bootstrap_skip_history
+        )
         self.astrbot_config["platform_shared_data"] = dict(self.platform_shared_data)
         self.astrbot_config.save_config()
 
@@ -167,6 +183,8 @@ class PluginConfig:
             return self.sender_strategies.get("telegram", True)
         if key == "sender_strategy_aiocqhttp":
             return self.sender_strategies.get("aiocqhttp", True)
+        if key == "sender_strategy_weixin_oc":
+            return self.sender_strategies.get("weixin_oc", True)
         # Handle platform_shared_data_* keys
         if key == "platform_shared_data_aiocqhttp":
             return self.platform_shared_data.get("aiocqhttp", False)
@@ -181,6 +199,10 @@ class PluginConfig:
             return
         if key == "sender_strategy_aiocqhttp":
             self.sender_strategies["aiocqhttp"] = bool(value)
+            self.save()
+            return
+        if key == "sender_strategy_weixin_oc":
+            self.sender_strategies["weixin_oc"] = bool(value)
             self.save()
             return
         # Handle platform_shared_data_* keys

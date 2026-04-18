@@ -40,6 +40,18 @@ class Notifier:
         self.proxy = proxy or ""
         self.download_media_before_send = bool(download_media_before_send)
         self.config = config
+        self._stats = {
+            "enqueue_failed_count": 0,
+            "failed_drop_count": 0,
+            "failed_process_count": 0,
+            "failed_process_success_count": 0,
+            "failed_process_retry_count": 0,
+            "failed_process_exhausted_count": 0,
+        }
+
+    @property
+    def stats(self) -> dict[str, int]:
+        return dict(self._stats)
 
     def _build_context(self, sub: Sub) -> NotifierContext:
         """构建通知上下文"""
@@ -306,6 +318,7 @@ class Notifier:
                     "Failed notification queue disabled (capacity=%s), dropping message",
                     max_capacity,
                 )
+                self._stats["failed_drop_count"] += 1
                 return
 
             # Use cheaper capacity check to reduce DB load
@@ -315,6 +328,7 @@ class Notifier:
                     "Failed notification queue full for sub=%s, dropping message",
                     sub.id,
                 )
+                self._stats["failed_drop_count"] += 1
                 return
 
             # Build media URLs list
@@ -341,12 +355,14 @@ class Notifier:
                 options=options,
                 fail_reason=fail_reason,
             )
+            self._stats["enqueue_failed_count"] += 1
             logger.info(
                 "Enqueued failed notification for retry: sub=%s, reason=%s",
                 sub.id,
                 fail_reason,
             )
         except Exception as ex:
+            self._stats["failed_drop_count"] += 1
             logger.error("Failed to enqueue notification: %s", ex)
 
     async def _process_failed_queue(
@@ -373,13 +389,23 @@ class Notifier:
             )
 
             for notif in pending:
-                await process_failed_notification(
+                self._stats["failed_process_count"] += 1
+                success, _detail = await process_failed_notification(
                     notif,
                     config=self.config,
                     timeout_seconds=self.timeout_seconds,
                     proxy=self.proxy,
                     max_retries=max_retries,
                 )
+                if success:
+                    self._stats["failed_process_success_count"] += 1
+                    continue
+
+                next_retry = notif.retry_count + 1
+                if next_retry >= max_retries:
+                    self._stats["failed_process_exhausted_count"] += 1
+                else:
+                    self._stats["failed_process_retry_count"] += 1
 
         except Exception as ex:
             logger.error("Failed to process failed queue for sub=%s: %s", sub.id, ex)

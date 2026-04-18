@@ -69,7 +69,7 @@
   },
   "download_image_before_send": {
     "type": "bool",
-    "description": "先下载图片再发送",
+    "description": "先下载媒体后发送",
     "hint": "开启后会先下载媒体到本地再推送，可复用缓存，但是在docker环境下需要共享数据卷",
     "default": false
   },
@@ -91,7 +91,8 @@
     "hint": "配置各平台使用的发送策略。关闭特定平台策略后将使用默认发送策略",
     "default": {
       "telegram": true,
-      "aiocqhttp": true
+      "aiocqhttp": true,
+      "weixin_oc": true
     },
     "items": {
       "telegram": {
@@ -105,6 +106,12 @@
         "description": "启用 OneBot 专用发送策略",
         "hint": "启用后将使用 OneBot 优化策略（合并转发节点）。关闭则使用默认策略",
         "default": true
+      },
+      "weixin_oc": {
+        "type": "bool",
+        "description": "启用微信个人号专用发送策略",
+        "hint": "启用后将使用微信个人号优化策略（单组件顺序发送）。关闭则使用默认策略",
+        "default": true
       }
     }
   },
@@ -112,6 +119,12 @@
     "type": "bool",
     "description": "单会话多 BOT 去重",
     "hint": "开启后，当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息，避免重复推送",
+    "default": true
+  },
+  "bootstrap_skip_history": {
+    "type": "bool",
+    "description": "首轮跳过历史条目",
+    "hint": "开启后，首次监控仅建立去重历史不推送旧条目；关闭后首次监控会按抓取结果推送历史条目",
     "default": true
   },
   "platform_shared_data": {

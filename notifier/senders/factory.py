@@ -4,6 +4,7 @@ from .aiocqhttp import AiocqhttpMessageSender
 from .base import MessageSender
 from .qq_official import QQOfficialMessageSender
 from .telegram import TelegramMessageSender
+from .weixin_oc import WeixinOCMessageSender
 
 
 def get_sender_for_platform_name(
@@ -24,7 +25,12 @@ def get_sender_for_platform_name(
     # Check if config has sender_strategies
     strategies = getattr(config, "sender_strategies", None) if config else None
     if strategies is None:
-        strategies = {"telegram": True, "aiocqhttp": True, "qq_official": True}
+        strategies = {
+            "telegram": True,
+            "aiocqhttp": True,
+            "qq_official": True,
+            "weixin_oc": True,
+        }
 
     # Telegram strategy
     if normalized in {"telegram", "tg"} or "telegram" in normalized:
@@ -50,6 +56,26 @@ def get_sender_for_platform_name(
     if "qq_official" in normalized or "qqofficial" in normalized:
         if strategies.get("qq_official", True):
             return QQOfficialMessageSender
+        return MessageSender
+
+    # Weixin personal strategy
+    if normalized in {
+        "weixin_oc",
+        "weixin_personal",
+        "wechat",
+        "wechat_personal",
+        "weixin",
+    }:
+        if strategies.get("weixin_oc", True):
+            return WeixinOCMessageSender
+        return MessageSender
+    if (
+        "weixin_oc" in normalized
+        or "weixin_personal" in normalized
+        or "wechat_personal" in normalized
+    ):
+        if strategies.get("weixin_oc", True):
+            return WeixinOCMessageSender
         return MessageSender
 
     return MessageSender

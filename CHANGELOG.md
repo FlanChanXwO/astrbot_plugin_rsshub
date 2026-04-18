@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.15] - 2026-04-17
+
+### Added
+
+- 新增微信个人号（`weixin_oc`）平台专用发送器策略，适配“每条消息只能包含一个消息组件”的平台约束：
+  - 图片、视频、音频、文件按单组件顺序发送
+  - 文本内容单独发送，避免将多组件消息链直接交给平台
+  - 媒体下载失败时，会在文本中附带原始链接作为兜底
+  - 新增配置项 `sender_strategy_weixin_oc`，可通过 `/rss_conf sender_strategy_weixin_oc <true/false>` 开启或关闭该策略
+
+### Changed
+
+- 去重与监控链路优化：
+  - 调整监控侧判重为“稳定身份优先 + 兼容指纹回退”，降低仅时间戳抖动导致的重复推送
+  - 新增/完善监控轮次结构化统计日志，包含抓取条数、去重新增/跳过、扇出订阅数及失败队列处理计数
+  - 首轮行为支持配置 `bootstrap_skip_history`（默认 `true`）：可选“仅建历史不推送”或“首轮补推历史”
+- 配置与命令入口同步：
+  - 新增配置项 `bootstrap_skip_history`，并接入配置加载/保存、`/rss_conf` 解析与展示
+  - `/rsshelp` 与配置项说明补充 `failed_queue_max_retries` 与 `bootstrap_skip_history`
+- 失败队列容量判定边界修正：
+  - `FailedNotification.is_at_capacity` 从 `>` 调整为 `>=`，达到容量即判满
+
+### Fixed
+
+- 修复 QQ Official 在 Docker 场景下图片媒体路径被错误解析导致的 `FileNotFoundError`：
+  - `file:///` 本地 URI 在发送前统一归一化为绝对本地路径，避免核心链路旧版切片逻辑（如 `i.file[8:]`）将路径误变为相对路径
+
+- 修复失败队列观测盲区：
+  - `Notifier` 增加失败入队、丢弃、处理成功、重试中、重试耗尽等统计计数，便于定位“漏推”来源
+
+### Docs
+
+- 文档同步更新：
+  - `README.md` 新增 `bootstrap_skip_history` 说明
+  - 明确“监控主循环无固定每周期条目上限”，实际受源更新量、失败队列容量、最大重试次数与平台限流影响
+
 ## [1.0.14] - 2026-04-14
 
 ### Added

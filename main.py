@@ -88,7 +88,9 @@ PLUGIN_CONFIG_KEYS = {
     "failed_queue_max_retries",
     "sender_strategy_telegram",
     "sender_strategy_aiocqhttp",
+    "sender_strategy_weixin_oc",
     "deduplicate_multi_bot",
+    "bootstrap_skip_history",
     "platform_shared_data_aiocqhttp",
 }
 
@@ -191,6 +193,14 @@ class RSSHubPlugin(Star):
                 return False
             raise ValueError("download_image_before_send 仅支持布尔值: true/false")
 
+        if normalized_key == "bootstrap_skip_history":
+            lowered = raw_value.lower()
+            if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
+                return True
+            if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
+                return False
+            raise ValueError("bootstrap_skip_history 仅支持布尔值: true/false")
+
         if normalized_key == "proxy":
             return raw_value
 
@@ -208,6 +218,7 @@ class RSSHubPlugin(Star):
         if normalized_key in {
             "sender_strategy_telegram",
             "sender_strategy_aiocqhttp",
+            "sender_strategy_weixin_oc",
             "deduplicate_multi_bot",
             "platform_shared_data_aiocqhttp",
         }:
@@ -1865,11 +1876,13 @@ class RSSHubPlugin(Star):
                 f"failed_queue_capacity = {self.config.failed_queue_capacity}\n"
                 f"failed_queue_max_retries = {self.config.failed_queue_max_retries}\n"
                 f"deduplicate_multi_bot = {self.config.deduplicate_multi_bot}\n"
+                f"bootstrap_skip_history = {self.config.bootstrap_skip_history}\n"
                 "download_image_before_send = "
                 f"{self.config.download_image_before_send}\n"
                 "sender_strategies:\n"
                 f"  telegram = {strategies.get('telegram', True)}\n"
                 f"  aiocqhttp = {strategies.get('aiocqhttp', True)}\n"
+                f"  weixin_oc = {strategies.get('weixin_oc', True)}\n"
                 "platform_shared_data:\n"
                 f"  aiocqhttp = {shared_data.get('aiocqhttp', False)}"
             )
@@ -1879,8 +1892,10 @@ class RSSHubPlugin(Star):
             yield event.plain_result(
                 "不支持的配置项。可用项: "
                 "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
-                "download_image_before_send/failed_queue_capacity/failed_queue_max_retries/"
+                "download_image_before_send/bootstrap_skip_history/"
+                "failed_queue_capacity/failed_queue_max_retries/"
                 "sender_strategy_telegram/sender_strategy_aiocqhttp/"
+                "sender_strategy_weixin_oc/"
                 "deduplicate_multi_bot/platform_shared_data_aiocqhttp"
             )
             return
@@ -1982,8 +1997,9 @@ class RSSHubPlugin(Star):
             + "- target_session: private/group/current 或完整 session\n\n"
             + "插件配置项:\n"
             + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
-            + "download_image_before_send/failed_queue_capacity\n"
-            + "- sender_strategy_telegram/sender_strategy_aiocqhttp: 平台发送策略开关\n"
+            + "download_image_before_send/bootstrap_skip_history/"
+            + "failed_queue_capacity/failed_queue_max_retries\n"
+            + "- sender_strategy_telegram/sender_strategy_aiocqhttp/sender_strategy_weixin_oc: 平台发送策略开关\n"
             + "- deduplicate_multi_bot: 单会话多BOT去重（默认true）\n"
             + "- platform_shared_data_aiocqhttp: aiocqhttp平台共享数据源（默认false）\n\n"
             + "会话级默认配置项:\n"

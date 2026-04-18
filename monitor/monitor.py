@@ -296,7 +296,9 @@ class RSSMonitor:
 
         async with feed_lock(feed.id):
             headers = {
-                "If-Modified-Since": format_datetime(feed.last_modified or feed.updated_at)
+                "If-Modified-Since": format_datetime(
+                    feed.last_modified or feed.updated_at
+                )
             }
             if feed.etag:
                 headers["If-None-Match"] = feed.etag
@@ -384,7 +386,9 @@ class RSSMonitor:
                             fanout_subs = subs
                             fanout_feed_id = feed.id
                             if fanout_feed_id is not None:
-                                fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
+                                fanout_subs = await Sub.get_active_by_feed_id(
+                                    fanout_feed_id
+                                )
 
                             dedup_before_sub_count = len(fanout_subs)
                             if self.config and getattr(
@@ -399,7 +403,9 @@ class RSSMonitor:
                                 feed=feed,
                                 subs=fanout_subs,
                                 entries=ordered_entries,
-                                timeout_seconds=self.config.timeout if self.config else 30,
+                                timeout_seconds=self.config.timeout
+                                if self.config
+                                else 30,
                                 proxy=self.config.proxy if self.config else "",
                                 download_media_before_send=(
                                     self.config.download_image_before_send
@@ -446,7 +452,9 @@ class RSSMonitor:
                         if fanout_feed_id is not None:
                             # Fan out once to all active subscribers of this feed,
                             # avoiding chunk-based preemption between sessions/platforms.
-                            fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
+                            fanout_subs = await Sub.get_active_by_feed_id(
+                                fanout_feed_id
+                            )
 
                         dedup_before_sub_count = len(fanout_subs)
                         # Apply multi-bot deduplication if enabled

@@ -104,6 +104,7 @@ async def transcode_video_to_mp4_for_qq(
         str(output_path),
     ]
 
+    process = None
     try:
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -116,10 +117,12 @@ async def transcode_video_to_mp4_for_qq(
         )
     except asyncio.TimeoutError:
         logger.warning("FFmpeg transcode timeout: src=%s", source_path)
-        try:
-            process.kill()  # type: ignore[name-defined]
-        except Exception:
-            pass
+        if process is not None:
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
         return None
     except Exception as ex:
         logger.warning(

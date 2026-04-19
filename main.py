@@ -889,7 +889,7 @@ class RSSHubPlugin(Star):
         if normalized in {"private", "friend", "dm"}:
             sender_id = event.get_sender_id()
             if not sender_id:
-                return None, "当前事件无法���别发送者，无法绑定私聊目标"
+                return None, "当前事件无法识别发送者，无法绑定私聊目标"
             return f"{platform_id}:FriendMessage:{sender_id}", None
 
         if normalized in {"group", "grp"}:

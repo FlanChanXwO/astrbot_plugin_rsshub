@@ -372,7 +372,7 @@ class RSSMonitor:
                     merged = self._merge_hash_history(
                         old_groups,
                         new_groups,
-                        len(old_groups),
+                        len(old_groups) + len(new_groups),
                     )
 
                     if not old_groups:

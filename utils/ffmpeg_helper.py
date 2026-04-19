@@ -19,13 +19,11 @@ _ffmpeg_exe_cache: str | None = None
 
 def ensure_ffmpeg_ready(*, auto_install: bool = True) -> str | None:
     """Resolve an FFmpeg executable path for plugin runtime use."""
-    del auto_install  # imageio-ffmpeg wheel already bundles executable.
-
     global _ffmpeg_exe_cache
     if _ffmpeg_exe_cache and Path(_ffmpeg_exe_cache).exists():
         return _ffmpeg_exe_cache
 
-    if imageio_ffmpeg is not None:
+    if auto_install and imageio_ffmpeg is not None:
         try:
             ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
             if ffmpeg_exe and Path(ffmpeg_exe).exists():
@@ -46,9 +44,10 @@ async def transcode_video_to_mp4_for_qq(
     source_path: Path,
     *,
     timeout_seconds: int = 120,
+    auto_install_ffmpeg: bool = True,
 ) -> Path | None:
     """Transcode source video to QQ-friendly H264/AAC MP4."""
-    ffmpeg_exe = ensure_ffmpeg_ready(auto_install=True)
+    ffmpeg_exe = ensure_ffmpeg_ready(auto_install=auto_install_ffmpeg)
     if not ffmpeg_exe:
         return None
 
@@ -123,6 +122,7 @@ async def transcode_video_to_mp4_for_qq(
                 await process.wait()
             except Exception:
                 pass
+        output_path.unlink(missing_ok=True)
         return None
     except Exception as ex:
         logger.warning(

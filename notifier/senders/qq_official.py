@@ -93,7 +93,10 @@ class QQOfficialMessageSender(MessageSender):
                 normalized.append(item)
                 continue
 
-            transcoded = await transcode_video_to_mp4_for_qq(local_path)
+            transcoded = await transcode_video_to_mp4_for_qq(
+                local_path,
+                auto_install_ffmpeg=cls._qq_auto_install_ffmpeg,
+            )
             if transcoded is None:
                 logger.warning(
                     "QQOfficial video transcode failed, fallback to original: url=%s, src=%s",

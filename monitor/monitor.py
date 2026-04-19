@@ -716,7 +716,6 @@ class RSSMonitor:
         """
         old_flat = {h for group in old_entry_groups for h in group if h}
         known_hashes = set(old_flat)
-        known_identity_hashes = {h for h in old_flat if self._is_identity_hash(h)}
         new_entry_groups: list[list[str]] = []
         updated_entries = []
 
@@ -727,9 +726,7 @@ class RSSMonitor:
                 "",
             )
 
-            known_by_identity = (
-                bool(stable_hash) and stable_hash in known_identity_hashes
-            )
+            known_by_identity = bool(stable_hash) and stable_hash in known_hashes
             known_by_compat = False
             if not known_by_identity and not stable_hash:
                 known_by_compat = any(h in known_hashes for h in entry_hashes)
@@ -738,10 +735,7 @@ class RSSMonitor:
                 updated_entries.append(entry)
 
             new_entry_groups.append(entry_hashes)
-            for h in entry_hashes:
-                known_hashes.add(h)
-                if self._is_identity_hash(h):
-                    known_identity_hashes.add(h)
+            known_hashes.update(entry_hashes)
 
         return new_entry_groups, updated_entries
 

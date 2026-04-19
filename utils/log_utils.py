@@ -18,9 +18,10 @@ class PrefixedLogger:
         return self.PREFIX + str(msg)
 
     def _with_stacklevel(self, kwargs: dict) -> dict:
-        if "stacklevel" not in kwargs:
-            kwargs["stacklevel"] = self.CALLER_STACKLEVEL
-        return kwargs
+        copied_kwargs = dict(kwargs)
+        if "stacklevel" not in copied_kwargs:
+            copied_kwargs["stacklevel"] = self.CALLER_STACKLEVEL
+        return copied_kwargs
 
     def debug(self, msg, *args, **kwargs):
         _logger.debug(self._add_prefix(msg), *args, **self._with_stacklevel(kwargs))

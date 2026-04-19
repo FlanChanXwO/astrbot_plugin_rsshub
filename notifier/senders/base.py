@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from astrbot.api import logger
 from astrbot.api.message_components import File, Image, Plain, Record, Video
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.star.star_tools import StarTools
 
+from ...utils.log_utils import logger
 from .media_downloader import get_or_download_media_to_cache
 from .media_paths import normalize_local_media_file_value
 from .types import PreparedMedia, SendResult

@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qsl
 
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import File
 from astrbot.api.star import Context, Star
@@ -31,7 +31,7 @@ from astrbot.core.provider.register import llm_tools
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from .api import close_shared_session
-from .db import FailedNotification, Feed, Sub, User, close_db, init_db
+from .db import FailedNotification, Feed, Sub, User, close_db, get_session, init_db
 from .monitor import Monitor
 from .notifier import Notifier
 from .notifier.senders import set_bot_self_id_provider
@@ -42,6 +42,8 @@ from .utils.command_helpers import (
     select_subscriptions_for_scope,
 )
 from .utils.config import PluginConfig
+from .utils.ffmpeg_helper import ensure_ffmpeg_ready
+from .utils.log_utils import logger
 from .utils.rsshub_api import RSSHubRadarAPI, normalize_base_url
 from .utils.subscription_io import parse_subscriptions_toml
 from .web import RSSHubWebUI, feed_get, resolve_webui_config
@@ -83,6 +85,11 @@ PLUGIN_CONFIG_KEYS = {
     "minimal_interval",
     "timeout",
     "download_image_before_send",
+    "ffmpeg_qq_official_video_transcode",
+    "ffmpeg_qq_official_auto_install_ffmpeg",
+    # Backward-compatible keys
+    "qq_official_video_transcode",
+    "qq_official_auto_install_ffmpeg",
     "rsshub_base_url",
     "failed_queue_capacity",
     "failed_queue_max_retries",
@@ -230,6 +237,10 @@ class RSSHubPlugin(Star):
             "sender_strategy_weixin_oc",
             "deduplicate_multi_bot",
             "platform_shared_data_aiocqhttp",
+            "ffmpeg_qq_official_video_transcode",
+            "ffmpeg_qq_official_auto_install_ffmpeg",
+            "qq_official_video_transcode",
+            "qq_official_auto_install_ffmpeg",
         }:
             lowered = raw_value.lower()
             if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
@@ -295,6 +306,15 @@ class RSSHubPlugin(Star):
             astrbot_config=self.astrbot_config,
         )
         logger.info(f"RSS插件配置加载完成，数据目录: {self.config.data_dir}")
+
+        if self.config.qq_official_video_transcode:
+            ffmpeg_path = ensure_ffmpeg_ready(
+                auto_install=self.config.qq_official_auto_install_ffmpeg
+            )
+            if ffmpeg_path:
+                logger.info("RSS插件 FFmpeg 已就绪: %s", ffmpeg_path)
+            else:
+                logger.warning("RSS插件 FFmpeg 未就绪，QQ 官方视频将尝试原始格式发送")
 
         await init_db(self.config.db_path)
         logger.info("RSS插件数据库初始化完成")
@@ -869,7 +889,7 @@ class RSSHubPlugin(Star):
         if normalized in {"private", "friend", "dm"}:
             sender_id = event.get_sender_id()
             if not sender_id:
-                return None, "当前事件无法识别发送者，无法绑定私聊目标"
+                return None, "当前事件无法���别发送者，无法绑定私聊目标"
             return f"{platform_id}:FriendMessage:{sender_id}", None
 
         if normalized in {"group", "grp"}:
@@ -1122,6 +1142,34 @@ class RSSHubPlugin(Star):
                 return
 
         feed = await Feed.get_or_create(link=url, title=title)
+
+        # Pre-populate entry_hashes for new feeds to prevent pushing
+        # historical entries on the first monitor run.
+        if not feed.entry_hashes and wf.rss_d and wf.rss_d.entries:
+            try:
+                new_groups: list[list[str]] = []
+                for entry in wf.rss_d.entries:
+                    fingerprints = self.monitor._hash_entry(entry, feed_link=url)
+                    new_groups.append(fingerprints)
+                if new_groups:
+                    merged = self.monitor._merge_hash_history(
+                        [], new_groups, len(new_groups)
+                    )
+                    if merged:
+                        async with get_session() as session:
+                            db_feed = await session.get(Feed, feed.id)
+                            if db_feed:
+                                db_feed.entry_hashes = merged
+                                session.add(db_feed)
+                                await session.commit()
+                        feed.entry_hashes = merged
+            except Exception:
+                logger.warning(
+                    "Failed to pre-populate entry_hashes for feed %s",
+                    url,
+                    exc_info=True,
+                )
+
         sub = await Sub.create(
             user_id=user.id,
             feed_id=feed.id,
@@ -1892,6 +1940,11 @@ class RSSHubPlugin(Star):
                 f"debug_payload = {self.config.debug_payload}\n"
                 "download_image_before_send = "
                 f"{self.config.download_image_before_send}\n"
+                "ffmpeg:\n"
+                "  qq_official_video_transcode = "
+                f"{self.config.qq_official_video_transcode}\n"
+                "  qq_official_auto_install_ffmpeg = "
+                f"{self.config.qq_official_auto_install_ffmpeg}\n"
                 "sender_strategies:\n"
                 f"  telegram = {strategies.get('telegram', True)}\n"
                 f"  aiocqhttp = {strategies.get('aiocqhttp', True)}\n"
@@ -1906,6 +1959,8 @@ class RSSHubPlugin(Star):
                 "不支持的配置项。可用项: "
                 "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
                 "download_image_before_send/bootstrap_skip_history/"
+                "ffmpeg_qq_official_video_transcode/"
+                "ffmpeg_qq_official_auto_install_ffmpeg/"
                 "failed_queue_capacity/failed_queue_max_retries/"
                 "debug_payload/"
                 "sender_strategy_telegram/sender_strategy_aiocqhttp/"
@@ -2012,6 +2067,8 @@ class RSSHubPlugin(Star):
             + "插件配置项:\n"
             + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
             + "download_image_before_send/bootstrap_skip_history/"
+            + "ffmpeg_qq_official_video_transcode/"
+            + "ffmpeg_qq_official_auto_install_ffmpeg/"
             + "failed_queue_capacity/failed_queue_max_retries\n"
             + "- sender_strategy_telegram/sender_strategy_aiocqhttp/sender_strategy_weixin_oc: 平台发送策略开关\n"
             + "- deduplicate_multi_bot: 单会话多BOT去重（默认true）\n"

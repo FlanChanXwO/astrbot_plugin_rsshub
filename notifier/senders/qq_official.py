@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain, Video
 
+from ...utils.ffmpeg_helper import ensure_ffmpeg_ready, transcode_video_to_mp4_for_qq
+from ...utils.log_utils import logger
 from .base import MessageSender
+from .media_downloader import get_or_download_media_to_cache
 from .media_paths import resolve_local_file_path
 from .types import NotifierContext, PreparedMedia, SendResult
 
@@ -18,6 +20,106 @@ class QQOfficialMessageSender(MessageSender):
     - Multiple images: send images one by one, then send text separately
     - Video: send video first, then send text description separately
     """
+
+    _qq_video_transcode_enabled: bool = True
+    _qq_auto_install_ffmpeg: bool = True
+    _ffmpeg_checked: bool = False
+    _ffmpeg_available: bool = False
+
+    @classmethod
+    def configure_qq_official(
+        cls,
+        *,
+        video_transcode_enabled: bool,
+        auto_install_ffmpeg: bool,
+    ) -> None:
+        cls._qq_video_transcode_enabled = bool(video_transcode_enabled)
+        cls._qq_auto_install_ffmpeg = bool(auto_install_ffmpeg)
+        cls._ffmpeg_checked = False
+        cls._ffmpeg_available = False
+
+    @classmethod
+    def _ensure_ffmpeg_available(cls) -> bool:
+        if not cls._qq_video_transcode_enabled:
+            return False
+        if cls._ffmpeg_checked:
+            return cls._ffmpeg_available
+
+        ffmpeg_path = ensure_ffmpeg_ready(auto_install=cls._qq_auto_install_ffmpeg)
+        cls._ffmpeg_available = bool(ffmpeg_path)
+        cls._ffmpeg_checked = True
+        if ffmpeg_path:
+            logger.debug("QQOfficial FFmpeg ready: %s", ffmpeg_path)
+        else:
+            logger.warning(
+                "QQOfficial FFmpeg unavailable, video will be sent without transcode"
+            )
+        return cls._ffmpeg_available
+
+    @classmethod
+    async def _normalize_prepared_videos_for_qq(
+        cls,
+        prepared_media: list[PreparedMedia],
+    ) -> list[PreparedMedia]:
+        if not prepared_media or not cls._qq_video_transcode_enabled:
+            return prepared_media
+        if not cls._ensure_ffmpeg_available():
+            return prepared_media
+
+        normalized: list[PreparedMedia] = []
+        for item in prepared_media:
+            if item.media_type != "video" or item.download_failed:
+                normalized.append(item)
+                continue
+
+            local_path = item.local_path
+            if local_path is None:
+                try:
+                    local_path = await get_or_download_media_to_cache(
+                        url=item.original_url,
+                        timeout_seconds=cls._get_timeout_seconds(),
+                        proxy=cls._get_proxy(),
+                    )
+                except Exception as ex:
+                    logger.warning(
+                        "QQOfficial video pre-download failed: url=%s, err=%s",
+                        item.original_url,
+                        ex,
+                    )
+                    normalized.append(item)
+                    continue
+
+            if local_path is None or not local_path.exists():
+                normalized.append(item)
+                continue
+
+            transcoded = await transcode_video_to_mp4_for_qq(local_path)
+            if transcoded is None:
+                logger.warning(
+                    "QQOfficial video transcode failed, fallback to original: url=%s, src=%s",
+                    item.original_url,
+                    local_path,
+                )
+                normalized.append(
+                    PreparedMedia(
+                        media_type=item.media_type,
+                        original_url=item.original_url,
+                        local_path=local_path,
+                        download_failed=False,
+                    )
+                )
+                continue
+
+            normalized.append(
+                PreparedMedia(
+                    media_type=item.media_type,
+                    original_url=item.original_url,
+                    local_path=transcoded,
+                    download_failed=False,
+                )
+            )
+
+        return normalized
 
     @classmethod
     def _log_media_component_file_check(
@@ -139,6 +241,10 @@ class QQOfficialMessageSender(MessageSender):
             effective_prepared = prepared_media
             if effective_prepared is None and media:
                 effective_prepared = await cls.prepare_media(media)
+            if effective_prepared:
+                effective_prepared = await cls._normalize_prepared_videos_for_qq(
+                    effective_prepared
+                )
 
             # Build media components
             image_components = []

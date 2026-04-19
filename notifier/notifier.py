@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from astrbot.api import logger
-
 from ..db import FailedNotification, Feed, Sub, User
 from ..parsing import get_formatter_for_platform, parse_entry
+from ..utils.log_utils import logger
 from ..utils.retry_helper import process_failed_notification
 from .senders import (
     ChannelInfo,
@@ -257,6 +256,15 @@ class Notifier:
         sender.configure_behavior(
             download_media_before_send=(should_pre_download and prepared_media is None)
         )
+        if hasattr(sender, "configure_qq_official"):
+            sender.configure_qq_official(
+                video_transcode_enabled=bool(
+                    getattr(self.config, "qq_official_video_transcode", True)
+                ),
+                auto_install_ffmpeg=bool(
+                    getattr(self.config, "qq_official_auto_install_ffmpeg", True)
+                ),
+            )
         sent = await sender.send_to_user(
             session_id,
             content,

@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api import AstrBotConfig
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+
+from .log_utils import logger
 
 DEFAULT_RSSHUB_BASE_URL = "https://rsshub.app"
 DEFAULT_LOCAL_IMPORTS_DIRNAME = "imports"
@@ -24,6 +26,9 @@ class PluginConfig:
     rsshub_base_url: str = DEFAULT_RSSHUB_BASE_URL
     local_imports_dirname: str = DEFAULT_LOCAL_IMPORTS_DIRNAME
     download_image_before_send: bool = True
+    qq_official_video_transcode: bool = True
+    qq_official_auto_install_ffmpeg: bool = True
+    ffmpeg: dict = None
     failed_queue_capacity: int = 50
     failed_queue_max_retries: int = 3
     sender_strategies: dict = None
@@ -43,6 +48,13 @@ class PluginConfig:
             }
         if self.platform_shared_data is None:
             self.platform_shared_data = {"aiocqhttp": False}
+        if self.ffmpeg is None:
+            self.ffmpeg = {
+                "qq_official_video_transcode": bool(self.qq_official_video_transcode),
+                "qq_official_auto_install_ffmpeg": bool(
+                    self.qq_official_auto_install_ffmpeg
+                ),
+            }
 
     @classmethod
     def load(
@@ -69,6 +81,27 @@ class PluginConfig:
             config.download_image_before_send = bool(
                 astrbot_config.get("download_image_before_send", True)
             )
+            raw_ffmpeg = astrbot_config.get("ffmpeg", {})
+            if not isinstance(raw_ffmpeg, dict):
+                raw_ffmpeg = {}
+            config.qq_official_video_transcode = bool(
+                raw_ffmpeg.get(
+                    "qq_official_video_transcode",
+                    astrbot_config.get("qq_official_video_transcode", True),
+                )
+            )
+            config.qq_official_auto_install_ffmpeg = bool(
+                raw_ffmpeg.get(
+                    "qq_official_auto_install_ffmpeg",
+                    astrbot_config.get("qq_official_auto_install_ffmpeg", True),
+                )
+            )
+            config.ffmpeg = {
+                "qq_official_video_transcode": bool(config.qq_official_video_transcode),
+                "qq_official_auto_install_ffmpeg": bool(
+                    config.qq_official_auto_install_ffmpeg
+                ),
+            }
             config.failed_queue_capacity = int(
                 astrbot_config.get("failed_queue_capacity", 50)
             )
@@ -112,6 +145,29 @@ class PluginConfig:
                 config.download_image_before_send = bool(
                     data.get("download_image_before_send", True)
                 )
+                raw_ffmpeg = data.get("ffmpeg", {})
+                if not isinstance(raw_ffmpeg, dict):
+                    raw_ffmpeg = {}
+                config.qq_official_video_transcode = bool(
+                    raw_ffmpeg.get(
+                        "qq_official_video_transcode",
+                        data.get("qq_official_video_transcode", True),
+                    )
+                )
+                config.qq_official_auto_install_ffmpeg = bool(
+                    raw_ffmpeg.get(
+                        "qq_official_auto_install_ffmpeg",
+                        data.get("qq_official_auto_install_ffmpeg", True),
+                    )
+                )
+                config.ffmpeg = {
+                    "qq_official_video_transcode": bool(
+                        config.qq_official_video_transcode
+                    ),
+                    "qq_official_auto_install_ffmpeg": bool(
+                        config.qq_official_auto_install_ffmpeg
+                    ),
+                }
                 config.failed_queue_capacity = int(
                     data.get("failed_queue_capacity", 50)
                 )
@@ -157,6 +213,20 @@ class PluginConfig:
         self.astrbot_config["download_image_before_send"] = bool(
             self.download_image_before_send
         )
+        self.ffmpeg = {
+            "qq_official_video_transcode": bool(self.qq_official_video_transcode),
+            "qq_official_auto_install_ffmpeg": bool(
+                self.qq_official_auto_install_ffmpeg
+            ),
+        }
+        self.astrbot_config["ffmpeg"] = dict(self.ffmpeg)
+        # Keep legacy flat keys for backward compatibility with older runtimes.
+        self.astrbot_config["qq_official_video_transcode"] = bool(
+            self.qq_official_video_transcode
+        )
+        self.astrbot_config["qq_official_auto_install_ffmpeg"] = bool(
+            self.qq_official_auto_install_ffmpeg
+        )
         self.astrbot_config["failed_queue_capacity"] = int(self.failed_queue_capacity)
         self.astrbot_config["failed_queue_max_retries"] = int(
             self.failed_queue_max_retries
@@ -192,6 +262,13 @@ class PluginConfig:
         # Handle platform_shared_data_* keys
         if key == "platform_shared_data_aiocqhttp":
             return self.platform_shared_data.get("aiocqhttp", False)
+        if key in {"ffmpeg_qq_official_video_transcode", "qq_official_video_transcode"}:
+            return bool(self.ffmpeg.get("qq_official_video_transcode", True))
+        if key in {
+            "ffmpeg_qq_official_auto_install_ffmpeg",
+            "qq_official_auto_install_ffmpeg",
+        }:
+            return bool(self.ffmpeg.get("qq_official_auto_install_ffmpeg", True))
         return getattr(self, key, default)
 
     def set(self, key: str, value: Any) -> None:
@@ -212,6 +289,21 @@ class PluginConfig:
         # Handle platform_shared_data_* keys
         if key == "platform_shared_data_aiocqhttp":
             self.platform_shared_data["aiocqhttp"] = bool(value)
+            self.save()
+            return
+        if key in {"ffmpeg_qq_official_video_transcode", "qq_official_video_transcode"}:
+            parsed = bool(value)
+            self.qq_official_video_transcode = parsed
+            self.ffmpeg["qq_official_video_transcode"] = parsed
+            self.save()
+            return
+        if key in {
+            "ffmpeg_qq_official_auto_install_ffmpeg",
+            "qq_official_auto_install_ffmpeg",
+        }:
+            parsed = bool(value)
+            self.qq_official_auto_install_ffmpeg = parsed
+            self.ffmpeg["qq_official_auto_install_ffmpeg"] = parsed
             self.save()
             return
         if hasattr(self, key):

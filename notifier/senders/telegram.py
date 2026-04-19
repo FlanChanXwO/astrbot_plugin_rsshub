@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from astrbot.api import logger
 from astrbot.api.message_components import File, Image, Plain, Record, Video
 
+from ...utils.log_utils import logger
 from .base import MessageSender
 from .media_downloader import get_or_download_media_to_cache
 from .types import PreparedMedia, SendResult

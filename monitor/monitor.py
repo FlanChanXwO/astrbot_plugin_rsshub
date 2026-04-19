@@ -19,12 +19,11 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
-from astrbot.api import logger
-
 from ..api import feed_get
 from ..db import FailedNotification, Feed, MonitorSchedule, Sub, User, get_session
 from ..locks import feed_lock
 from ..notifier import Notifier
+from ..utils.log_utils import logger
 from ..utils.monitor_helpers import (
     looks_like_bare_domain_scheme,
     normalize_config_positive_int,
@@ -282,9 +281,17 @@ class RSSMonitor:
             logger.error(f"_monitor_subscriptions 失败: {ex}", exc_info=True)
 
     async def _is_sub_due(self, sub: Sub, now: datetime) -> bool:
-        """判断订阅是否到达检查时间。"""
+        """判断订阅是否到达检查时间。
+
+        优先使用 feed 级调度（当 feed.interval > 0 时），否则回退到订阅级调度。
+        """
         if sub.id is None:
             return False
+        # Feed 级调度优先
+        if sub.feed and sub.feed.interval and sub.feed.interval > 0:
+            feed_next = _ensure_utc_aware(sub.feed.next_check_time)
+            return feed_next is None or now >= feed_next
+        # 回退到订阅级调度
         schedule = await MonitorSchedule.get_or_create(sub.id)
         next_check = _ensure_utc_aware(schedule.next_check_time)
         return next_check is None or now >= next_check
@@ -306,7 +313,9 @@ class RSSMonitor:
 
         async with feed_lock(feed.id):
             headers = {
-                "If-Modified-Since": format_datetime(feed.last_modified or feed.updated_at)
+                "If-Modified-Since": format_datetime(
+                    feed.last_modified or feed.updated_at
+                )
             }
             if feed.etag:
                 headers["If-None-Match"] = feed.etag
@@ -351,24 +360,24 @@ class RSSMonitor:
                         feed.title = title[:1024]
                         feed_updated_fields.add("title")
 
-                    old_hashes = list(feed.entry_hashes or [])
+                    old_groups = self._migrate_flat_hashes(feed.entry_hashes or [])
                     fetched_entries = len(rss_d.entries)
-                    new_hashes, updated_entries = self._calculate_update(
-                        old_hashes,
+                    new_groups, updated_entries = self._calculate_update(
+                        old_groups,
                         rss_d.entries,
                         feed_link=feed.link,
                     )
                     dedup_new_count = len(updated_entries)
                     dedup_skipped_count = max(0, fetched_entries - dedup_new_count)
-                    merged_hashes = self._merge_hash_history(
-                        old_hashes,
-                        new_hashes,
-                        fetched_entries,
+                    merged = self._merge_hash_history(
+                        old_groups,
+                        new_groups,
+                        len(old_groups),
                     )
 
-                    if not old_hashes:
+                    if not old_groups:
                         feed.last_modified = wf.last_modified
-                        feed.entry_hashes = merged_hashes
+                        feed.entry_hashes = merged
                         feed_updated_fields.update({"last_modified", "entry_hashes"})
                         schedule_action = ("success", None)
                         if self._config_value("bootstrap_skip_history", True):
@@ -401,8 +410,8 @@ class RSSMonitor:
                             self._stat.updated()
 
                     elif not updated_entries:
-                        if merged_hashes != old_hashes:
-                            feed.entry_hashes = merged_hashes
+                        if merged != old_groups:
+                            feed.entry_hashes = merged
                             feed_updated_fields.add("entry_hashes")
                         schedule_action = ("success", None)
                         self._stat.not_updated()
@@ -412,7 +421,7 @@ class RSSMonitor:
                             f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
                         )
                         feed.last_modified = wf.last_modified
-                        feed.entry_hashes = merged_hashes
+                        feed.entry_hashes = merged
                         feed_updated_fields.update({"last_modified", "entry_hashes"})
                         notifier_to_run = await self._build_feed_notifier(
                             feed=feed,
@@ -545,8 +554,26 @@ class RSSMonitor:
         )
 
     async def _schedule_after_success(self, subs: list[Sub]) -> None:
-        """成功后按订阅生效 interval 刷新 next_check_time 并重置 error。"""
+        """成功后刷新 next_check_time 并重置 error。
+
+        如果 feed.interval > 0，使用 feed 级调度（更新 Feed 表字段）；
+        否则回退到订阅级调度（更新 MonitorSchedule 表）。
+        """
         now = datetime.now(timezone.utc)
+
+        # 检查是否使用 feed 级调度
+        feed = subs[0].feed if subs else None
+        if feed and feed.interval and feed.interval > 0:
+            async with get_session() as session:
+                db_feed = await session.get(Feed, feed.id)
+                if db_feed:
+                    db_feed.next_check_time = now + timedelta(minutes=db_feed.interval)
+                    db_feed.error_count = 0
+                    session.add(db_feed)
+                    await session.commit()
+            return
+
+        # 订阅级调度（保持现有逻辑不变）
         for sub in subs:
             if sub.id is None:
                 continue
@@ -558,8 +585,57 @@ class RSSMonitor:
             )
 
     async def _schedule_after_error(self, subs: list[Sub], reason: str) -> None:
-        """失败后按订阅退避并发送错误通知（到达上限时停用订阅）。"""
+        """失败后退避并发送错误通知（到达上限时停用）。
+
+        如果 feed.interval > 0，使用 feed 级错误累积（更新 Feed 表字段），
+        达到上限时停用整个 feed；否则回退到订阅级调度（停用单个订阅）。
+        """
         now = datetime.now(timezone.utc)
+
+        # 检查是否使用 feed 级调度
+        feed = subs[0].feed if subs else None
+        if feed and feed.interval and feed.interval > 0:
+            async with get_session() as session:
+                db_feed = await session.get(Feed, feed.id)
+                if db_feed:
+                    db_feed.error_count += 1
+
+                    if db_feed.error_count >= 100:
+                        # 达到错误上限，停用整个 feed
+                        db_feed.state = 0
+                        db_feed.next_check_time = None
+                        session.add(db_feed)
+                        await session.commit()
+                        # 发送停用通知给所有订阅者
+                        await Notifier(
+                            feed=feed,
+                            subs=subs,
+                            reason=reason,
+                            timeout_seconds=self.config.timeout if self.config else 30,
+                            proxy=self.config.proxy if self.config else "",
+                            download_media_before_send=(
+                                self.config.download_image_before_send
+                                if self.config
+                                else True
+                            ),
+                            config=self.config,
+                        ).notify_all()
+                        return
+
+                    # 退避策略：10 次错误后开始指数退避
+                    if db_feed.error_count >= 10:
+                        next_delay = min(
+                            db_feed.interval << (db_feed.error_count // 10), 1440
+                        )
+                    else:
+                        next_delay = db_feed.interval
+
+                    db_feed.next_check_time = now + timedelta(minutes=next_delay)
+                    session.add(db_feed)
+                    await session.commit()
+            return
+
+        # 订阅级调度（保持现有逻辑不变）
         for sub in subs:
             if sub.id is None:
                 continue
@@ -604,7 +680,11 @@ class RSSMonitor:
             )
 
     async def _resolve_sub_interval(self, sub: Sub) -> int:
-        """解析单个订阅生效 interval，优先级 Sub > User > Plugin default。"""
+        """解析单个订阅生效 interval，优先级 Feed > Sub > User > Plugin default。"""
+        # Feed 级 interval 最高优先级
+        if sub.feed and sub.feed.interval and sub.feed.interval > 0:
+            return sub.feed.interval
+
         if sub.interval and sub.interval > 0:
             return sub.interval
 
@@ -620,26 +700,30 @@ class RSSMonitor:
 
     def _calculate_update(
         self,
-        old_hashes: list[str],
+        old_entry_groups: list[list[str]],
         entries: list,
         feed_link: str | None = None,
-    ) -> tuple[list[str], list]:
-        """计算哪些条目是新的。"""
-        old_hashes_set = {h for h in old_hashes if h}
-        known_hashes = set(old_hashes_set)
-        known_identity_hashes = {h for h in old_hashes_set if self._is_identity_hash(h)}
-        new_hashes = []
-        new_hashes_seen: set[str] = set()
+    ) -> tuple[list[list[str]], list]:
+        """计算哪些条目是新的。
+
+        Args:
+            old_entry_groups: 已有的按 entry 分组的指纹，每个子列表是一条 entry 的完整指纹集。
+            entries: feedparser 解析出的条目列表。
+            feed_link: feed 链接，用于解析相对 URL。
+
+        Returns:
+            (new_entry_groups, updated_entries) — 新的按 entry 分组的指纹列表，以及需要推送的新条目。
+        """
+        old_flat = {h for group in old_entry_groups for h in group if h}
+        known_hashes = set(old_flat)
+        known_identity_hashes = {h for h in old_flat if self._is_identity_hash(h)}
+        new_entry_groups: list[list[str]] = []
         updated_entries = []
 
         for entry in entries:
             entry_hashes = self._hash_entry(entry, feed_link=feed_link)
             stable_hash = next(
-                (
-                    entry_hash
-                    for entry_hash in entry_hashes
-                    if self._is_identity_hash(entry_hash)
-                ),
+                (h for h in entry_hashes if self._is_identity_hash(h)),
                 "",
             )
 
@@ -648,23 +732,18 @@ class RSSMonitor:
             )
             known_by_compat = False
             if not known_by_identity and not stable_hash:
-                known_by_compat = any(
-                    entry_hash in known_hashes for entry_hash in entry_hashes
-                )
-            known_entry = known_by_identity or known_by_compat
+                known_by_compat = any(h in known_hashes for h in entry_hashes)
 
-            if not known_entry:
+            if not (known_by_identity or known_by_compat):
                 updated_entries.append(entry)
 
-            for entry_hash in entry_hashes:
-                if entry_hash not in new_hashes_seen:
-                    new_hashes_seen.add(entry_hash)
-                    new_hashes.append(entry_hash)
-                known_hashes.add(entry_hash)
-                if self._is_identity_hash(entry_hash):
-                    known_identity_hashes.add(entry_hash)
+            new_entry_groups.append(entry_hashes)
+            for h in entry_hashes:
+                known_hashes.add(h)
+                if self._is_identity_hash(h):
+                    known_identity_hashes.add(h)
 
-        return new_hashes, updated_entries
+        return new_entry_groups, updated_entries
 
     @staticmethod
     def _normalize_text(value: str, max_length: int = 1024) -> str:
@@ -906,22 +985,59 @@ class RSSMonitor:
             logger=logger,
         )
 
+    @staticmethod
+    def _migrate_flat_hashes(raw: list) -> list[list[str]]:
+        """将旧的扁平 list[str] 格式迁移为按 entry 分组的 list[list[str]]。
+
+        如果已经是新格式（嵌套列表）或为空，直接返回。
+        旧格式按 identity hash (sid:) 边界分组。
+        """
+        if not raw:
+            return []
+        if isinstance(raw[0], list):
+            return raw
+        # 旧的扁平格式：按 sid: 前缀边界分组
+        groups: list[list[str]] = []
+        current: list[str] = []
+        for h in raw:
+            if RSSMonitor._is_identity_hash(h) and current:
+                groups.append(current)
+                current = []
+            current.append(h)
+        if current:
+            groups.append(current)
+        return groups
+
     def _merge_hash_history(
         self,
-        old_hashes: list[str],
-        new_hashes: list[str],
+        old_groups: list[list[str]],
+        new_groups: list[list[str]],
         entry_count: int,
-    ) -> list[str] | None:
+    ) -> list[list[str]] | None:
+        """合并新旧 entry 指纹分组，按 entry 粒度截断。
+
+        Args:
+            old_groups: 旧的按 entry 分组的指纹列表。
+            new_groups: 新的按 entry 分组的指纹列表。
+            entry_count: 当前已有的 entry 数量，用于计算历史窗口大小。
+
+        Returns:
+            合并后的分组列表，或 None（无数据时）。
+        """
         history_limit = self._resolve_hash_history_limits(entry_count)
 
-        merged: list[str] = []
-        seen: set[str] = set()
+        merged: list[list[str]] = []
+        seen_identity: set[str] = set()
 
-        for entry_hash in chain(new_hashes, old_hashes):
-            if not entry_hash or entry_hash in seen:
+        for group in chain(new_groups, old_groups):
+            if not group:
                 continue
-            seen.add(entry_hash)
-            merged.append(entry_hash)
+            identity = next((h for h in group if self._is_identity_hash(h)), None)
+            if identity and identity in seen_identity:
+                continue
+            if identity:
+                seen_identity.add(identity)
+            merged.append(group)
             if len(merged) >= history_limit:
                 break
 

@@ -10,9 +10,10 @@ from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
-from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.utils.http_ssl import build_tls_connector
+
+from ...utils.log_utils import logger
 
 _CACHE_DIR = (
     Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_rsshub" / "cache" / "media"

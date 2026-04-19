@@ -1,6 +1,6 @@
 name: astrbot_plugin_rsshub
 display_name: RSS订阅
 desc: 多平台RSS订阅推送插件，支持失败队列重试、多BOT去重、平台数据共享、智能发送策略，LLM工具调用，让你的BOT成为信息聚合中心。
-version: v1.0.17
+version: v1.0.19
 author: FlanChanXwO
 repo: https://github.com/FlanChanXwO/astrbot_plugin_rsshub

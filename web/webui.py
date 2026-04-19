@@ -9,9 +9,8 @@ from pathlib import Path
 
 from aiohttp import web
 
-from astrbot.api import logger
-
 from ..db import Sub
+from ..utils.log_utils import logger
 
 
 class RSSHubWebUI:

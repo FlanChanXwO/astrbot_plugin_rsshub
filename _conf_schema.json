@@ -73,6 +73,29 @@
     "hint": "开启后会先下载媒体到本地再推送，可复用缓存，但是在docker环境下需要共享数据卷",
     "default": false
   },
+  "ffmpeg": {
+    "type": "object",
+    "description": "FFmpeg 配置",
+    "hint": "用于控制 QQ 官方视频转码及 FFmpeg 自动准备行为",
+    "default": {
+      "qq_official_video_transcode": true,
+      "qq_official_auto_install_ffmpeg": true
+    },
+    "items": {
+      "qq_official_video_transcode": {
+        "type": "bool",
+        "description": "QQ官方视频自动转码",
+        "hint": "开启后，QQ官方适配器发送视频前会尝试转码为兼容的 H264/AAC MP4，优先保证视频卡片可发送",
+        "default": true
+      },
+      "qq_official_auto_install_ffmpeg": {
+        "type": "bool",
+        "description": "自动准备 FFmpeg",
+        "hint": "开启后会在插件运行时自动使用 imageio-ffmpeg 提供的 FFmpeg 二进制，减少手动安装依赖",
+        "default": true
+      }
+    }
+  },
   "failed_queue_capacity": {
     "type": "int",
     "description": "失败队列容量",

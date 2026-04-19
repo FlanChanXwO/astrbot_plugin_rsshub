@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from astrbot.api import logger
-
 from ..db import FailedNotification
 from ..notifier.senders import (
     ChannelInfo,
     NotifierContext,
     get_sender_for_platform_name,
 )
+from .log_utils import logger
 
 if TYPE_CHECKING:
     from ..utils.config import PluginConfig

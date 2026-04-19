@@ -145,7 +145,11 @@
 | 配置项                          | 类型  | 说明                        | 默认值     |
 |------------------------------|-----|---------------------------|---------|
 | `download_image_before_send` | 布尔值 | 先下载图片再发送，Docker 环境下需共享数据卷 | `false` |
+| `ffmpeg.qq_official_video_transcode` | 布尔值 | QQ 官方视频发送前自动转码为兼容 MP4，优先保证视频卡片 | `true` |
+| `ffmpeg.qq_official_auto_install_ffmpeg` | 布尔值 | 自动使用插件依赖提供的 FFmpeg，无需手动安装系统 ffmpeg | `true` |
 | `failed_queue_capacity`      | 整数  | 失败队列容量，0=禁用失败队列           | `50`    |
+
+> `/rss_conf` 命令中对应键名为：`ffmpeg_qq_official_video_transcode`、`ffmpeg_qq_official_auto_install_ffmpeg`。
 
 ### 发送策略配置 (`sender_strategies`)
 
@@ -226,6 +230,7 @@
 | `/rsshelp` | `/RSS帮助` | 查看帮助 |
 
 **可配置项：** `proxy`/`rsshub_base_url`/`default_interval`/`minimal_interval`/`timeout`/`download_image_before_send`/
+`ffmpeg_qq_official_video_transcode`/`ffmpeg_qq_official_auto_install_ffmpeg`/
 `bootstrap_skip_history`/`failed_queue_capacity`/`failed_queue_max_retries`/`sender_strategy_telegram`/`sender_strategy_aiocqhttp`/
 `deduplicate_multi_bot`/`platform_shared_data_aiocqhttp`
 

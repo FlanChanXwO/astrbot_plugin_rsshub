@@ -26,6 +26,7 @@ multidict>=6.6.3
 asyncstdlib>=3.13.1
 cachetools>=6.1.0
 CJKwrap>=2.2
+imageio-ffmpeg>=0.6.0
 
 # Telegraph API
 aiographfix>=0.2.2

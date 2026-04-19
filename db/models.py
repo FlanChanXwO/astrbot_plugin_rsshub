@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import registry, selectinload
 from sqlmodel import Field, Relationship, SQLModel
 
-from astrbot.api import logger
+from ..utils.log_utils import logger
 
 _plugin_registry = registry()
 
@@ -116,7 +116,7 @@ class Feed(RSSHubModel, table=True):
     link: str = Field(max_length=4096, unique=True, description="Feed链接")
     title: str = Field(max_length=1024, description="Feed标题")
     interval: int | None = Field(default=None, description="监控间隔")
-    entry_hashes: list[str] | None = Field(
+    entry_hashes: list | None = Field(
         default=None, sa_column=Column(JSON), description="条目哈希"
     )
     etag: str | None = Field(default=None, max_length=128, description="ETag")

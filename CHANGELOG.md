@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.0.19] - 2026-04-19
+
+### Added
+
+- 新增 QQ 官方视频转码能力：
+  - 在插件层发送链路中，QQ 官方视频发送前可自动转码为 H264/AAC MP4
+  - 目标为优先保持“视频卡片”发送体验，而非直接降级为文本链接
+- 新增配置项：
+  - `qq_official_video_transcode`（默认 `true`）：控制 QQ 官方视频自动转码
+  - `qq_official_auto_install_ffmpeg`（默认 `true`）：自动使用插件依赖提供的 FFmpeg 可执行文件
+- 新增 `imageio-ffmpeg` 依赖，插件安装时即可自动携带可用 FFmpeg 运行时
+
+### Changed
+
+- QQ 官方发送器在视频发送前会按需补全本地媒体并执行转码预处理，再进入平台上传流程
+- `/rss_conf` 与帮助文档已同步支持上述两个新配置项
+
+### Fixed
+
+- 针对 QQ 官方接口 `40034002`（富媒体文件格式不支持）场景，补充插件层格式兼容处理路径
+
+## [1.0.18] - 2026-04-19
+
+### Changed
+
+- 重构 `entry_hashes` 存储结构，由扁平 `list[str]` 改为以 entry 为单位的二维数组 `list[list[str]]`：
+  - 每条 entry 的全部指纹（身份哈希、内容哈希、上游 CRC、遗留 CRC）作为一个分组整体存储与淘汰
+  - `hash_history_min` 等配置项的语义与实际行为对齐：`200` 即保留 200 条 entry，而非 200 个散列值
+  - 历史窗口截断以 entry 为单位，不再出现一条 entry 的指纹被部分截断的情况
+  - 大量新内容涌入时，旧 entry 按组整体淘汰，避免半截指纹残留导致去重失效
+- `_merge_hash_history` 合并逻辑改为按 identity hash（`sid:`）去重，同一条 entry 更新内容后不会产生冗余副本
+
+### Added
+
+- 新增首次订阅时 `entry_hashes` 预填充：
+  - `/sub` 创建新 feed 时，利用已抓取的 RSS 条目立即生成去重指纹并写入数据库
+  - 避免首轮监控因 `entry_hashes` 为空而将全部历史条目误判为新内容推送
+- 新增 `_migrate_flat_hashes` 运行时兼容方法：
+  - 自动检测旧版扁平 `list[str]` 格式并按 `sid:` 边界分组迁移为新的 `list[list[str]]` 结构
+  - 无需手动数据库迁移，升级后首轮监控自动完成格式转换
+
+### Fixed
+
+- 修复 `_merge_hash_history` 的 `entry_count` 传参错误：旧版传入的是 hash 总数而非 entry 数，导致历史窗口虚增约 4 倍
+- 修复 `_calculate_update` 去重判定中 `entry_count` 语义与实际不符的问题
+
 ## [1.0.17] - 2026-04-19
 
 ### Changed

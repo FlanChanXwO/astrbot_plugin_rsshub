@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from astrbot.api import logger
 from astrbot.api.message_components import Node, Nodes, Plain
 
+from ...utils.log_utils import logger
 from .base import MessageSender
 from .types import NotifierContext, PreparedMedia, SendResult
 

@@ -19,8 +19,8 @@
   },
   "minimal_interval": {
     "type": "int",
-    "description": "最小监控间隔（分钟）",
-    "hint": "用于限制命令/WebUI 设置 interval 的最小值",
+    "description": "订阅最小监控间隔（分钟）",
+    "hint": "限制用户通过 /sub_set 命令设置单个订阅监控间隔的最小值，防止过于频繁抓取对RSS源服务器造成压力。例如设置为5，则用户不能设置小于5分钟的间隔",
     "default": 1
   },
   "timeout": {
@@ -73,26 +73,46 @@
     "hint": "开启后会先下载媒体到本地再推送，可复用缓存，但是在docker环境下需要共享数据卷",
     "default": false
   },
+  "history_entry_limit": {
+    "type": "int",
+    "description": "历史条目推送限制",
+    "hint": "限制每次推送时最多发送多少条历史条目，按发布时间降序取最新N条。0=不限制，建议10-50。注意：此限制在监控器级别生效，会影响所有订阅",
+    "default": 10
+  },
   "ffmpeg": {
     "type": "object",
     "description": "FFmpeg 配置",
-    "hint": "用于控制 QQ 官方视频转码及 FFmpeg 自动准备行为",
+    "hint": "用于控制视频转码、无声视频GIF转换及 FFmpeg 自动准备行为",
     "default": {
-      "qq_official_video_transcode": true,
-      "qq_official_auto_install_ffmpeg": true
+      "video_transcode": false,
+      "video_transcode_timeout": 120,
+      "gif_transcode": false,
+      "gif_transcode_timeout": 60
     },
     "items": {
-      "qq_official_video_transcode": {
+      "video_transcode": {
         "type": "bool",
-        "description": "QQ官方视频自动转码",
-        "hint": "开启后，QQ官方适配器发送视频前会尝试转码为兼容的 H264/AAC MP4，优先保证视频卡片可发送",
-        "default": true
+        "description": "视频发送前自动转码",
+        "hint": "开启后，所有平台发送视频前会统一转码为兼容的 H264/AAC MP4 格式。默认false，适合QQ官方等需要特定编码的平台。注意：转码会消耗CPU且耗时",
+        "default": false
       },
-      "qq_official_auto_install_ffmpeg": {
+      "video_transcode_timeout": {
+        "type": "int",
+        "description": "视频转码超时（秒）",
+        "hint": "视频转码的最大允许时间。转换耗时取决于视频长度和分辨率，建议120-300秒",
+        "default": 120
+      },
+      "gif_transcode": {
         "type": "bool",
-        "description": "自动准备 FFmpeg",
-        "hint": "开启后会在插件运行时自动使用 imageio-ffmpeg 提供的 FFmpeg 二进制，减少手动安装依赖",
-        "default": true
+        "description": "无声视频自动转GIF",
+        "hint": "开启后，检测到无音频流的视频时会自动转换为高质量GIF。适合Bilibili等平台的动图/无声短视频。注意：转换可能耗时较长",
+        "default": false
+      },
+      "gif_transcode_timeout": {
+        "type": "int",
+        "description": "GIF转换超时（秒）",
+        "hint": "视频转GIF的最大允许时间。转换耗时取决于视频长度和分辨率，建议60-120秒",
+        "default": 60
       }
     }
   },

@@ -238,7 +238,32 @@ class Notifier:
                 timeout_seconds=self.timeout_seconds,
                 proxy=self.proxy,
             )
-            MessageSender.configure_behavior(download_media_before_send=True)
+            # Configure transcode settings from config
+            gif_transcode_enabled = False
+            gif_transcode_timeout = 60
+            video_transcode_enabled = False
+            video_transcode_timeout = 120
+            if self.config:
+                ffmpeg_cfg = getattr(self.config, "ffmpeg", {})
+                if isinstance(ffmpeg_cfg, dict):
+                    gif_transcode_enabled = bool(ffmpeg_cfg.get("gif_transcode", False))
+                    gif_transcode_timeout = int(ffmpeg_cfg.get("gif_transcode_timeout", 60))
+                    video_transcode_enabled = bool(ffmpeg_cfg.get("video_transcode", False))
+                    video_transcode_timeout = int(ffmpeg_cfg.get("video_transcode_timeout", 120))
+            logger.info(
+                "Configuring sender transcode: gif=%s/%ss, video=%s/%ss",
+                gif_transcode_enabled,
+                gif_transcode_timeout,
+                video_transcode_enabled,
+                video_transcode_timeout,
+            )
+            MessageSender.configure_behavior(
+                download_media_before_send=True,
+                gif_transcode_enabled=gif_transcode_enabled,
+                gif_transcode_timeout=gif_transcode_timeout,
+                video_transcode_enabled=video_transcode_enabled,
+                video_transcode_timeout=video_transcode_timeout,
+            )
             prepared_media = await MessageSender.prepare_media(media_items)
 
         logger.debug(
@@ -253,18 +278,25 @@ class Notifier:
             timeout_seconds=self.timeout_seconds,
             proxy=self.proxy,
         )
+        # Configure sender with transcode settings
+        gif_transcode_enabled = False
+        gif_transcode_timeout = 60
+        video_transcode_enabled = False
+        video_transcode_timeout = 120
+        if self.config:
+            ffmpeg_cfg = getattr(self.config, "ffmpeg", {})
+            if isinstance(ffmpeg_cfg, dict):
+                gif_transcode_enabled = bool(ffmpeg_cfg.get("gif_transcode", False))
+                gif_transcode_timeout = int(ffmpeg_cfg.get("gif_transcode_timeout", 60))
+                video_transcode_enabled = bool(ffmpeg_cfg.get("video_transcode", False))
+                video_transcode_timeout = int(ffmpeg_cfg.get("video_transcode_timeout", 120))
         sender.configure_behavior(
-            download_media_before_send=(should_pre_download and prepared_media is None)
+            download_media_before_send=(should_pre_download and prepared_media is None),
+            gif_transcode_enabled=gif_transcode_enabled,
+            gif_transcode_timeout=gif_transcode_timeout,
+            video_transcode_enabled=video_transcode_enabled,
+            video_transcode_timeout=video_transcode_timeout,
         )
-        if hasattr(sender, "configure_qq_official"):
-            sender.configure_qq_official(
-                video_transcode_enabled=bool(
-                    getattr(self.config, "qq_official_video_transcode", True)
-                ),
-                auto_install_ffmpeg=bool(
-                    getattr(self.config, "qq_official_auto_install_ffmpeg", True)
-                ),
-            )
         sent = await sender.send_to_user(
             session_id,
             content,

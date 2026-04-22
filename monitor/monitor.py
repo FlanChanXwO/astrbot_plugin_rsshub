@@ -501,6 +501,34 @@ class RSSMonitor:
         self, feed: Feed, subs: list[Sub], entries: list
     ) -> Notifier:
         ordered_entries = list(reversed(entries))
+
+        # Apply history entry limit if configured
+        history_limit = getattr(self.config, "history_entry_limit", 10)
+        if history_limit > 0:
+            # Sort by published_parsed (newest first) and limit
+            def _entry_sort_key(entry):
+                # published_parsed is a time.struct_time tuple or None
+                parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+                if parsed:
+                    try:
+                        # Convert to timestamp for comparison
+                        from calendar import timegm
+                        return timegm(parsed)
+                    except Exception:
+                        pass
+                return 0
+
+            ordered_entries = sorted(ordered_entries, key=_entry_sort_key, reverse=True)
+            limited_entries = ordered_entries[:history_limit]
+            if len(limited_entries) < len(ordered_entries):
+                logger.info(
+                    "History entry limit applied: feed=%s, total=%s, limited=%s",
+                    feed.link,
+                    len(ordered_entries),
+                    len(limited_entries),
+                )
+            ordered_entries = limited_entries
+
         fanout_subs = subs
         fanout_feed_id = feed.id
         if fanout_feed_id is not None:

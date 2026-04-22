@@ -85,11 +85,15 @@ PLUGIN_CONFIG_KEYS = {
     "minimal_interval",
     "timeout",
     "download_image_before_send",
-    "ffmpeg_qq_official_video_transcode",
-    "ffmpeg_qq_official_auto_install_ffmpeg",
-    # Backward-compatible keys
-    "qq_official_video_transcode",
-    "qq_official_auto_install_ffmpeg",
+    "ffmpeg_video_transcode",
+    "ffmpeg_video_transcode_timeout",
+    "ffmpeg_gif_transcode",
+    "ffmpeg_gif_transcode_timeout",
+    "history_entry_limit",
+    "video_transcode",
+    "video_transcode_timeout",
+    "gif_transcode",
+    "gif_transcode_timeout",
     "rsshub_base_url",
     "failed_queue_capacity",
     "failed_queue_max_retries",
@@ -237,10 +241,11 @@ class RSSHubPlugin(Star):
             "sender_strategy_weixin_oc",
             "deduplicate_multi_bot",
             "platform_shared_data_aiocqhttp",
-            "ffmpeg_qq_official_video_transcode",
-            "ffmpeg_qq_official_auto_install_ffmpeg",
+            "ffmpeg_video_transcode",
+            "video_transcode",
+            "ffmpeg_gif_transcode",
+            "gif_transcode",
             "qq_official_video_transcode",
-            "qq_official_auto_install_ffmpeg",
         }:
             lowered = raw_value.lower()
             if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
@@ -248,6 +253,30 @@ class RSSHubPlugin(Star):
             if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
                 return False
             raise ValueError(f"{normalized_key} 仅支持布尔值: true/false")
+
+        if normalized_key == "history_entry_limit":
+            if not raw_value.isdigit():
+                raise ValueError("history_entry_limit 需要 0-100 的整数")
+            val = int(raw_value)
+            if val < 0 or val > 100:
+                raise ValueError("history_entry_limit 范围: 0-100 (0表示不限制)")
+            return val
+
+        if normalized_key in {"ffmpeg_video_transcode_timeout", "video_transcode_timeout"}:
+            if not raw_value.isdigit():
+                raise ValueError(f"{normalized_key} 需要 10-600 的整数")
+            val = int(raw_value)
+            if val < 10 or val > 600:
+                raise ValueError(f"{normalized_key} 范围: 10-600 秒")
+            return val
+
+        if normalized_key in {"ffmpeg_gif_transcode_timeout", "gif_transcode_timeout"}:
+            if not raw_value.isdigit():
+                raise ValueError(f"{normalized_key} 需要 10-300 的整数")
+            val = int(raw_value)
+            if val < 10 or val > 300:
+                raise ValueError(f"{normalized_key} 范围: 10-300 秒")
+            return val
 
         raise ValueError(f"不支持的插件配置项: {normalized_key}")
 
@@ -307,14 +336,12 @@ class RSSHubPlugin(Star):
         )
         logger.info(f"RSS插件配置加载完成，数据目录: {self.config.data_dir}")
 
-        if self.config.qq_official_video_transcode:
-            ffmpeg_path = ensure_ffmpeg_ready(
-                auto_install=self.config.qq_official_auto_install_ffmpeg
-            )
+        if self.config.video_transcode:
+            ffmpeg_path = ensure_ffmpeg_ready(auto_install=True)
             if ffmpeg_path:
                 logger.info("RSS插件 FFmpeg 已就绪: %s", ffmpeg_path)
             else:
-                logger.warning("RSS插件 FFmpeg 未就绪，QQ 官方视频将尝试原始格式发送")
+                logger.warning("RSS插件 FFmpeg 未就绪，视频将尝试原始格式发送")
 
         await init_db(self.config.db_path)
         logger.info("RSS插件数据库初始化完成")
@@ -1938,13 +1965,18 @@ class RSSHubPlugin(Star):
                 f"deduplicate_multi_bot = {self.config.deduplicate_multi_bot}\n"
                 f"bootstrap_skip_history = {self.config.bootstrap_skip_history}\n"
                 f"debug_payload = {self.config.debug_payload}\n"
+                f"history_entry_limit = {self.config.history_entry_limit}\n"
                 "download_image_before_send = "
                 f"{self.config.download_image_before_send}\n"
                 "ffmpeg:\n"
-                "  qq_official_video_transcode = "
-                f"{self.config.qq_official_video_transcode}\n"
-                "  qq_official_auto_install_ffmpeg = "
-                f"{self.config.qq_official_auto_install_ffmpeg}\n"
+                "  video_transcode = "
+                f"{self.config.ffmpeg.get('video_transcode', False)}\n"
+                "  video_transcode_timeout = "
+                f"{self.config.ffmpeg.get('video_transcode_timeout', 120)}\n"
+                "  gif_transcode = "
+                f"{self.config.ffmpeg.get('gif_transcode', False)}\n"
+                "  gif_transcode_timeout = "
+                f"{self.config.ffmpeg.get('gif_transcode_timeout', 60)}\n"
                 "sender_strategies:\n"
                 f"  telegram = {strategies.get('telegram', True)}\n"
                 f"  aiocqhttp = {strategies.get('aiocqhttp', True)}\n"
@@ -1959,8 +1991,9 @@ class RSSHubPlugin(Star):
                 "不支持的配置项。可用项: "
                 "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
                 "download_image_before_send/bootstrap_skip_history/"
-                "ffmpeg_qq_official_video_transcode/"
-                "ffmpeg_qq_official_auto_install_ffmpeg/"
+                "history_entry_limit/"
+                "ffmpeg_video_transcode/ffmpeg_video_transcode_timeout/"
+                "ffmpeg_gif_transcode/ffmpeg_gif_transcode_timeout/"
                 "failed_queue_capacity/failed_queue_max_retries/"
                 "debug_payload/"
                 "sender_strategy_telegram/sender_strategy_aiocqhttp/"

@@ -13,6 +13,10 @@ import aiohttp
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.utils.http_ssl import build_tls_connector
 
+from ...utils.ffmpeg_helper import (
+    has_audio_stream,
+    transcode_video_to_gif,
+)
 from ...utils.log_utils import logger
 
 _CACHE_DIR = (
@@ -170,9 +174,11 @@ def _cache_file_prefix(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
 
-def _cache_file_path(url: str) -> Path:
+def _cache_file_path(url: str, suffix: str | None = None) -> Path:
     digest = _cache_file_prefix(url)
-    return _CACHE_DIR / f"{digest}{_guess_suffix(url)}"
+    if suffix is None:
+        suffix = _guess_suffix(url)
+    return _CACHE_DIR / f"{digest}{suffix}"
 
 
 def _cache_meta_path(url: str) -> Path:
@@ -295,16 +301,31 @@ async def _run_periodic_cache_gc() -> None:
 
 
 def _read_cache(url: str) -> Path | None:
-    file_path = _cache_file_path(url)
+    # Try multiple suffixes to handle cases where file was written with different extension
+    # (e.g., GIF conversion where URL suggests .mp4 but file is .gif)
     meta_path = _cache_meta_path(url)
-    if not file_path.exists() or not meta_path.exists():
+    if not meta_path.exists():
         logger.debug(
-            "Media cache miss: url=%s, file_exists=%s, meta_exists=%s, file=%s, meta=%s",
+            "Media cache miss: url=%s, meta_exists=False, meta=%s",
             url,
-            file_path.exists(),
-            meta_path.exists(),
-            file_path,
             meta_path,
+        )
+        return None
+
+    # Find the actual file with any known suffix
+    digest = _cache_file_prefix(url)
+    file_path = None
+    for suffix in _CACHE_MEDIA_SUFFIXES:
+        candidate = _CACHE_DIR / f"{digest}{suffix}"
+        if candidate.exists():
+            file_path = candidate
+            break
+
+    if file_path is None:
+        logger.debug(
+            "Media cache miss: url=%s, no matching file found for digest=%s",
+            url,
+            digest,
         )
         return None
 
@@ -335,14 +356,18 @@ def _read_cache(url: str) -> Path | None:
 
 def _write_cache(url: str, source: Path) -> Path:
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = _cache_file_path(url)
+    # Use the source file's actual suffix for the cache file
+    # This ensures GIF files get .gif extension even if URL suggests video
+    actual_suffix = source.suffix.lower() if source.suffix else _guess_suffix(url)
+    cache_path = _cache_file_path(url, suffix=actual_suffix)
     meta_path = _cache_meta_path(url)
     cache_path.write_bytes(source.read_bytes())
     expire_ts = time.time() + _CACHE_TTL_SECONDS
     meta_path.write_text(str(expire_ts), encoding="utf-8")
     logger.debug(
-        "Media cache write: url=%s, cache=%s, meta=%s, cache_exists=%s, meta_exists=%s, expire=%s",
+        "Media cache write: url=%s, source_suffix=%s, cache=%s, meta=%s, cache_exists=%s, meta_exists=%s, expire=%s",
         url,
+        actual_suffix,
         cache_path,
         meta_path,
         cache_path.exists(),
@@ -357,20 +382,44 @@ async def get_or_download_media_to_cache(
     url: str,
     timeout_seconds: int,
     proxy: str,
+    try_convert_gif: bool = False,
+    gif_transcode_timeout: int = 60,
 ) -> Path:
+    """Download media to cache with optional GIF conversion for silent videos.
+
+    Args:
+        url: Media URL to download
+        timeout_seconds: Download timeout in seconds
+        proxy: Proxy URL for download
+        try_convert_gif: If True, attempt to convert silent videos to GIF
+        gif_transcode_timeout: Timeout for GIF transcoding (default 60s)
+
+    Returns:
+        Path to the cached media file (may be converted to GIF)
+    """
     await _run_periodic_cache_gc()
 
+    # Check if this is a video that might need conversion
+    is_video = _guess_suffix(url) in {".mp4", ".webm", ".mov", ".mkv", ".avi"}
+
+    # For GIF conversion, use a different cache key
+    cache_url = url
+    if try_convert_gif and is_video:
+        # Append suffix to indicate we want the GIF version
+        cache_url = f"{url}#gif"
+
     async with _cache_io_lock:
-        cached = _read_cache(url)
+        cached = _read_cache(cache_url)
         if cached is not None:
-            logger.debug("Media cache return existing: url=%s, path=%s", url, cached)
+            logger.debug("Media cache return existing: url=%s, path=%s", cache_url, cached)
             return cached
 
     logger.debug(
-        "Media cache download start: url=%s, timeout_seconds=%s, proxy_enabled=%s",
+        "Media cache download start: url=%s, timeout_seconds=%s, proxy_enabled=%s, try_convert_gif=%s",
         url,
         timeout_seconds,
         bool(proxy),
+        try_convert_gif,
     )
     tmp_path = await download_media_to_temp(
         url=url,
@@ -383,19 +432,62 @@ async def get_or_download_media_to_cache(
         tmp_path,
         tmp_path.exists(),
     )
+
+    # Try GIF conversion for silent videos
+    converted_path = tmp_path
+    if try_convert_gif and is_video and tmp_path.exists():
+        try:
+            # Check if video has audio stream
+            has_audio = await has_audio_stream(
+                tmp_path,
+                timeout_seconds=10,
+                auto_install_ffmpeg=True,
+            )
+            if not has_audio:
+                # Convert to GIF
+                logger.info(
+                    "Converting silent video to GIF: url=%s, path=%s",
+                    url,
+                    tmp_path,
+                )
+                gif_path = await transcode_video_to_gif(
+                    tmp_path,
+                    timeout_seconds=gif_transcode_timeout,
+                    auto_install_ffmpeg=True,
+                )
+                if gif_path and gif_path.exists():
+                    converted_path = gif_path
+                    logger.info(
+                        "GIF conversion successful: url=%s, gif_path=%s, size=%s",
+                        url,
+                        gif_path,
+                        gif_path.stat().st_size,
+                    )
+                else:
+                    logger.warning("GIF conversion failed, using original video: url=%s", url)
+        except Exception as ex:
+            logger.warning(
+                "GIF conversion error, using original video: url=%s, err=%s",
+                url,
+                ex,
+            )
+
     try:
         async with _cache_io_lock:
-            # Another task may have filled cache while we were downloading.
-            cached = _read_cache(url)
+            # Another task may have filled cache while we were downloading/converting.
+            cached = _read_cache(cache_url)
             if cached is not None:
                 logger.debug(
                     "Media cache filled by peer task: url=%s, path=%s",
-                    url,
+                    cache_url,
                     cached,
                 )
                 return cached
-            written = _write_cache(url, tmp_path)
-            logger.debug("Media cache return new write: url=%s, path=%s", url, written)
+            written = _write_cache(cache_url, converted_path)
+            logger.debug("Media cache return new write: url=%s, path=%s", cache_url, written)
             return written
     finally:
-        safe_unlink(tmp_path)
+        # Clean up temp file if it's different from the converted file
+        if converted_path != tmp_path:
+            safe_unlink(tmp_path)
+        safe_unlink(converted_path if converted_path != tmp_path else None)

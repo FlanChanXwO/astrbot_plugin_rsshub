@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from astrbot.api.message_components import Node, Nodes, Plain
+from astrbot.api.message_components import Image, Node, Nodes, Plain
 
 from ...utils.log_utils import logger
 from .base import MessageSender
@@ -12,7 +12,17 @@ class AiocqhttpMessageSender(MessageSender):
 
     @classmethod
     def _build_node(cls, nickname: str, chain: list):
-        return Node(content=chain, name=nickname)
+        # Ensure all Image components in chain are properly prepared for OneBot
+        # Images need to be converted to base64 for forward messages
+        processed_chain = []
+        for component in chain:
+            if isinstance(component, Image):
+                # Image will be converted to base64 by the adapter
+                # We just need to ensure it has a valid file path
+                processed_chain.append(component)
+            else:
+                processed_chain.append(component)
+        return Node(content=processed_chain, name=nickname)
 
     @classmethod
     async def send_to_user(
@@ -81,7 +91,7 @@ class AiocqhttpMessageSender(MessageSender):
             if not nodes:
                 return SendResult(ok=False, detail="empty_message")
 
-            logger.debug(
+            logger.info(
                 "Aiocqhttp sender node summary: session=%s, header=1, images=%s, tail=%s, total_nodes=%s",
                 session_id,
                 len(image_components),

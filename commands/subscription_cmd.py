@@ -1,11 +1,4 @@
-"""订阅相关命令逻辑
-
-所有函数返回字典格式：
-- success: bool
-- message: str
-- data: any (可选)
-- error: str (失败时)
-"""
+"""订阅相关命令逻辑"""
 
 from __future__ import annotations
 
@@ -26,6 +19,16 @@ from ..utils.command_helpers import (
     select_subscriptions_for_scope,
 )
 from ..utils.subscription_io import parse_subscriptions_toml
+from .types import (
+    BindTargetResult,
+    CommandResult,
+    ExportSubscriptionsResult,
+    ImportSubscriptionsResult,
+    ListSubscriptionsResult,
+    SetSubscriptionOptionResult,
+    SubscribeResult,
+    UnsubscribeAllResult,
+)
 
 
 async def subscribe_feed(
@@ -37,14 +40,10 @@ async def subscribe_feed(
     timeout: int,
     proxy: str,
     is_platform_shared: bool,
-    session_defaults: dict,
+    session_defaults: dict[str, int | str],
     parse_target_fn: Callable[[str], tuple[str | None, str | None]],
-) -> dict:
-    """订阅 RSS 源
-
-    Returns:
-        {"success": bool, "message": str, "error": str, "sub_id": int}
-    """
+) -> SubscribeResult:
+    """订阅 RSS 源"""
     if not url:
         return {"success": False, "error": "请提供 RSS 链接，用法：/sub <RSS 链接>"}
 
@@ -157,12 +156,8 @@ async def unsubscribe_feed(
     is_admin: bool,
     platform_name: str,
     is_platform_shared: bool,
-) -> dict:
-    """取消订阅
-
-    Returns:
-        {"success": bool, "message": str, "error": str}
-    """
+) -> SubscribeResult:
+    """取消订阅"""
     if not sub_id:
         return {"success": False, "error": "请提供订阅 ID，用法：/unsub <订阅 ID>"}
 
@@ -199,12 +194,8 @@ async def list_subscriptions(
     scope: str,
     page: str,
     page_size: str,
-) -> dict:
-    """列出订阅
-
-    Returns:
-        {"success": bool, "message": str, "error": str, "has_more": bool}
-    """
+) -> ListSubscriptionsResult:
+    """列出订阅"""
     scope_value = scope.strip().lower()
     show_all_sessions = scope_value == "all" and is_admin
 
@@ -292,7 +283,7 @@ async def test_subscription(
     proxy: str,
     download_image_before_send: bool,
     config: object,
-) -> dict:
+) -> CommandResult:
     """管理员测试推送
 
     Returns:
@@ -356,7 +347,7 @@ async def test_subscription(
     # 发送通知
     from ..notifier import Notifier
 
-    await Notifier(
+    notifier = Notifier(
         feed=sub.feed,
         subs=[sub],
         entries=selected,
@@ -364,7 +355,11 @@ async def test_subscription(
         proxy=proxy,
         download_media_before_send=download_image_before_send,
         config=config,
-    ).notify_all()
+    )
+    try:
+        await notifier.notify_all()
+    finally:
+        await notifier.close()
 
     first_title = selected[0].get("title") or "(无标题)"
     return {
@@ -384,7 +379,7 @@ async def unsubscribe_all_feeds(
     is_admin: bool,
     scope: str,
     unsub_export_retention_seconds: int,
-) -> dict:
+) -> UnsubscribeAllResult:
     """取消所有订阅
 
     Returns:
@@ -459,7 +454,7 @@ async def export_subscriptions(
     current_session: str,
     is_admin: bool,
     scope: str,
-) -> dict:
+) -> ExportSubscriptionsResult:
     """导出订阅
 
     Returns:
@@ -530,7 +525,7 @@ async def import_subscriptions(
     session_id: str,
     platform_name: str,
     validate_options_fn: callable,
-) -> dict:
+) -> ImportSubscriptionsResult:
     """导入订阅
 
     Returns:
@@ -584,7 +579,7 @@ async def set_subscription_option(
     user_id: str,
     parse_option_value_fn: Callable[[str, str], int | str],
     parse_target_session_fn: Callable[[str], tuple[str | None, str | None]],
-) -> dict:
+) -> SetSubscriptionOptionResult:
     """设置订阅选项
 
     Returns:
@@ -635,7 +630,7 @@ async def bind_target(
     target: str,
     user_id: str,
     parse_target_session_fn: callable,
-) -> dict:
+) -> BindTargetResult:
     """绑定推送目标
 
     Returns:

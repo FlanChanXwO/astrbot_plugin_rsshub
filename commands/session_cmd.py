@@ -1,7 +1,9 @@
 """会话默认设置相关命令逻辑"""
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+
+from .types import GetSessionDefaultsResult, SetSessionDefaultResult
 
 
 async def set_session_default(
@@ -11,13 +13,9 @@ async def set_session_default(
     value: str,
     session_default_keys: set,
     parse_option_value_fn: Callable[[str, str], int | str],
-    set_session_defaults_fn: Callable[[str, str, int | str], None],
-) -> dict:
-    """设置会话默认选项
-
-    Returns:
-        {"success": bool, "message": str, "error": str}
-    """
+    set_session_defaults_fn: Callable[[str, str, int | str], Awaitable[None]],
+) -> SetSessionDefaultResult:
+    """设置会话默认选项"""
     if not key or not value:
         return {
             "success": False,
@@ -52,12 +50,8 @@ async def get_session_defaults(
     *,
     session_id: str,
     get_session_defaults_fn: Callable[[str], dict],
-) -> dict:
-    """获取会话默认选项
-
-    Returns:
-        {"success": bool, "message": str, "defaults": dict}
-    """
+) -> GetSessionDefaultsResult:
+    """获取会话默认选项"""
     defaults = await get_session_defaults_fn(session_id)
     if not defaults:
         return {

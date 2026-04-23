@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
+import aiohttp
+
 from ..utils.log_utils import logger
 from .language_detect import should_translate
 from .providers.baidu import BaiduTranslator
@@ -61,8 +63,13 @@ class TranslationManager:
     TRANSLATION_SEPARATOR = "\n--【译文】--\n"
     TRANSLATION_FAILED_MARKER = "\n--【译文】--\n（翻译失败）"
 
-    def __init__(self, config: TranslationConfig | None = None):
+    def __init__(
+        self,
+        config: TranslationConfig | None = None,
+        session: aiohttp.ClientSession | None = None,
+    ):
         self.config = config
+        self._session = session
         self._provider: BaseTranslator | None = None
         self._cache_enabled = True
         self._target_lang = "zh-CN"
@@ -119,7 +126,7 @@ class TranslationManager:
             provider_name = "google"
 
         provider_class = _PROVIDER_REGISTRY[provider_name]
-        self._provider = provider_class(self.config)
+        self._provider = provider_class(self.config, self._session)
 
         # Check if provider is properly configured
         if not self._provider.is_configured():
@@ -192,55 +199,53 @@ class TranslationManager:
         Returns:
             Translated text or original if translation failed/not needed
         """
-        logger.debug(
-            "translate_text called: text=%s..., provider=%s",
-            text[:50] if text else None,
-            self._provider,
+        logger.info(
+            f"TranslationManager.translate_text 被调用："
+            f"text={text[:30] if text else None}..., "
+            f"provider={self._provider.NAME if self._provider else None}, "
+            f"has_session={self._session is not None}"
         )
 
         if not text or not text.strip():
-            logger.debug("translate_text: Empty text, returning as-is")
+            logger.debug("translate_text: 空文本，直接返回")
             return text
 
         if self._provider is None:
-            logger.debug("translate_text: No provider available, returning as-is")
+            logger.warning("translate_text: 没有可用的翻译 provider")
             return text
 
         # Check if should translate
         tgt_lang = target_lang or self._target_lang
-        logger.debug(f"translate_text: Checking if should translate to {tgt_lang}")
+        logger.debug(f"translate_text: 检查是否需要翻译到 {tgt_lang}")
 
         if not should_translate(text, tgt_lang, self._force_translate):
-            logger.debug(
-                "translate_text: Language detection says no translation needed"
-            )
+            logger.debug("translate_text: 语言检测说不需要翻译")
             return text
 
         # Check cache
         cache_key = self._get_cache_key(text, tgt_lang)
-        logger.debug(f"translate_text: Checking cache for key={cache_key[:16]}...")
+        logger.debug(f"translate_text: 检查缓存 key={cache_key[:16]}...")
         cached = await self._get_cached_translation(cache_key)
         if cached is not None:
-            logger.debug("translate_text: Cache hit! Returning cached translation")
+            logger.debug("translate_text: 缓存命中！返回缓存的翻译")
             return cached
 
-        logger.debug(
-            "translate_text: Cache miss, calling provider %s", self._provider.NAME
+        logger.info(
+            f"translate_text: 缓存未命中，调用 provider {self._provider.NAME} 进行翻译"
         )
 
         # Perform translation
         try:
             result = await self._provider.translate(text, tgt_lang)
-            logger.debug(
-                "translate_text: Provider returned: %s...",
-                result[:100] if result else None,
+            logger.info(
+                f"translate_text: provider 返回结果：{result[:50] if result else None}..."
             )
 
             if result and result != text:
                 await self._cache_translation(cache_key, result)
-                logger.debug("translate_text: Translation successful, cached")
+                logger.debug("translate_text: 翻译成功，已缓存")
                 return result
-            logger.debug("translate_text: Provider returned empty or same text")
+            logger.debug("translate_text: provider 返回空或相同文本")
             return text
 
         except Exception as e:

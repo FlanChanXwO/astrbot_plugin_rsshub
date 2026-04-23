@@ -82,7 +82,8 @@ class RSSHubRadarAPI:
             self._owns_session = True
         return self._session
 
-    def resolve_base_url(self, explicit_base_url: str, default_base_url: str) -> str:
+    @staticmethod
+    def _resolve_base_url(explicit_base_url: str, default_base_url: str) -> str:
         """Resolve base URL with explicit override support."""
         chosen = (explicit_base_url or "").strip() or default_base_url
         return normalize_base_url(chosen)
@@ -96,7 +97,7 @@ class RSSHubRadarAPI:
         default_base_url: str,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Return a concise route list filtered by query."""
-        resolved_base_url = self.resolve_base_url(explicit_base_url, default_base_url)
+        resolved_base_url = self._resolve_base_url(explicit_base_url, default_base_url)
         rules = await self._get_rules(resolved_base_url)
 
         tokens = [token for token in query.lower().split() if token]
@@ -141,7 +142,7 @@ class RSSHubRadarAPI:
         default_base_url: str,
     ) -> tuple[str, dict[str, Any] | None]:
         """Return one route schema by URI."""
-        resolved_base_url = self.resolve_base_url(explicit_base_url, default_base_url)
+        resolved_base_url = self._resolve_base_url(explicit_base_url, default_base_url)
         normalized_uri = normalize_uri(uri)
         rules = await self._get_rules(resolved_base_url)
 
@@ -170,7 +171,7 @@ class RSSHubRadarAPI:
         default_base_url: str,
     ) -> tuple[str, str]:
         """Build full subscription URL from base URL + uri + query params."""
-        resolved_base_url = self.resolve_base_url(explicit_base_url, default_base_url)
+        resolved_base_url = self._resolve_base_url(explicit_base_url, default_base_url)
         normalized_uri = normalize_uri(uri)
 
         parsed_uri = urlsplit(normalized_uri)
@@ -320,9 +321,9 @@ class RSSHubRadarAPI:
             "param_details": param_details,
         }
 
+    @staticmethod
     def _collect_params(
-        self,
-        raw_params: Any,
+            raw_params: Any,
         required_params: set[str],
         optional_params: set[str],
         param_details: dict[str, dict[str, Any]],

@@ -166,12 +166,17 @@ class PostFormatter:
         )
 
         if translate == 1 and translation_manager and translation_manager.is_enabled:
-            logger.debug(
-                "PostFormatter: Starting translation, target_lang=%s",
-                translate_target_lang or "default",
+            logger.info(
+                f"PostFormatter.get_formatted_post: 开始翻译，translate={translate}, "
+                f"translate_target_lang={translate_target_lang}, "
+                f"has_translation_manager={translation_manager is not None}"
             )
             try:
                 tgt_lang = translate_target_lang or translation_manager.target_lang
+                logger.info(
+                    f"PostFormatter: 调用 translate_entry, title={self.title[:30] if self.title else None}..., "
+                    f"content_len={len(content) if content else 0}, target_lang={tgt_lang}"
+                )
                 (
                     translated_title,
                     translated_content,

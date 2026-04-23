@@ -1,6 +1,7 @@
 """失败队列相关命令逻辑"""
 
 from ..db import FailedNotification, Sub
+from .types import GetFailedQueueStatusResult
 
 
 async def get_failed_queue_status(
@@ -9,12 +10,8 @@ async def get_failed_queue_status(
     user_id: str,
     failed_queue_capacity: int,
     is_admin: bool,
-) -> dict:
-    """获取失败队列状态
-
-    Returns:
-        {"success": bool, "message": str}
-    """
+) -> GetFailedQueueStatusResult:
+    """获取失败队列状态"""
     stats = await FailedNotification.get_stats(max_retries=max_retries)
 
     # 获取用户的待重试通知数

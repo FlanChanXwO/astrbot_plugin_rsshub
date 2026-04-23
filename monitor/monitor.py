@@ -21,8 +21,8 @@ from sqlmodel import select
 
 from ..api import feed_get
 from ..db import FailedNotification, Feed, MonitorSchedule, Sub, User, get_session
-from ..locks import feed_lock
 from ..notifier import Notifier
+from ..utils.locks import feed_lock
 from ..utils.log_utils import logger
 from ..utils.monitor_helpers import (
     looks_like_bare_domain_scheme,
@@ -47,7 +47,7 @@ def _ensure_utc_aware(dt: datetime | None) -> datetime | None:
 
 
 if TYPE_CHECKING:
-    from ..utils.config import PluginConfig
+    from ..config import RuntimeConfig
 
 
 class RSSMonitor:
@@ -79,7 +79,7 @@ class RSSMonitor:
         "ref_src",
     }
 
-    def __init__(self, config: PluginConfig | None = None):
+    def __init__(self, config: RuntimeConfig | None = None):
         self.config = config
         self._stat = MonitorStat()
         self._bg_task: asyncio.Task | None = None
@@ -447,7 +447,10 @@ class RSSMonitor:
                     logger.debug(f"Feed {feed.id} 已更新字段: {feed_updated_fields}")
 
         if notifier_to_run is not None:
-            await notifier_to_run.notify_all()
+            try:
+                await notifier_to_run.notify_all()
+            finally:
+                await notifier_to_run.close()
 
         if schedule_action:
             action, reason = schedule_action
@@ -507,7 +510,7 @@ class RSSMonitor:
         ordered_entries = list(reversed(entries))
 
         # Apply history entry limit if configured
-        history_limit = getattr(self.config, "history_entry_limit", 10)
+        history_limit = self.config.history_entry_limit if self.config else 10
         if history_limit > 0:
             # Sort by published_parsed (newest first) and limit
             def _entry_sort_key(entry):
@@ -542,7 +545,7 @@ class RSSMonitor:
             fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
 
         dedup_before_sub_count = len(fanout_subs)
-        if self.config and getattr(self.config, "deduplicate_multi_bot", True):
+        if self.config and self.config.deduplicate_multi_bot:
             fanout_subs = self._deduplicate_session_subscriptions(fanout_subs)
         fanout_sub_count = len(fanout_subs)
 

@@ -13,11 +13,11 @@ import aiohttp
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.utils.http_ssl import build_tls_connector
 
-from ...utils.ffmpeg_helper import (
+from .ffmpeg_helper import (
     has_audio_stream,
     transcode_video_to_gif,
 )
-from ...utils.log_utils import logger
+from .log_utils import logger
 
 _CACHE_DIR = (
     Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_rsshub" / "cache" / "media"

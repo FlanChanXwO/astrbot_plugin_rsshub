@@ -51,12 +51,12 @@
         <br/>
         <sub>导入订阅</sub>
       </td>
-    <td align="center">
+      <td align="center">
         <img src="https://raw.githubusercontent.com/FlanChanXwO/astrbot_plugin_rsshub/master/assets/twitter_push.png" width="400" alt="推特推送"/>
         <br/>
         <sub>推特推送</sub>
       </td>
-    <td align="center">
+      <td align="center">
         <img src="https://raw.githubusercontent.com/FlanChanXwO/astrbot_plugin_rsshub/master/assets/pixiv_push.png" width="400" alt="pixiv推送"/>
         <br/>
         <sub>pixiv推送</sub>
@@ -71,7 +71,7 @@
 - 🔔 **智能推送** - 按订阅级/会话级 interval 调度，同一 feed 在不同会话可使用不同检查间隔
 - 🎨 **富媒体支持** - 基于 HTML 结构解析内容（链接、图片、音频、视频、文件、At 组件等）
 - ⚙️ **灵活配置** - 订阅级与用户默认级的消息格式选项，会话级默认配置（KV）
-- 🤖 **LLM 工具调用** - 支持 AI 订阅、查询、管理等操作（除 `sub_test` 外）
+- 🤖 **LLM 工具调用** - 支持 AI 订阅、查询、管理等操作
 - 🌐 **WebUI 管理** - 可选 aiohttp WebUI 管理界面，可视化操作订阅
 - 📦 **数据导入导出** - 支持 TOML 格式备份和恢复订阅数据
 - 🔄 **失败队列** - 平台连接失败时自动进入队列，恢复后重试推送
@@ -106,7 +106,7 @@
 | 名称 | 地址 | 类型 | 说明 |
 |------|------|------|------|
 | RSSHub 官方 | `https://rsshub.app` | RSSHub 实例 | 默认推荐，覆盖路由广 |
-| Feedly | `https://feedly.com/i/subscription/feed%2F<URL编码后的RSS链接>` | 在线阅读器 | 免费版可用于管理订阅 |
+| Feedly | `https://feedly.com/i/subscription/feed%2F<URL 编码后的 RSS 链接>` | 在线阅读器 | 免费版可用于管理订阅 |
 | Inoreader | `https://www.inoreader.com` | 在线阅读器 | 免费版可聚合多源 |
 | Follow | `https://app.follow.is` | 在线阅读器 | 新一代 RSS 聚合器，支持多端 |
 
@@ -120,46 +120,54 @@
 
 ### 网络配置
 
-| 配置项               | 类型  | 说明                                                  | 默认值                  |
-|-------------------|-----|-----------------------------------------------------|----------------------|
-| `proxy`           | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890` | `""`                 |
-| `rsshub_base_url` | 字符串 | 默认 RSSHub 域名，用于路由检索与订阅链接拼接                          | `https://rsshub.app` |
-| `timeout`         | 整数  | 请求超时（秒），获取 RSS 源时的 HTTP 请求超时时间                      | `30`                 |
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `proxy` | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890` | `""` |
+| `rsshub_base_url` | 字符串 | 默认 RSSHub 域名，用于路由检索与订阅链接拼接 | `https://rsshub.app` |
+| `timeout` | 整数 | 请求超时（秒），获取 RSS 源时的 HTTP 请求超时时间 | `30` |
 
 ### 监控配置
 
-| 配置项                | 类型 | 说明                            | 默认值  |
-|--------------------|----|-------------------------------|------|
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
 | `default_interval` | 整数 | 默认监控间隔（分钟），订阅未设置 interval 时使用 | `10` |
-| `minimal_interval` | 整数 | 最小监控间隔（分钟），限制命令/WebUI 设置的最小值  | `1`  |
+| `minimal_interval` | 整数 | 最小监控间隔（分钟），限制命令/WebUI 设置的最小值 | `1` |
 | `bootstrap_skip_history` | 布尔值 | 首轮是否跳过历史条目，开启后首次仅建立去重历史不推送旧消息 | `true` |
 
 ### 去重配置
 
-| 配置项                       | 类型 | 说明                         | 默认值    |
-|---------------------------|----|----------------------------|--------|
-| `hash_history_min`        | 整数 | 去重历史最小保留数量，避免历史回流重复推送      | `200`  |
-| `hash_history_multiplier` | 整数 | 去重历史增长倍数，动态扩展历史窗口          | `2`    |
-| `hash_history_hard_limit` | 整数 | 去重历史硬上限，限制数据库体积与监控开销       | `5000` |
-| `tracking_query_params`   | 列表 | 链接去重时忽略的查询参数（如 utm_source） | 见配置说明  |
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `hash_history_min` | 整数 | 去重历史最小保留数量，避免历史回流重复推送 | `200` |
+| `hash_history_multiplier` | 整数 | 去重历史增长倍数，动态扩展历史窗口 | `2` |
+| `hash_history_hard_limit` | 整数 | 去重历史硬上限，限制数据库体积与监控开销 | `5000` |
+| `tracking_query_params` | 列表 | 链接去重时忽略的查询参数（如 utm_source） | 见配置说明 |
 
 ### 发送配置
 
-| 配置项                          | 类型  | 说明                        | 默认值     |
-|------------------------------|-----|---------------------------|---------|
-| `download_image_before_send` | 布尔值 | 先下载图片再发送，Docker 环境下需共享数据卷 | `false` |
-| `ffmpeg.qq_official_video_transcode` | 布尔值 | QQ 官方视频发送前自动转码为兼容 MP4，优先保证视频卡片 | `true` |
-| `ffmpeg.qq_official_auto_install_ffmpeg` | 布尔值 | 自动使用插件依赖提供的 FFmpeg，无需手动安装系统 ffmpeg | `true` |
-| `failed_queue_capacity`      | 整数  | 失败队列容量，0=禁用失败队列           | `50`    |
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `download_image_before_send` | 布尔值 | 先下载图片再发送，Docker 环境下需共享数据卷 | `true` |
+| `failed_queue_capacity` | 整数 | 失败队列容量，0=禁用失败队列 | `50` |
+| `failed_queue_max_retries` | 整数 | 失败队列最大重试次数 | `3` |
+| `debug_payload` | 布尔值 | 调试模式，在消息末尾显示条目详细信息 | `false` |
 
-> `/rss_conf` 命令中对应键名为：`ffmpeg_qq_official_video_transcode`、`ffmpeg_qq_official_auto_install_ffmpeg`。
+### FFmpeg 配置 (`ffmpeg`)
+
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `ffmpeg.video_transcode` | 布尔值 | 视频发送前自动转码为兼容 MP4，优先保证视频卡片 | `false` |
+| `ffmpeg.video_transcode_timeout` | 整数 | 视频转码超时时间（秒） | `120` |
+| `ffmpeg.gif_transcode` | 布尔值 | GIF 发送前自动转码优化 | `false` |
+| `ffmpeg.gif_transcode_timeout` | 整数 | GIF 转码超时时间（秒） | `60` |
 
 ### 发送策略配置 (`sender_strategies`)
 
-| 配置项                           | 类型  | 说明                            | 默认值    |
-|-------------------------------|-----|-------------------------------|--------|
-| `sender_strategies.telegram`  | 布尔值 | 启用 Telegram 专用策略（媒体优先、大小限制处理） | `true` |
-| `sender_strategies.aiocqhttp` | 布尔值 | 启用 OneBot 专用策略（合并转发节点）        | `true` |
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `sender_strategies.telegram` | 布尔值 | 启用 Telegram 专用策略（媒体优先、大小限制处理） | `true` |
+| `sender_strategies.aiocqhttp` | 布尔值 | 启用 OneBot 专用策略（合并转发节点） | `true` |
+| `sender_strategies.weixin_oc` | 布尔值 | 启用企业微信专用策略 | `true` |
 
 > **命名说明：**
 > - 配置文件中使用 `sender_strategies.<platform>` 形式（点号分隔），例如：`sender_strategies.telegram`、`sender_strategies.aiocqhttp`
@@ -168,52 +176,51 @@
 
 ### 翻译配置 (`translation`)
 
-| 配置项                          | 类型     | 说明                                              | 默认值       |
-|------------------------------|--------|-------------------------------------------------|------------|
-| `translation.provider`       | 字符串    | 翻译服务提供商：`google`(免费) / `baidu`                  | `google`   |
-| `translation.target_lang`    | 字符串    | 目标语言：`zh-CN`, `zh-TW`, `en`, `ja`                  | `zh-CN`    |
-| `translation.auto_translate` | 布尔值    | 是否自动翻译新条目                                      | `false`    |
-| `translation.force_translate`| 布尔值    | 是否跳过语言检测强制翻译                                  | `false`    |
-| `translation.translate_title`| 布尔值    | 是否翻译标题                                          | `true`     |
-| `translation.translate_content`| 布尔值  | 是否翻译正文                                          | `true`     |
-| `translation.display_orignal_content`| 布尔值 | 是否显示原文（格式：原文 + `--【译文】--` + 译文）         | `false`    |
-| `translation.cache_translations`| 布尔值 | 是否缓存翻译结果以减少 API 调用                           | `true`     |
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `translation.provider` | 字符串 | 翻译服务提供商：`google`(免费) / `baidu` | `google` |
+| `translation.target_lang` | 字符串 | 目标语言：`zh-CN`, `zh-TW`, `en`, `ja` | `zh-CN` |
+| `translation.auto_translate` | 布尔值 | 是否自动翻译新条目 | `false` |
+| `translation.force_translate` | 布尔值 | 是否跳过语言检测强制翻译 | `false` |
+| `translation.translate_title` | 布尔值 | 是否翻译标题 | `true` |
+| `translation.translate_content` | 布尔值 | 是否翻译正文 | `true` |
+| `translation.display_orignal_content` | 布尔值 | 是否显示原文（格式：原文 + `--【译文】--` + 译文） | `false` |
+| `translation.cache_translations` | 布尔值 | 是否缓存翻译结果以减少 API 调用 | `true` |
 
 **百度翻译认证配置** (`translation_template`)：
 
-| 配置项                              | 类型   | 说明                    |
-|----------------------------------|------|-----------------------|
+| 配置项 | 类型 | 说明 |
+|--------|------|------|
 | `translation_template.baidu.baidu_appid` | 字符串 | 百度翻译 AppID（申请地址：http://api.fanyi.baidu.com） |
-| `translation_template.baidu.baidu_key`   | 字符串 | 百度翻译 API 密钥          |
+| `translation_template.baidu.baidu_key` | 字符串 | 百度翻译 API 密钥 |
 
 **使用说明：**
 - Google 翻译无需配置，开箱即用（免费但有频率限制）
 - 百度翻译需要申请 AppID 和密钥
 - 翻译功能可全局开启或按订阅单独控制
-- 按订阅控制：`/sub_set <订阅ID> translate=1` 开启、`translate=0` 关闭
+- 按订阅控制：`/sub_set <订阅 ID> translate=1` 开启、`translate=0` 关闭
 
 ### 多 BOT 配置
 
-| 配置项                              | 类型  | 说明                 | 默认值     |
-|----------------------------------|-----|--------------------|---------|
-| `deduplicate_multi_bot`          | 布尔值 | 单会话多 BOT 去重，避免重复推送 | `true`  |
-| `platform_shared_data.aiocqhttp` | 布尔值 | aiocqhttp 平台共享数据源  | `false` |
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `deduplicate_multi_bot` | 布尔值 | 单会话多 BOT 去重，避免重复推送 | `true` |
+| `platform_shared_data.aiocqhttp` | 布尔值 | aiocqhttp 平台共享数据源 | `false` |
 
 **说明：**
-
 - **单会话多 BOT 去重**：开启后，当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息
 - **平台共享数据源**：开启后，该平台下所有 BOT 的订阅数据共享，任意 BOT 掉线时其他 BOT 可继续推送
 
 ### WebUI 配置 (`webui`)
 
-| 配置项                     | 类型  | 说明                    | 默认值       |
-|-------------------------|-----|-----------------------|-----------|
-| `webui.enabled`         | 布尔值 | 启用 WebUI 管理界面         | `false`   |
-| `webui.host`            | 字符串 | 监听地址，`0.0.0.0`=允许外部访问 | `0.0.0.0` |
-| `webui.port`            | 整数  | 监听端口                  | `9191`    |
-| `webui.auth_enabled`    | 布尔值 | 启用登录验证                | `true`    |
-| `webui.password`        | 字符串 | 访问密码，留空则自动生成 6 位随机密码  | `""`      |
-| `webui.session_timeout` | 整数  | 会话超时时间（秒）             | `3600`    |
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `webui.enabled` | 布尔值 | 启用 WebUI 管理界面 | `false` |
+| `webui.host` | 字符串 | 监听地址，`0.0.0.0`=允许外部访问 | `0.0.0.0` |
+| `webui.port` | 整数 | 监听端口 | `9191` |
+| `webui.auth_enabled` | 布尔值 | 启用登录验证 | `true` |
+| `webui.password` | 字符串 | 访问密码，留空则自动生成 6 位随机密码 | `""` |
+| `webui.session_timeout` | 整数 | 会话超时时间（秒） | `3600` |
 
 ---
 
@@ -225,61 +232,91 @@
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
-| `/sub <RSS链接> [目标]` | `/订阅` | 新增订阅，目标可选 `private`/`group`/`current`/完整 session |
-| `/unsub <订阅ID>` | `/取消订阅` | 删除单个订阅 |
+| `/sub <RSS 链接> [目标]` | `/订阅` | 新增订阅，目标可选 `current`/`here`/`this`（当前会话）或完整 session 格式（跨平台推送） |
+| `/unsub <订阅 ID>` | `/取消订阅` | 删除单个订阅 |
 | `/unsub_all [global]` | `/取消全部订阅` | 删除订阅；默认仅清除当前会话，`global` 清除所有会话（需管理员） |
-| `/sub_list [all [page] [page_size]]` | `/订阅列表` | 查看当前用户订阅列表（管理员可用 `all` 查看所有会话） |
+| `/sub_list [scope] [page] [page_size]` | `/订阅列表` | 查看当前用户订阅列表（管理员可用 `all` 查看所有会话） |
 | `/sub_export [all]` | `/导出订阅` | 导出订阅到 TOML 文件，默认当前会话，`all`=所有订阅（管理员） |
 | `/sub_import [文件路径]` | `/导入订阅` | 从 TOML 文件导入订阅 |
+
+**`/sub` 命令目标参数说明：**
+
+| 参数 | 效果 | 示例 |
+|------|------|------|
+| 不传 | 使用当前会话 | `/sub https://example.com/rss.xml` |
+| `current`/`here`/`this` | 显式使用当前会话 | `/sub https://example.com/rss.xml current` |
+| 完整 session 格式 | 跨平台推送到指定会话 | `/sub https://example.com/rss.xml telegram:GroupMessage:123456` |
+
+> **跨平台推送示例：** 在 QQ 群中执行 `/sub https://example.com/rss.xml telegram:GroupMessage:987654`，RSS 更新会推送到 Telegram 群组。
 
 ### 订阅设置
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
+| `/sub_set <订阅 ID> <选项> <值>` | `/设置订阅` | 设置订阅选项 |
 | `/sub_set_default <选项> <值>` | `/设置默认订阅` | 设置用户默认选项 |
 | `/sub_session_default_set <key> <value>` | `/设置会话默认` | 设置会话级订阅默认项（新订阅自动继承） |
 | `/sub_session_default_get` | `/获取会话默认` | 查看当前会话默认项 |
+| `/sub_bind <private\|group\|session>` | `/绑定订阅` | 绑定当前用户默认推送目标 |
 
 ### 插件配置
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
-| `/rss_conf` | `/RSS配置` | 查看当前插件配置 |
-| `/rss_conf <key>` | `/RSS配置 <key>` | 查看指定配置项 |
-| `/rss_conf <key> <value>` | `/RSS配置 <key> <value>` | 设置指定配置项 |
+| `/rss_conf` | `/RSS 配置` | 查看当前插件配置 |
+| `/rss_conf <key>` | `/RSS 配置 <key>` | 查看指定配置项 |
+| `/rss_conf <key> <value>` | `/RSS 配置 <key> <value>` | 设置指定配置项 |
 
 ### 管理命令
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
-| `/sub_test <订阅ID> [粒度]` | `/测试订阅` | 管理员手动触发测试推送，粒度可选 `latest`/`all`/`<数量>` |
-| `/sub_failed_queue` | `/失败队列` | 查看失败队列状态 |
-| `/rsshelp` | `/RSS帮助` | 查看帮助 |
+| `/sub_test <订阅 ID> [粒度]` | `/测试订阅` | 管理员手动触发测试推送，粒度可选 `latest`/`all`/`<数量>`/`first:<数量>`/`newest:<数量>` |
+| `/rsshelp` | `/RSS 帮助` | 查看帮助 |
 
-**可配置项：** `proxy`/`rsshub_base_url`/`default_interval`/`minimal_interval`/`timeout`/`download_image_before_send`/
-`ffmpeg_qq_official_video_transcode`/`ffmpeg_qq_official_auto_install_ffmpeg`/
-`bootstrap_skip_history`/`failed_queue_capacity`/`failed_queue_max_retries`/`sender_strategy_telegram`/`sender_strategy_aiocqhttp`/
-`deduplicate_multi_bot`/`platform_shared_data_aiocqhttp`
+### 可配置项
 
-> 说明：监控主循环没有固定“每周期条目上限”。实际可见推送量受 RSS 源更新量、失败队列容量（`failed_queue_capacity`）、最大重试次数（`failed_queue_max_retries`）以及平台发送限流共同影响。
+通过 `/rss_conf <key> <value>` 命令可配置以下选项：
+
+| 配置项 | 类型 | 说明 |
+|--------|------|------|
+| `proxy` | 字符串 | 代理地址 |
+| `rsshub_base_url` | 字符串 | RSSHub 基础 URL |
+| `default_interval` | 整数 | 默认监控间隔（分钟） |
+| `minimal_interval` | 整数 | 最小监控间隔（分钟） |
+| `timeout` | 整数 | 请求超时（秒） |
+| `download_image_before_send` | 布尔值 | 发送前下载图片 |
+| `bootstrap_skip_history` | 布尔值 | 首轮跳过历史条目 |
+| `debug_payload` | 布尔值 | 调试模式 |
+| `failed_queue_capacity` | 整数 | 失败队列容量 |
+| `failed_queue_max_retries` | 整数 | 失败队列最大重试次数 |
+| `sender_strategy_telegram` | 布尔值 | Telegram 发送策略 |
+| `sender_strategy_aiocqhttp` | 布尔值 | OneBot 发送策略 |
+| `sender_strategy_weixin_oc` | 布尔值 | 企业微信发送策略 |
+| `deduplicate_multi_bot` | 布尔值 | 单会话多 BOT 去重 |
+| `platform_shared_data_aiocqhttp` | 布尔值 | aiocqhttp 平台共享数据 |
+
+> 说明：监控主循环没有固定"每周期条目上限"。实际可见推送量受 RSS 源更新量、失败队列容量（`failed_queue_capacity`）、最大重试次数（`failed_queue_max_retries`）以及平台发送限流共同影响。
 
 ### 订阅选项说明
 
 **订阅级选项：**
 
-- `notify`: 0/1 - 是否通知
-- `send_mode`: -1(仅链接)/0(自动)/2(直接消息)
-- `length_limit`: 正整数，0表示不限制
-- `link_preview`: 0/1 - 链接预览
-- `display_author`: -1~1 - 显示作者
-- `display_via`: -2~-1/0/1 - 显示来源
-- `display_title`: -1~1 - 显示标题
-- `display_entry_tags`: -1~1 - 显示标签
-- `style`: 0/1 - 样式 (RSStT/flowerss)
-- `display_media`: -1/0 - 显示媒体
-- `interval`: 正整数 - 监控间隔（分钟）
-- `title`: 字符串 - 订阅标题
-- `tags`: 字符串 - 标签
+| 选项 | 类型 | 说明 |
+|------|------|------|
+| `notify` | 0/1 | 是否通知 |
+| `send_mode` | -1/0/2 | -1(仅链接)/0(自动)/2(直接消息) |
+| `length_limit` | 正整数 | 0 表示不限制 |
+| `link_preview` | 0/1 | 链接预览 |
+| `display_author` | -1~1 | 显示作者 |
+| `display_via` | -2~-1/0/1 | 显示来源 |
+| `display_title` | -1~1 | 显示标题 |
+| `display_entry_tags` | -1~1 | 显示标签 |
+| `style` | 0/1 | 样式 (RSStT/flowerss) |
+| `display_media` | -1/0 | 显示媒体 |
+| `interval` | 正整数 | 监控间隔（分钟） |
+| `title` | 字符串 | 订阅标题 |
+| `tags` | 字符串 | 标签 |
 
 ---
 

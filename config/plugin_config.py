@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from astrbot.api import AstrBotConfig
 
 
 @dataclass
@@ -321,3 +324,15 @@ class RsshubPluginConfig:
             },
             "db_file": self.db_file,
         }
+
+    def save(self, astrbot_config: AstrBotConfig) -> None:
+        """保存配置到 AstrBotConfig
+
+        Args:
+            astrbot_config: AstrBot 配置对象
+        """
+        config_dict = self.to_dict()
+        for key, value in config_dict.items():
+            if key != "db_file":  # 不保存 db_file 到用户配置
+                astrbot_config[key] = value
+        astrbot_config.save_config()

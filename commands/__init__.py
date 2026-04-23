@@ -19,6 +19,21 @@ from .subscription_cmd import (
     unsubscribe_all_feeds,
     unsubscribe_feed,
 )
+from .types import (
+    BindTargetResult,
+    CommandResult,
+    ExportSubscriptionsResult,
+    GetFailedQueueStatusResult,
+    GetSessionDefaultsResult,
+    ImportSubscriptionsResult,
+    ListSubscriptionsResult,
+    SetPluginConfigResult,
+    SetSessionDefaultResult,
+    SetSubscriptionOptionResult,
+    SetUserDefaultOptionResult,
+    SubscribeResult,
+    UnsubscribeAllResult,
+)
 
 __all__ = [
     # 订阅相关
@@ -42,4 +57,18 @@ __all__ = [
     "get_session_defaults",
     # 帮助
     "get_help_text",
+    # 类型
+    "BindTargetResult",
+    "CommandResult",
+    "ExportSubscriptionsResult",
+    "GetFailedQueueStatusResult",
+    "GetSessionDefaultsResult",
+    "ImportSubscriptionsResult",
+    "ListSubscriptionsResult",
+    "SetPluginConfigResult",
+    "SetSessionDefaultResult",
+    "SetSubscriptionOptionResult",
+    "SetUserDefaultOptionResult",
+    "SubscribeResult",
+    "UnsubscribeAllResult",
 ]

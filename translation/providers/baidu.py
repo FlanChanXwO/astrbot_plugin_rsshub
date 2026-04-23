@@ -36,8 +36,12 @@ class BaiduTranslator(BaseTranslator):
         "it": "it",
     }
 
-    def __init__(self, config: TranslationConfig | None = None):
-        super().__init__(config)
+    def __init__(
+        self,
+        config: TranslationConfig | None = None,
+        session: aiohttp.ClientSession | None = None,
+    ):
+        super().__init__(config, session)
         self._appid = ""
         self._key = ""
 
@@ -113,30 +117,56 @@ class BaiduTranslator(BaseTranslator):
                 "sign": sign,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.API_URL, params=params, timeout=30) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"Baidu API error: HTTP {resp.status}")
-                        return None
-
-                    data = await resp.json()
-
-                    if "error_code" in data:
-                        logger.warning(f"Baidu API error: {data.get('error_msg')}")
-                        return None
-
-                    # Extract translation result
-                    trans_result = data.get("trans_result", [])
-                    if not trans_result:
-                        return None
-
-                    # Concatenate all translation parts
-                    translated_parts = [item.get("dst", "") for item in trans_result]
-                    return "".join(translated_parts)
+            # Use external session if available, otherwise create temporary one
+            if self._session is None:
+                logger.warning("BaiduTranslator: No session available, creating temporary session WITHOUT proxy")
+                async with aiohttp.ClientSession() as temp_session:
+                    return await self._do_translate(temp_session, params)
+            else:
+                logger.debug(f"BaiduTranslator: Using provided session for translation")
+                return await self._do_translate(self._session, params)
 
         except Exception as e:
             logger.warning(f"Baidu translation failed: {e}")
             return None
+
+    async def _do_translate(
+        self,
+        session: aiohttp.ClientSession,
+        params: dict,
+    ) -> str | None:
+        """Perform the actual translation request.
+        
+        Args:
+            session: aiohttp ClientSession to use
+            params: API parameters
+            
+        Returns:
+            Translated text or None if failed
+        """
+        async with session.get(
+            self.API_URL,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                logger.warning(f"Baidu API error: HTTP {resp.status}")
+                return None
+
+            data = await resp.json()
+
+            if "error_code" in data:
+                logger.warning(f"Baidu API error: {data.get('error_msg')}")
+                return None
+
+            # Extract translation result
+            trans_result = data.get("trans_result", [])
+            if not trans_result:
+                return None
+
+            # Concatenate all translation parts
+            translated_parts = [item.get("dst", "") for item in trans_result]
+            return "".join(translated_parts)
 
     async def detect_language(self, text: str) -> str | None:
         """Detect language using Baidu API (via translation with from=auto).
@@ -163,20 +193,44 @@ class BaiduTranslator(BaseTranslator):
                 "sign": sign,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.API_URL, params=params, timeout=30) as resp:
-                    if resp.status != 200:
-                        return None
-
-                    data = await resp.json()
-
-                    if "error_code" in data:
-                        return None
-
-                    # Get detected source language
-                    from_lang = data.get("from", "")
-                    return self._denormalize_lang(from_lang) if from_lang else None
+            # Use external session if available, otherwise create temporary one
+            if self._session is None:
+                async with aiohttp.ClientSession() as temp_session:
+                    return await self._do_detect_language(temp_session, params)
+            else:
+                return await self._do_detect_language(self._session, params)
 
         except Exception as e:
             logger.warning(f"Baidu language detection failed: {e}")
             return None
+
+    async def _do_detect_language(
+        self,
+        session: aiohttp.ClientSession,
+        params: dict,
+    ) -> str | None:
+        """Perform the actual language detection request.
+        
+        Args:
+            session: aiohttp ClientSession to use
+            params: API parameters
+            
+        Returns:
+            Detected language code or None
+        """
+        async with session.get(
+            self.API_URL,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                return None
+
+            data = await resp.json()
+
+            if "error_code" in data:
+                return None
+
+            # Get detected source language
+            from_lang = data.get("from", "")
+            return self._denormalize_lang(from_lang) if from_lang else None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from io import BytesIO
 from ssl import SSLError
 from typing import Final
@@ -38,7 +39,7 @@ async def close_shared_session() -> None:
 async def feed_get(
     url: str,
     timeout: float | None = None,
-    headers: dict | None = None,
+    headers: dict[str, str] | None = None,
     verbose: bool = True,
     proxy: str = "",
     session: aiohttp.ClientSession | None = None,
@@ -52,14 +53,27 @@ async def feed_get(
         _headers.update(headers)
     if "Accept" not in _headers:
         _headers["Accept"] = FEED_ACCEPT
-
+    
+    # 如果有 proxy，创建临时 session（不使用共享 session）
+    use_shared_session = not proxy and session is None
+    
     try:
-        client = session if session is not None else await _get_shared_session()
+        if use_shared_session:
+            client = await _get_shared_session()
+            temp_session = None
+        elif session is not None:
+            client = session
+            temp_session = None
+        else:
+            # 创建带 proxy 的临时 session
+            temp_session = aiohttp.ClientSession(proxy=proxy if proxy else None)
+            client = temp_session
+        
         async with client.get(
             url,
             headers=_headers,
             timeout=timeout or 30,
-            proxy=proxy or None,
+            proxy=proxy or None if not use_shared_session else None,
         ) as resp:
             rss_content = await resp.read()
             ret.content = rss_content
@@ -120,5 +134,9 @@ async def feed_get(
         ret.error = WebError(
             error_name="internal error", url=url, base_error=e, log_level=40
         )
+    finally:
+        # 关闭临时创建的 session
+        if temp_session is not None and not temp_session.closed:
+            await temp_session.close()
 
     return ret

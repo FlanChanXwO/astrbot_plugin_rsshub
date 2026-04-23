@@ -4,17 +4,20 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..utils.config import PluginConfig
+    from ..config import RuntimeConfig
+
+from .types import SetPluginConfigResult, SetUserDefaultOptionResult
 
 
-def get_plugin_config(config: "PluginConfig") -> str:
+def get_plugin_config(config: "RuntimeConfig") -> str:
     """获取插件配置文本
 
     Returns:
         配置信息字符串
     """
-    strategies = config.sender_strategies if config else {}
-    shared_data = config.platform_shared_data if config else {}
+    strategies = config.sender_strategies if config else None
+    shared_data = config.platform_shared_data if config else None
+    ffmpeg_cfg = config.ffmpeg if config else None
 
     return (
         "当前 RSS 插件配置:\n"
@@ -31,37 +34,38 @@ def get_plugin_config(config: "PluginConfig") -> str:
         f"history_entry_limit = {config.history_entry_limit}\n"
         f"download_image_before_send = {config.download_image_before_send}\n"
         "ffmpeg:\n"
-        f"  video_transcode = {config.ffmpeg.get('video_transcode', False)}\n"
-        f"  video_transcode_timeout = {config.ffmpeg.get('video_transcode_timeout', 120)}\n"
-        f"  gif_transcode = {config.ffmpeg.get('gif_transcode', False)}\n"
-        f"  gif_transcode_timeout = {config.ffmpeg.get('gif_transcode_timeout', 60)}\n"
+        f"  video_transcode = {ffmpeg_cfg.video_transcode if ffmpeg_cfg else False}\n"
+        f"  video_transcode_timeout = {ffmpeg_cfg.video_transcode_timeout if ffmpeg_cfg else 120}\n"
+        f"  gif_transcode = {ffmpeg_cfg.gif_transcode if ffmpeg_cfg else False}\n"
+        f"  gif_transcode_timeout = {ffmpeg_cfg.gif_transcode_timeout if ffmpeg_cfg else 60}\n"
         "sender_strategies:\n"
-        f"  telegram = {strategies.get('telegram', True)}\n"
-        f"  aiocqhttp = {strategies.get('aiocqhttp', True)}\n"
-        f"  weixin_oc = {strategies.get('weixin_oc', True)}\n"
+        f"  telegram = {strategies.telegram if strategies else True}\n"
+        f"  aiocqhttp = {strategies.aiocqhttp if strategies else True}\n"
+        f"  weixin_oc = {strategies.weixin_oc if strategies else True}\n"
         "platform_shared_data:\n"
-        f"  aiocqhttp = {shared_data.get('aiocqhttp', False)}"
+        f"  aiocqhttp = {shared_data.aiocqhttp if shared_data else False}"
     )
 
 
-def get_single_config(key: str, config: "PluginConfig") -> str:
+def get_single_config(key: str, config: "RuntimeConfig") -> str:
     """获取单个配置项"""
-    value = config.get(key)
-    return f"{key} = {value}"
+    try:
+        value = getattr(config, key, None)
+        if value is None:
+            return f"{key} = (not found)"
+        return f"{key} = {value}"
+    except Exception as ex:
+        return f"{key} = (error: {ex})"
 
 
 async def set_plugin_config(
     *,
     key: str,
     value: str,
-    config: "PluginConfig",
+    config: "RuntimeConfig",
     parse_plugin_config_value_fn: Callable[[str, str], int | str | bool],
-) -> dict:
-    """设置插件配置
-
-    Returns:
-        {"success": bool, "message": str, "error": str}
-    """
+) -> SetPluginConfigResult:
+    """设置插件配置"""
     from ..config import PLUGIN_CONFIG_KEYS
 
     normalized_key = key.strip().lower()
@@ -105,12 +109,8 @@ async def set_user_default_option(
     value: str,
     user_id: str,
     parse_option_value_fn: Callable[[str, str], int | str],
-) -> dict:
-    """设置用户默认选项
-
-    Returns:
-        {"success": bool, "message": str, "error": str}
-    """
+) -> SetUserDefaultOptionResult:
+    """设置用户默认选项"""
     from ..config import USER_DEFAULT_OPTION_KEYS
     from ..db import User
 

@@ -6,8 +6,8 @@ from pathlib import Path
 from astrbot.api.message_components import File, Image, Plain, Record, Video
 
 from ...utils.log_utils import logger
+from ...utils.media_downloader import get_or_download_media_to_cache
 from .base import MessageSender
-from .media_downloader import get_or_download_media_to_cache
 from .types import PreparedMedia, SendResult
 
 

@@ -6,6 +6,7 @@ import json
 import secrets
 import time
 from pathlib import Path
+from typing import Any
 
 from aiohttp import web
 
@@ -68,7 +69,7 @@ class RSSHubWebUI:
             self._runner = None
 
     @staticmethod
-    def _json_response(data: dict, status: int = 200) -> web.Response:
+    def _json_response(data: dict[str, Any], status: int = 200) -> web.Response:
         return web.Response(
             text=json.dumps(data, ensure_ascii=False),
             status=status,
@@ -193,10 +194,8 @@ class RSSHubWebUI:
         }
         str_keys = {"target_session", "tags", "title"}
 
-        plugin_config = getattr(self._plugin, "config", None)
-        minimal_interval = int(
-            getattr(plugin_config, "minimal_interval", 1) if plugin_config else 1
-        )
+        plugin_config = self._plugin.config
+        minimal_interval = plugin_config.minimal_interval
 
         for key, value in data.items():
             if key in int_keys:

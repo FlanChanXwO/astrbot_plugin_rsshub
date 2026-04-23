@@ -40,21 +40,12 @@ class GoogleTranslator(BaseTranslator):
     # Google Translate API endpoint
     API_URL = "https://translate.googleapis.com/translate_a/single"
 
-    def __init__(self, config: TranslationConfig | None = None):
-        super().__init__(config)
-        self._session: aiohttp.ClientSession | None = None
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    async def close(self) -> None:
-        """Close the aiohttp session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
+    def __init__(
+        self,
+        config: TranslationConfig | None = None,
+        session: aiohttp.ClientSession | None = None,
+    ):
+        super().__init__(config, session)
 
     async def translate(
         self,
@@ -72,7 +63,14 @@ class GoogleTranslator(BaseTranslator):
         Returns:
             Translated text or None if failed
         """
+        logger.info(
+            f"GoogleTranslator.translate 被调用：text={text[:30]}..., "
+            f"target_lang={target_lang}, source_lang={source_lang}, "
+            f"has_session={self._session is not None}"
+        )
+        
         if not text or not text.strip():
+            logger.debug("GoogleTranslator: 空文本，直接返回")
             return text
 
         try:
@@ -88,33 +86,66 @@ class GoogleTranslator(BaseTranslator):
                 "q": text,
             }
 
-            session = await self._get_session()
-            async with session.get(
-                self.API_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Google API error: HTTP {resp.status}")
-                    return None
-
-                data = await resp.json()
-
-                # Extract translation from response
-                # Response format: [[[translated_text, original_text, ...], ...], ...]
-                if not data or not isinstance(data, list):
-                    return None
-
-                translated_parts = []
-                for item in data[0]:
-                    if item and isinstance(item, list) and len(item) > 0:
-                        translated_parts.append(item[0])
-
-                return "".join(translated_parts) if translated_parts else None
+            # Use external session if available, otherwise create temporary one
+            if self._session is None:
+                logger.error(
+                    "GoogleTranslator: 没有可用的 session！创建临时 session（无代理）"
+                )
+                async with aiohttp.ClientSession() as temp_session:
+                    return await self._do_translate(temp_session, params)
+            else:
+                logger.info(
+                    f"GoogleTranslator: 使用提供的 session 进行翻译，"
+                    f"session 类型={type(self._session).__name__}"
+                )
+                return await self._do_translate(self._session, params)
 
         except Exception as e:
             logger.warning(f"Google translation failed: {e}")
             return None
+
+    async def _do_translate(
+        self,
+        session: aiohttp.ClientSession,
+        params: dict,
+    ) -> str | None:
+        """Perform the actual translation request.
+        
+        Args:
+            session: aiohttp ClientSession to use
+            params: API parameters
+            
+        Returns:
+            Translated text or None if failed
+        """
+        # Log session proxy info for debugging
+        logger.debug(
+            f"GoogleTranslator._do_translate: session type={type(session)}, "
+            f"has_proxy={hasattr(session, '_proxy') and session._proxy is not None}"
+        )
+        
+        async with session.get(
+            self.API_URL,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                logger.warning(f"Google API error: HTTP {resp.status}")
+                return None
+
+            data = await resp.json()
+
+            # Extract translation from response
+            # Response format: [[[translated_text, original_text, ...], ...], ...]
+            if not data or not isinstance(data, list):
+                return None
+
+            translated_parts = []
+            for item in data[0]:
+                if item and isinstance(item, list) and len(item) > 0:
+                    translated_parts.append(item[0])
+
+            return "".join(translated_parts) if translated_parts else None
 
     async def detect_language(self, text: str) -> str | None:
         """Detect language using Google Translate API.
@@ -135,25 +166,45 @@ class GoogleTranslator(BaseTranslator):
                 "q": text[:100],  # Use first 100 chars
             }
 
-            session = await self._get_session()
-            async with session.get(
-                self.API_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-
-                data = await resp.json()
-
-                # Response includes detected language in some cases
-                # Format: [[...], "detected_lang_code", ...]
-                if len(data) > 1 and isinstance(data[1], str):
-                    detected = data[1]
-                    return self._denormalize_lang(detected)
-
-                return None
+            # Use external session if available, otherwise create temporary one
+            if self._session is None:
+                async with aiohttp.ClientSession() as temp_session:
+                    return await self._do_detect_language(temp_session, params)
+            else:
+                return await self._do_detect_language(self._session, params)
 
         except Exception as e:
             logger.warning(f"Google language detection failed: {e}")
+            return None
+
+    async def _do_detect_language(
+        self,
+        session: aiohttp.ClientSession,
+        params: dict,
+    ) -> str | None:
+        """Perform the actual language detection request.
+        
+        Args:
+            session: aiohttp ClientSession to use
+            params: API parameters
+            
+        Returns:
+            Detected language code or None if failed
+        """
+        async with session.get(
+            self.API_URL,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                return None
+
+            data = await resp.json()
+
+            # Response includes detected language in some cases
+            # Format: [[...], "detected_lang_code", ...]
+            if len(data) > 1 and isinstance(data[1], str):
+                detected = data[1]
+                return self._denormalize_lang(detected)
+
             return None

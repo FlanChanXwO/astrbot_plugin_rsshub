@@ -3,6 +3,7 @@
 
 import os
 from datetime import datetime
+from typing import TypedDict
 
 from sqlalchemy import JSON, Column, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -11,6 +12,14 @@ from sqlmodel import Field, Relationship, SQLModel
 
 from ..utils.log_utils import logger
 from .migrations import ensure_schema_compat
+
+
+class FailedQueueStats(TypedDict):
+    """Failed notification queue statistics."""
+
+    total: int
+    pending: int
+    exhausted: int
 
 _plugin_registry = registry()
 
@@ -317,8 +326,9 @@ def resolve_effective_options(
 class SubMethods:
     """Sub辅助方法。"""
 
-    @staticmethod
+    @classmethod
     async def create(
+        cls,
         user_id: str,
         feed_id: int,
         target_session: str | None = None,
@@ -408,8 +418,8 @@ class SubMethods:
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
-    @staticmethod
-    async def get_by_id(sub_id: int) -> Sub | None:
+    @classmethod
+    async def get_by_id(cls, sub_id: int) -> Sub | None:
         async with get_session() as session:
             from sqlmodel import select
 
@@ -421,8 +431,8 @@ class SubMethods:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
-    @staticmethod
-    async def get_by_ids(sub_ids: list[int]) -> dict[int, Sub]:
+    @classmethod
+    async def get_by_ids(cls, sub_ids: list[int]) -> dict[int, Sub]:
         """Batch load subscriptions by IDs to avoid N+1 queries.
 
         Args:
@@ -616,8 +626,8 @@ class SubMethods:
 class UserMethods:
     """User辅助方法。"""
 
-    @staticmethod
-    async def get_or_create(user_id: str) -> User:
+    @classmethod
+    async def get_or_create(cls, user_id: str) -> User:
         async with get_session() as session:
             user = await session.get(User, user_id)
             if not user:
@@ -668,8 +678,8 @@ class UserMethods:
 class FeedMethods:
     """Feed辅助方法。"""
 
-    @staticmethod
-    async def get_or_create(link: str, title: str = "") -> Feed:
+    @classmethod
+    async def get_or_create(cls, link: str, title: str = "") -> Feed:
         async with get_session() as session:
             from sqlmodel import select
 
@@ -684,8 +694,8 @@ class FeedMethods:
                 await session.refresh(feed)
             return feed
 
-    @staticmethod
-    async def get_by_id(feed_id: int) -> Feed | None:
+    @classmethod
+    async def get_by_id(cls, feed_id: int) -> Feed | None:
         async with get_session() as session:
             return await session.get(Feed, feed_id)
 
@@ -698,8 +708,8 @@ class MonitorScheduleMethods:
         async with get_session() as session:
             return await session.get(MonitorSchedule, sub_id)
 
-    @staticmethod
-    async def get_or_create(sub_id: int) -> MonitorSchedule:
+    @classmethod
+    async def get_or_create(cls, sub_id: int) -> MonitorSchedule:
         async with get_session() as session:
             row = await session.get(MonitorSchedule, sub_id)
             if row is None:
@@ -709,8 +719,8 @@ class MonitorScheduleMethods:
                 await session.refresh(row)
             return row
 
-    @staticmethod
-    async def upsert(
+    @classmethod
+    async def upsert(cls,
         sub_id: int,
         *,
         next_check_time: datetime | None,
@@ -739,8 +749,8 @@ class MonitorScheduleMethods:
 class FailedNotificationMethods:
     """FailedNotification helper methods for retry queue management."""
 
-    @staticmethod
-    async def enqueue(
+    @classmethod
+    async def enqueue(cls,
         sub_id: int,
         user_id: str,
         content: str,
@@ -932,7 +942,7 @@ class FailedNotificationMethods:
             return result.rowcount or 0
 
     @staticmethod
-    async def get_stats(max_retries: int = 3) -> dict:
+    async def get_stats(max_retries: int = 3) -> FailedQueueStats:
         """Get queue statistics.
 
         Args:
@@ -973,8 +983,8 @@ class TranslationCacheMethods:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
-    @staticmethod
-    async def save(
+    @classmethod
+    async def save(cls,
         hash: str,
         provider: str,
         target_lang: str,

@@ -13,13 +13,13 @@ from ..notifier.senders import (
 from .log_utils import logger
 
 if TYPE_CHECKING:
-    from ..utils.config import PluginConfig
+    from ..config import RuntimeConfig
 
 
 async def process_failed_notification(
     notif: FailedNotification,
     *,
-    config: PluginConfig | None = None,
+    config: RuntimeConfig | None = None,
     timeout_seconds: int = 30,
     proxy: str = "",
     max_retries: int = 3,
@@ -103,7 +103,7 @@ async def process_failed_notification(
 async def process_failed_notifications_batch(
     notifications: list[FailedNotification],
     *,
-    config: PluginConfig | None = None,
+    config: RuntimeConfig | None = None,
     timeout_seconds: int = 30,
     proxy: str = "",
     max_retries: int = 3,

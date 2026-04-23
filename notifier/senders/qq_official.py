@@ -5,8 +5,8 @@ from pathlib import Path
 from astrbot.api.message_components import Image, Plain, Video
 
 from ...utils.log_utils import logger
+from ...utils.media_paths import resolve_local_file_path
 from .base import MessageSender
-from .media_paths import resolve_local_file_path
 from .types import NotifierContext, PreparedMedia, SendResult
 
 

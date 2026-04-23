@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from astrbot.api import logger as _logger
 
 
@@ -17,7 +19,7 @@ class PrefixedLogger:
         """Add prefix to message if it's a string."""
         return self.PREFIX + str(msg)
 
-    def _with_stacklevel(self, kwargs: dict) -> dict:
+    def _with_stacklevel(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         copied_kwargs = dict(kwargs)
         if "stacklevel" not in copied_kwargs:
             copied_kwargs["stacklevel"] = self.CALLER_STACKLEVEL

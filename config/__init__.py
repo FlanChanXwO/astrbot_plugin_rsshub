@@ -18,14 +18,19 @@ from .plugin_config import (
     TranslationConfig,
     WebUIConfig,
 )
+from .runtime_config import RuntimeConfig
 
 __all__ = [
+    # 运行时配置
+    "RuntimeConfig",
+    # 配置类
     "RsshubPluginConfig",
     "TranslationConfig",
     "FFmpegConfig",
     "WebUIConfig",
     "SenderStrategiesConfig",
     "PlatformSharedDataConfig",
+    # 常量
     "SUB_OPTION_CASTERS",
     "USER_DEFAULT_OPTION_KEYS",
     "PLUGIN_CONFIG_KEYS",

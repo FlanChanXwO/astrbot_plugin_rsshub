@@ -9,8 +9,8 @@ from astrbot.core.star.star_tools import StarTools
 
 from ...utils.ffmpeg_helper import transcode_video_to_mp4_for_qq
 from ...utils.log_utils import logger
-from .media_downloader import get_or_download_media_to_cache
-from .media_paths import normalize_local_media_file_value
+from ...utils.media_downloader import get_or_download_media_to_cache
+from ...utils.media_paths import normalize_local_media_file_value
 from .types import PreparedMedia, SendResult
 
 

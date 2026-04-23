@@ -1,4 +1,3 @@
-# ruff: noqa: UP037
 """RSS-to-AstrBot Database Migrations
 
 数据库迁移管理模块，处理 schema 版本升级和兼容性维护。
@@ -116,6 +115,7 @@ async def ensure_schema_compat(conn) -> None:
     await _migrate_user_id_to_text(conn)
 
 
+# noinspection SqlNoDataSourceInspection
 async def _migrate_user_id_to_text(conn) -> None:
     """将 user_id 列从 INTEGER 迁移到 TEXT 类型。
 

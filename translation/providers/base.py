@@ -6,7 +6,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...utils.config import PluginConfig
+    import aiohttp
+    from ...config import RuntimeConfig
 
 
 class BaseTranslator(ABC):
@@ -22,13 +23,19 @@ class BaseTranslator(ABC):
     # Language code mapping: our format -> provider format
     LANG_MAP: dict[str, str] = {}
 
-    def __init__(self, config: PluginConfig | None = None):
+    def __init__(
+        self,
+        config: RuntimeConfig | None = None,
+        session: aiohttp.ClientSession | None = None,
+    ):
         """Initialize the translator.
 
         Args:
             config: Plugin configuration for loading provider-specific settings
+            session: Shared aiohttp ClientSession with proxy/timeout configured
         """
         self.config = config
+        self._session = session
 
     @abstractmethod
     async def translate(

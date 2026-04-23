@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .aiocqhttp import AiocqhttpMessageSender
 from .base import MessageSender
 from .qq_official import QQOfficialMessageSender
 from .telegram import TelegramMessageSender
 from .weixin_oc import WeixinOCMessageSender
 
+if TYPE_CHECKING:
+    from ...config import RuntimeConfig
+
 
 def get_sender_for_platform_name(
     platform_name: str | None,
-    config: object | None = None,
+    config: RuntimeConfig | None = None,
 ) -> type[MessageSender]:
     """根据平台类型名选择最优发送器。
 
@@ -23,38 +28,42 @@ def get_sender_for_platform_name(
     normalized = (platform_name or "").strip().lower()
 
     # Check if config has sender_strategies
-    strategies = getattr(config, "sender_strategies", None) if config else None
+    strategies = config.sender_strategies if config else None
     if strategies is None:
-        strategies = {
-            "telegram": True,
-            "aiocqhttp": True,
-            "qq_official": True,
-            "weixin_oc": True,
-        }
+        # Use default values when config is not available
+        telegram_enabled = True
+        aiocqhttp_enabled = True
+        qq_official_enabled = True
+        weixin_oc_enabled = True
+    else:
+        telegram_enabled = strategies.telegram
+        aiocqhttp_enabled = strategies.aiocqhttp
+        qq_official_enabled = strategies.qq_official if hasattr(strategies, 'qq_official') else True
+        weixin_oc_enabled = strategies.weixin_oc
 
     # Telegram strategy
     if normalized in {"telegram", "tg"} or "telegram" in normalized:
-        if strategies.get("telegram", True):
+        if telegram_enabled:
             return TelegramMessageSender
         return MessageSender
 
     # OneBot/Aiocqhttp strategy
     if normalized in {"aiocqhttp", "onebot", "onebot11", "onebotv11"}:
-        if strategies.get("aiocqhttp", True):
+        if aiocqhttp_enabled:
             return AiocqhttpMessageSender
         return MessageSender
     if "aiocqhttp" in normalized or "onebot" in normalized:
-        if strategies.get("aiocqhttp", True):
+        if aiocqhttp_enabled:
             return AiocqhttpMessageSender
         return MessageSender
 
     # QQ Official strategy
     if normalized in {"qq_official", "qqofficial", "qq"}:
-        if strategies.get("qq_official", True):
+        if qq_official_enabled:
             return QQOfficialMessageSender
         return MessageSender
     if "qq_official" in normalized or "qqofficial" in normalized:
-        if strategies.get("qq_official", True):
+        if qq_official_enabled:
             return QQOfficialMessageSender
         return MessageSender
 
@@ -66,7 +75,7 @@ def get_sender_for_platform_name(
         "wechat_personal",
         "weixin",
     }:
-        if strategies.get("weixin_oc", True):
+        if weixin_oc_enabled:
             return WeixinOCMessageSender
         return MessageSender
     if (
@@ -74,7 +83,7 @@ def get_sender_for_platform_name(
         or "weixin_personal" in normalized
         or "wechat_personal" in normalized
     ):
-        if strategies.get("weixin_oc", True):
+        if weixin_oc_enabled:
             return WeixinOCMessageSender
         return MessageSender
 

@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+from pathlib import Path
 from urllib.parse import parse_qsl
 
 from astrbot.api import AstrBotConfig
@@ -25,7 +27,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import File
 from astrbot.api.star import Context, Star
 
-from .api import close_shared_session
+from .api import RSSHubRadarAPI, close_shared_session, normalize_base_url
 from .commands import (
     bind_target,
     export_subscriptions,
@@ -46,14 +48,13 @@ from .config import (
     SESSION_DEFAULT_KEYS,
     SESSION_DEFAULT_KV_PREFIX,
     SUB_OPTION_CASTERS,
+    RuntimeConfig,
 )
 from .db import Sub, User, close_db, init_db
 from .monitor import Monitor
 from .notifier.senders import set_bot_self_id_provider
-from .utils.config import PluginConfig
 from .utils.ffmpeg_helper import ensure_ffmpeg_ready
 from .utils.log_utils import logger
-from .utils.rsshub_api import RSSHubRadarAPI, normalize_base_url
 from .web import RSSHubWebUI, resolve_webui_config
 
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
@@ -66,7 +67,7 @@ class RSSHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.astrbot_config = config
-        self.config: PluginConfig | None = None
+        self.config: RuntimeConfig | None = None
         self.monitor: Monitor | None = None
         self._scheduler_task: asyncio.Task | None = None
         self._webui: RSSHubWebUI | None = None
@@ -120,7 +121,8 @@ class RSSHubPlugin(Star):
             "粒度参数无效。可选: latest / all / <数量> / count:<数量> / first:<数量> / newest:<数量>"
         )
 
-    def _parse_plugin_config_value(self, key: str, value: str):
+    @staticmethod
+    def _parse_plugin_config_value(key: str, value: str):
         """Parse plugin-level config values from command."""
         normalized_key = key.strip().lower()
         raw_value = value.strip()
@@ -187,7 +189,11 @@ class RSSHubPlugin(Star):
     def _is_platform_shared(self, platform_name: str) -> bool:
         """Check if platform shared data is enabled for the given platform."""
         if self.config and self.config.platform_shared_data:
-            return bool(self.config.platform_shared_data.get(platform_name, False))
+            return bool(
+                self.config.platform_shared_data.aiocqhttp
+                if platform_name == "aiocqhttp"
+                else False
+            )
         return False
 
     @staticmethod
@@ -228,35 +234,29 @@ class RSSHubPlugin(Star):
         event: AstrMessageEvent,
         target: str,
     ) -> tuple[str | None, str | None]:
-        """解析命令目标参数，返回(session, error)。"""
+        """解析命令目标参数，返回 (session, error)。
+        
+        支持的参数：
+        - 空/不传：使用当前会话
+        - current/here/this：显式使用当前会话
+        - 完整 session 格式：platform:MessageType:id（用于跨平台推送）
+        """
         raw = target.strip()
         if not raw:
             return event.unified_msg_origin, None
 
         normalized = raw.lower()
-        platform_id = event.get_platform_id()
 
         if normalized in {"here", "current", "this"}:
             return event.unified_msg_origin, None
 
-        if normalized in {"private", "friend", "dm"}:
-            sender_id = event.get_sender_id()
-            if not sender_id:
-                return None, "当前事件无法识别发送者，无法绑定私聊目标"
-            return f"{platform_id}:FriendMessage:{sender_id}", None
-
-        if normalized in {"group", "grp"}:
-            group_id = event.get_group_id()
-            if not group_id:
-                return None, "当前不是群聊上下文，无法绑定群聊目标"
-            return f"{platform_id}:GroupMessage:{group_id}", None
-
+        # 支持完整的 session 格式：platform:MessageType:id
         if raw.count(":") >= 2:
             return raw, None
 
         return (
             None,
-            "目标参数无效。可选: private/group/current 或完整 session(platform:MessageType:id)",
+            "目标参数无效。可选：current/here/this 或完整 session 格式 (platform:MessageType:id)",
         )
 
     def _parse_option_value(self, key: str, value: str):
@@ -318,41 +318,196 @@ class RSSHubPlugin(Star):
                 "请使用 /sub_bind <private|group|session> 重新绑定默认推送目标。"
             )
 
+    async def _cleanup_unsub_export_backups(self, temp_dir: Path) -> None:
+        """Best-effort cleanup for old unsub backup files under temp directory."""
+        now = time.time()
+        cutoff = now - self._unsub_export_retention_seconds
+
+        for path in temp_dir.glob("rsshub_subscriptions_*.toml"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            except OSError as ex:
+                logger.debug("Skip stale export cleanup for %s: %s", path, ex)
+
+    async def _read_uploaded_toml_content(
+        self,
+        event: AstrMessageEvent,
+        *,
+        max_file_size: int,
+    ) -> tuple[str | None, str | None, bool]:
+        """Read TOML content from uploaded file components.
+
+        Returns: (content, error, has_file_component)
+        """
+        has_file_component = False
+        file_messages = event.get_messages()
+        for component in file_messages:
+            if not isinstance(component, File):
+                continue
+
+            has_file_component = True
+            file_path = ""
+            try:
+                file_path = await component.get_file()
+                if not file_path:
+                    continue
+                candidate = Path(file_path)
+                if not candidate.is_file():
+                    continue
+                if candidate.stat().st_size > max_file_size:
+                    return (
+                        None,
+                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                        True,
+                    )
+                return candidate.read_text(encoding="utf-8-sig"), None, True
+            except OSError as ex:
+                return None, f"读取上传文件失败：{ex}", True
+            finally:
+                if file_path:
+                    try:
+                        os.unlink(file_path)
+                    except OSError:
+                        pass
+
+        return None, None, has_file_component
+
+    async def _read_import_toml_content(
+        self,
+        event: AstrMessageEvent,
+        import_path: str = "",
+    ) -> tuple[str | None, str | None, bool]:
+        """Read import TOML content from local path or uploaded file.
+
+        Returns: (content, error, should_wait_upload)
+        """
+        if import_path.strip():
+            if not event.is_admin():
+                return (
+                    None,
+                    "出于安全考虑，仅管理员可使用本地路径导入，请改为上传 TOML 文件。",
+                    False,
+                )
+            if self.config is None:
+                return None, "插件配置尚未初始化", False
+
+            path = Path(import_path.strip()).expanduser().resolve()
+            allowed_dir = self.config.local_imports_dir.resolve()
+            allowed_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                path.relative_to(allowed_dir)
+            except ValueError:
+                return (
+                    None,
+                    f"仅允许从导入目录读取文件：{allowed_dir}",
+                    False,
+                )
+
+            if not path.is_file():
+                return None, f"导入文件不存在：{path}", False
+            try:
+                if path.stat().st_size > IMPORT_MAX_FILE_SIZE_BYTES:
+                    return (
+                        None,
+                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                        False,
+                    )
+                return path.read_text(encoding="utf-8-sig"), None, False
+            except OSError as ex:
+                return None, f"读取导入文件失败：{ex}", False
+
+        content, read_err, has_file_component = await self._read_uploaded_toml_content(
+            event,
+            max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
+        )
+        if content:
+            return content, None, False
+        if read_err:
+            return None, read_err, False
+        if has_file_component:
+            return None, "读取上传文件失败", False
+
+        return None, None, True
+
+    def _validate_import_record_options(
+        self,
+        event: AstrMessageEvent,
+        options: dict[str, int | str],
+    ) -> tuple[dict[str, int | str], str | None]:
+        """Validate and normalize imported subscription options."""
+        validated: dict[str, int | str] = {}
+
+        for key, raw_value in options.items():
+            if key == "platform_name":
+                if isinstance(raw_value, str) and raw_value.strip():
+                    validated[key] = raw_value.strip()
+                continue
+
+            if key == "target_session":
+                if not isinstance(raw_value, str):
+                    return {}, "target_session 必须是字符串"
+                parsed_target, parse_err = self._parse_target_session(event, raw_value)
+                if parse_err:
+                    return {}, f"target_session 无效：{parse_err}"
+                if parsed_target:
+                    validated[key] = parsed_target
+                continue
+
+            if key in {"title", "tags"}:
+                if not isinstance(raw_value, str):
+                    return {}, f"{key} 必须是字符串"
+                normalized = raw_value.strip()
+                if normalized:
+                    validated[key] = normalized
+                continue
+
+            if key not in SUB_OPTION_CASTERS:
+                continue
+
+            try:
+                parsed_value = self._parse_option_value(key, str(raw_value))
+            except ValueError as ex:
+                return {}, str(ex)
+            validated[key] = parsed_value
+
+        return validated, None
+
     def _get_bot_self_id(self, platform_id: str) -> str:
-        """根据 platform_id 获取对应平台适配器的 bot self_id"""
-        if self.context is None:
-            return "10000"
+        """根据 platform_id 获取对应平台适配器的 bot self_id
 
-        try:
-            platform_manager = getattr(self.context, "platform_manager", None)
-            if platform_manager is None:
-                return "10000"
+        Raises:
+            RuntimeError: 当无法获取有效的 bot_self_id 时抛出异常
+        """
+        for platform in self.context.platform_manager.platform_insts:
+            meta = platform.meta()
+            if meta and meta.id == platform_id:
+                if platform.bot_self_id:
+                    return str(platform.bot_self_id)
+                if platform.bot.self_id:
+                    return str(platform.bot.self_id)
+                raise RuntimeError(
+                    f"平台 {platform_id} 的 bot_self_id 不可用，"
+                    "请检查平台适配器配置是否正确"
+                )
 
-            platform_insts = getattr(platform_manager, "platform_insts", [])
-            for platform in platform_insts:
-                meta = platform.meta()
-                if meta and meta.id == platform_id:
-                    if hasattr(platform, "bot_self_id") and platform.bot_self_id:
-                        return str(platform.bot_self_id)
-                    if hasattr(platform, "bot") and hasattr(platform.bot, "self_id"):
-                        return str(platform.bot.self_id)
-                    break
-        except Exception as ex:
-            logger.debug("获取 bot_self_id 失败: %s", ex)
-
-        return "10000"
+        raise RuntimeError(
+            f"未找到平台 {platform_id} 的适配器实例，"
+            "请检查平台配置是否正确"
+        )
 
     async def initialize(self):
         """插件初始化"""
-        logger.info("RSS订阅插件初始化...")
+        logger.info("RSS 订阅插件初始化...")
 
-        self.config = PluginConfig.load(
+        self.config = RuntimeConfig(
             plugin_name=self.name,
-            astrbot_config=self.astrbot_config,
+            astrbot_config=dict(self.astrbot_config) if self.astrbot_config else None,
         )
-        logger.info(f"RSS插件配置加载完成，数据目录: {self.config.data_dir}")
+        logger.info(f"RSS 插件配置加载完成，数据目录：{self.config.data_dir}")
 
-        if self.config.video_transcode:
+        if self.config.ffmpeg.video_transcode:
             ffmpeg_path = ensure_ffmpeg_ready(auto_install=True)
             if ffmpeg_path:
                 logger.info("RSS插件 FFmpeg 已就绪: %s", ffmpeg_path)
@@ -811,7 +966,6 @@ class RSSHubPlugin(Star):
             session_id=event.unified_msg_origin,
             get_session_defaults_fn=self._get_session_defaults,
         )
-
         yield event.plain_result(result["message"])
 
     @filter.command("rss_conf", alias={"RSS配置"})
@@ -832,9 +986,14 @@ class RSSHubPlugin(Star):
             yield event.plain_result(get_plugin_config(self.config))
             return
 
-        await set_plugin_config(
+        result = await set_plugin_config(
             key=key,
             value=value,
             config=self.config,
             parse_plugin_config_value_fn=self._parse_plugin_config_value,
         )
+
+        if result.get("success"):
+            yield event.plain_result(result.get("message", "配置已更新"))
+        else:
+            yield event.plain_result(result.get("error", "设置配置失败"))

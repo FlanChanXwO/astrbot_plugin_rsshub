@@ -75,6 +75,7 @@
 - 🔄 **失败队列** - 平台连接失败时自动进入队列，恢复后重试推送
 - 🤝 **多 BOT 支持** - 单会话多 BOT 去重，平台级订阅共享
 - 🔍 **RSSHub 集成** - 内置 RSSHub 路由检索，快速构建订阅链接
+- 🌐 **自动翻译** - 支持 Google(免费)、百度翻译，自动翻译 RSS 条目内容
 
 ---
 
@@ -163,6 +164,32 @@
 > - `/rss_conf` 命令参数中使用 `sender_strategy_<platform>` 形式（下划线分隔），例如：`sender_strategy_telegram`、`sender_strategy_aiocqhttp`
 > - 两者是一一对应的配置项，仅书写形式不同，含义完全相同
 
+### 翻译配置 (`translation`)
+
+| 配置项                          | 类型     | 说明                                              | 默认值       |
+|------------------------------|--------|-------------------------------------------------|------------|
+| `translation.provider`       | 字符串    | 翻译服务提供商：`google`(免费) / `baidu`                  | `google`   |
+| `translation.target_lang`    | 字符串    | 目标语言：`zh-CN`, `zh-TW`, `en`, `ja`                  | `zh-CN`    |
+| `translation.auto_translate` | 布尔值    | 是否自动翻译新条目                                      | `false`    |
+| `translation.force_translate`| 布尔值    | 是否跳过语言检测强制翻译                                  | `false`    |
+| `translation.translate_title`| 布尔值    | 是否翻译标题                                          | `true`     |
+| `translation.translate_content`| 布尔值  | 是否翻译正文                                          | `true`     |
+| `translation.display_orignal_content`| 布尔值 | 是否显示原文（格式：原文 + `--【译文】--` + 译文）         | `false`    |
+| `translation.cache_translations`| 布尔值 | 是否缓存翻译结果以减少 API 调用                           | `true`     |
+
+**百度翻译认证配置** (`translation_template`)：
+
+| 配置项                              | 类型   | 说明                    |
+|----------------------------------|------|-----------------------|
+| `translation_template.baidu.baidu_appid` | 字符串 | 百度翻译 AppID（申请地址：http://api.fanyi.baidu.com） |
+| `translation_template.baidu.baidu_key`   | 字符串 | 百度翻译 API 密钥          |
+
+**使用说明：**
+- Google 翻译无需配置，开箱即用（免费但有频率限制）
+- 百度翻译需要申请 AppID 和密钥
+- 翻译功能可全局开启或按订阅单独控制
+- 按订阅控制：`/sub_set <订阅ID> translate=1` 开启、`translate=0` 关闭
+
 ### 多 BOT 配置
 
 | 配置项                              | 类型  | 说明                 | 默认值     |
@@ -207,9 +234,7 @@
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
-| `/sub_set <订阅ID> <选项> <值>` | `/设置订阅` | 设置单个订阅选项（支持 `target_session`） |
 | `/sub_set_default <选项> <值>` | `/设置默认订阅` | 设置用户默认选项 |
-| `/sub_bind <目标>` | `/绑定订阅` | 绑定当前用户默认推送目标 |
 | `/sub_session_default_set <key> <value>` | `/设置会话默认` | 设置会话级订阅默认项（新订阅自动继承） |
 | `/sub_session_default_get` | `/获取会话默认` | 查看当前会话默认项 |
 
@@ -253,7 +278,6 @@
 - `interval`: 正整数 - 监控间隔（分钟）
 - `title`: 字符串 - 订阅标题
 - `tags`: 字符串 - 标签
-- `target_session`: 字符串 - 推送目标会话
 
 ---
 

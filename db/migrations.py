@@ -179,11 +179,15 @@ async def _migrate_user_id_to_text(conn) -> None:
 
     logger.debug(
         "备份索引：user=%s, sub=%s, failed=%s",
-        len(user_indexes), len(sub_indexes), len(failed_indexes)
+        len(user_indexes),
+        len(sub_indexes),
+        len(failed_indexes),
     )
     logger.debug(
         "备份触发器：user=%s, sub=%s, failed=%s",
-        len(user_triggers), len(sub_triggers), len(failed_triggers)
+        len(user_triggers),
+        len(sub_triggers),
+        len(failed_triggers),
     )
 
     # conn 已从 _engine.begin() 传入，已在事务中，直接执行 SQL

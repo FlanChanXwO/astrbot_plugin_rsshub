@@ -168,7 +168,7 @@ class PostFormatter:
         if translate == 1 and translation_manager and translation_manager.is_enabled:
             logger.debug(
                 "PostFormatter: Starting translation, target_lang=%s",
-                translate_target_lang or "default"
+                translate_target_lang or "default",
             )
             try:
                 tgt_lang = translate_target_lang or translation_manager.target_lang

@@ -87,7 +87,7 @@ class Notifier:
             self._translation_manager = TranslationManager(trans_config)
             logger.debug(
                 "Notifier: TranslationManager created, enabled=%s",
-                self._translation_manager.is_enabled
+                self._translation_manager.is_enabled,
             )
         return self._translation_manager
 

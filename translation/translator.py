@@ -195,7 +195,7 @@ class TranslationManager:
         logger.debug(
             "translate_text called: text=%s..., provider=%s",
             text[:50] if text else None,
-            self._provider
+            self._provider,
         )
 
         if not text or not text.strip():
@@ -225,8 +225,7 @@ class TranslationManager:
             return cached
 
         logger.debug(
-            "translate_text: Cache miss, calling provider %s",
-            self._provider.NAME
+            "translate_text: Cache miss, calling provider %s", self._provider.NAME
         )
 
         # Perform translation
@@ -234,7 +233,7 @@ class TranslationManager:
             result = await self._provider.translate(text, tgt_lang)
             logger.debug(
                 "translate_text: Provider returned: %s...",
-                result[:100] if result else None
+                result[:100] if result else None,
             )
 
             if result and result != text:

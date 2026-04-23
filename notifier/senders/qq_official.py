@@ -17,9 +17,10 @@ class QQOfficialMessageSender(MessageSender):
     - Single image: send together with text
     - Multiple images: send images one by one, then send text separately
     - Video: send video first, then send text description separately
-    
-    Note: Video transcoding is now handled globally in MessageSender._build_media_components
-    based on the global video_transcode configuration.
+
+    Note: Video transcoding is now handled globally in
+    MessageSender._build_media_components based on the global
+    video_transcode configuration.
     """
 
     @classmethod
@@ -41,7 +42,8 @@ class QQOfficialMessageSender(MessageSender):
             exists = Path(resolved_path).exists()
         except Exception as ex:
             logger.warning(
-                "QQOfficial media path check failed: session=%s, component=%s, file=%s, resolved=%s, err=%s",
+                "QQOfficial media path check failed: session=%s, component=%s, "
+                "file=%s, resolved=%s, err=%s",
                 session_id,
                 type(component).__name__,
                 file_value,
@@ -50,7 +52,8 @@ class QQOfficialMessageSender(MessageSender):
             )
             return
         logger.debug(
-            "QQOfficial media path check: session=%s, component=%s, file=%s, resolved=%s, exists=%s",
+            "QQOfficial media path check: session=%s, component=%s, "
+            "file=%s, resolved=%s, exists=%s",
             session_id,
             type(component).__name__,
             file_value,
@@ -88,7 +91,8 @@ class QQOfficialMessageSender(MessageSender):
             source_for_fallback = str(getattr(component, "url", "") or file_value)
             missing_sources.append(source_for_fallback)
             logger.warning(
-                "QQOfficial media dropped before send: session=%s, component=%s, file=%s, resolved=%s, fallback=%s",
+                "QQOfficial media dropped before send: session=%s, component=%s, "
+                "file=%s, resolved=%s, fallback=%s",
                 session_id,
                 type(component).__name__,
                 file_value,
@@ -142,7 +146,7 @@ class QQOfficialMessageSender(MessageSender):
             effective_prepared = prepared_media
             if effective_prepared is None and media:
                 effective_prepared = await cls.prepare_media(media)
-            # Note: Video transcoding is now handled globally in 
+            # Note: Video transcoding is now handled globally in
             # MessageSender._build_media_components based on video_transcode config
 
             # Build media components

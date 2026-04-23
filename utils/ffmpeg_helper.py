@@ -17,6 +17,18 @@ except Exception:  # pragma: no cover
 _ffmpeg_exe_cache: str | None = None
 _ffprobe_exe_cache: str | None = None
 
+# GIF transcode profile: quality-first defaults.
+_GIF_TRANSCODE_FPS = 30
+_GIF_TRANSCODE_SCALE = "iw:-1"
+_GIF_TRANSCODE_MAX_COLORS = 256
+_GIF_TRANSCODE_DITHER = "sierra2_4a"
+_GIF_TRANSCODE_PROFILE = (
+    f"fps={_GIF_TRANSCODE_FPS};"
+    f"scale={_GIF_TRANSCODE_SCALE};"
+    f"colors={_GIF_TRANSCODE_MAX_COLORS};"
+    f"dither={_GIF_TRANSCODE_DITHER}"
+)
+
 
 def ensure_ffmpeg_ready(*, auto_install: bool = True) -> str | None:
     """Resolve an FFmpeg executable path for plugin runtime use."""
@@ -106,7 +118,9 @@ async def has_audio_stream(
     """
     ffprobe_exe = ensure_ffprobe_ready(auto_install=auto_install_ffmpeg)
     if not ffprobe_exe:
-        logger.debug("FFprobe not available, assuming audio exists: path=%s", video_path)
+        logger.debug(
+            "FFprobe not available, assuming audio exists: path=%s", video_path
+        )
         return True
 
     if not video_path.exists():
@@ -114,10 +128,14 @@ async def has_audio_stream(
 
     args = [
         ffprobe_exe,
-        "-v", "error",
-        "-select_streams", "a:0",
-        "-show_entries", "stream=codec_name",
-        "-of", "csv=s=x:p=0",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-of",
+        "csv=s=x:p=0",
         str(video_path),
     ]
 
@@ -141,7 +159,9 @@ async def has_audio_stream(
                 pass
         return True
     except Exception as ex:
-        logger.warning("FFprobe audio detection failed: path=%s, err=%s", video_path, ex)
+        logger.warning(
+            "FFprobe audio detection failed: path=%s, err=%s", video_path, ex
+        )
         return True
 
     # If stdout has content, audio stream exists
@@ -277,7 +297,7 @@ async def transcode_video_to_gif(
 ) -> Path | None:
     """Transcode a silent video to high-quality GIF.
 
-    Uses ffmpeg with optimized palette generation for best quality.
+    Uses ffmpeg with palette generation tuned for quality-first output.
     Caches output to avoid repeated transcoding.
 
     Args:
@@ -303,44 +323,47 @@ async def transcode_video_to_gif(
 
     # Cache directory for GIF files
     cache_root = (
-        Path(get_astrbot_plugin_data_path())
-        / "astrbot_plugin_rsshub"
-        / "cache"
-        / "gif"
+        Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_rsshub" / "cache" / "gif"
     )
     cache_root.mkdir(parents=True, exist_ok=True)
 
     # Cache key based on file path, mtime, and size
+    # Cache key includes source identity and transcode profile,
+    # so quality setting updates do not reuse old low-quality GIF cache.
     digest = hashlib.sha256(
-        f"{source_path.resolve()}::{int(stat.st_mtime)}::{stat.st_size}".encode(
-            "utf-8", errors="ignore"
-        )
+        (
+            f"{source_path.resolve()}::{int(stat.st_mtime)}::{stat.st_size}"
+            f"::{_GIF_TRANSCODE_PROFILE}"
+        ).encode("utf-8", errors="ignore")
     ).hexdigest()
     output_path = cache_root / f"{digest}.gif"
 
     # Return cached file if exists
     if output_path.exists() and output_path.stat().st_size > 0:
         logger.debug(
-            "GIF cache hit: src=%s, out=%s, bytes=%s",
+            "GIF cache hit: src=%s, out=%s, bytes=%s, profile=%s",
             source_path,
             output_path,
             output_path.stat().st_size,
+            _GIF_TRANSCODE_PROFILE,
         )
         return output_path
 
-    # Build ffmpeg command for optimized GIF
-    # - fps=15: balance between smoothness and file size (was 30)
-    # - 320px width: smaller file size, suitable for IM platforms (was 480)
-    # - 64 colors: reduced palette for smaller size (was 128)
-    # - lanczos: high-quality scaling
-    # - palettegen/paletteuse: optimized color palette
+    # Build ffmpeg command for quality-first GIF.
+    vf_expr = (
+        f"fps={_GIF_TRANSCODE_FPS},"
+        f"scale={_GIF_TRANSCODE_SCALE}:flags=lanczos,"
+        "split[s0][s1];"
+        f"[s0]palettegen=max_colors={_GIF_TRANSCODE_MAX_COLORS}:stats_mode=full[p];"
+        f"[s1][p]paletteuse=dither={_GIF_TRANSCODE_DITHER}"
+    )
     args = [
         ffmpeg_exe,
         "-y",
         "-i",
         str(source_path),
         "-vf",
-        "fps=15,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
+        vf_expr,
         "-loop",
         "0",
         str(output_path),
@@ -386,10 +409,11 @@ async def transcode_video_to_gif(
 
     if output_path.exists() and output_path.stat().st_size > 0:
         logger.debug(
-            "FFmpeg GIF transcode success: src=%s, out=%s, bytes=%s",
+            "FFmpeg GIF transcode success: src=%s, out=%s, bytes=%s, profile=%s",
             source_path,
             output_path,
             output_path.stat().st_size,
+            _GIF_TRANSCODE_PROFILE,
         )
         return output_path
 

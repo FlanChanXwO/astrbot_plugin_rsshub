@@ -69,14 +69,15 @@ async def apply_import_payload(
         validated, option_err = validate_options(options)
         if option_err:
             result.failed += 1
-            result.details.append(f"[{index}] 选项校验失败: {option_err}")
+            result.details.append(f"[{index}] 选项校验失败：{option_err}")
             continue
 
-        target_session = str(validated.get("target_session") or current_session)
+        # 自动使用当前会话作为推送目标
+        target_session = current_session
         pair = (record.link, target_session)
         if pair in seen_pairs:
             result.skipped += 1
-            result.details.append(f"[{index}] 文件内重复订阅，已跳过: {record.link}")
+            result.details.append(f"[{index}] 文件内重复订阅，已跳过：{record.link}")
             continue
         seen_pairs.add(pair)
 
@@ -97,7 +98,7 @@ async def apply_import_payload(
             platform_name=platform_name,
         )
 
-        validated.pop("target_session", None)
+        validated.pop("platform_name", None)
         if validated:
             updated = await Sub.update_options(sub.id, user_db_id, **validated)
             if not updated:

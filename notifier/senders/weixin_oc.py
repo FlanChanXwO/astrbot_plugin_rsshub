@@ -32,7 +32,8 @@ class WeixinOCMessageSender(MessageSender):
         context: NotifierContext | None = None,
     ) -> SendResult:
         logger.debug(
-            "WeixinOC sender strategy: sequential single-component send, session=%s, has_media=%s, prepared_media=%s",
+            "WeixinOC sender strategy: sequential single-component send, "
+            "session=%s, has_media=%s, prepared_media=%s",
             session_id,
             bool(media),
             bool(prepared_media),

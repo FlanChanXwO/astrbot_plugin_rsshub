@@ -9,6 +9,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from ..config import WebUIConfig
 from ..db import Sub
 from ..utils.log_utils import logger
 
@@ -16,23 +17,20 @@ from ..utils.log_utils import logger
 class RSSHubWebUI:
     """Simple web ui service for subscription management."""
 
-    def __init__(self, plugin, config) -> None:
+    def __init__(self, plugin, config: WebUIConfig) -> None:
         self._plugin = plugin
         self._config = config
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._sessions: dict[str, float] = {}
 
-        self._auth_enabled = bool(config.get("auth_enabled", True))
-        self._password = str(config.get("password", "") or "")
+        self._auth_enabled = config.auth_enabled
+        self._password = config.password
         if self._auth_enabled and not self._password:
             self._password = f"{secrets.randbelow(900000) + 100000}"
             logger.warning(f"RSSHub WebUI generated password: {self._password}")
 
-        self._session_timeout = max(
-            60,
-            int(config.get("session_timeout", 3600) or 3600),
-        )
+        self._session_timeout = max(60, config.session_timeout)
 
         web_dir = Path(__file__).parent
         self._template_path = web_dir / "templates" / "index.html"
@@ -54,8 +52,8 @@ class RSSHubWebUI:
         self._runner = web.AppRunner(app)
         await self._runner.setup()
 
-        host = str(self._config.get("host", "0.0.0.0") or "0.0.0.0")
-        port = int(self._config.get("port", 9191) or 9191)
+        host = self._config.host
+        port = self._config.port
 
         self._site = web.TCPSite(self._runner, host=host, port=port)
         await self._site.start()
@@ -248,18 +246,13 @@ class RSSHubWebUI:
         return self._json_response({"ok": True})
 
 
-def resolve_webui_config(config) -> dict:
-    default = {
-        "enabled": False,
-        "host": "0.0.0.0",
-        "port": 9191,
-        "auth_enabled": True,
-        "password": "",
-        "session_timeout": 3600,
-    }
-    webui_cfg = config.get("webui", default)
+def resolve_webui_config(config) -> WebUIConfig:
+    """Resolve webui configuration from astrbot config.
+
+    Returns:
+        WebUIConfig object
+    """
+    webui_cfg = config.get("webui", {})
     if isinstance(webui_cfg, dict):
-        merged = dict(default)
-        merged.update(webui_cfg)
-        return merged
-    return default
+        return WebUIConfig.from_dict(webui_cfg)
+    return WebUIConfig()  # 返回默认配置

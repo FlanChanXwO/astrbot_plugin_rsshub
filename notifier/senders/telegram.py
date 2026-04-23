@@ -159,7 +159,8 @@ class TelegramMessageSender(MessageSender):
         context: object | None = None,
     ) -> SendResult:
         logger.debug(
-            "Telegram sender strategy: media-first chain, session=%s, has_media=%s, prepared_media=%s",
+            "Telegram sender strategy: media-first chain, "
+            "session=%s, has_media=%s, prepared_media=%s",
             session_id,
             bool(media),
             bool(prepared_media),
@@ -209,7 +210,8 @@ class TelegramMessageSender(MessageSender):
                     return send_result
 
                 logger.warning(
-                    "Telegram media-first chain failed, fallback split send: session=%s, detail=%s",
+                    "Telegram media-first chain failed, fallback split send: "
+                    "session=%s, detail=%s",
                     session_id,
                     send_result.detail,
                 )
@@ -236,7 +238,8 @@ class TelegramMessageSender(MessageSender):
         except Exception as err:
             if media:
                 logger.warning(
-                    "Telegram media push failed, fallback to plain text: session=%s, error=%s, media_count=%s",
+                    "Telegram media push failed, fallback to plain text: "
+                    "session=%s, error=%s, media_count=%s",
                     session_id,
                     err,
                     len(media),

@@ -2,7 +2,6 @@
 """RSS-to-AstrBot Database Models"""
 
 import os
-import re
 from datetime import datetime
 
 from sqlalchemy import JSON, Column, func
@@ -11,6 +10,7 @@ from sqlalchemy.orm import registry, selectinload
 from sqlmodel import Field, Relationship, SQLModel
 
 from ..utils.log_utils import logger
+from .migrations import ensure_schema_compat
 
 _plugin_registry = registry()
 
@@ -31,31 +31,9 @@ EFFECTIVE_OPTION_KEYS = (
     "display_entry_tags",
     "style",
     "display_media",
+    "translate",
+    "translate_target_lang",
 )
-
-_SQLITE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _sqlite_table_info_sql(table: str) -> str:
-    """Build PRAGMA table_info SQL with a validated table identifier."""
-    if not _SQLITE_IDENTIFIER_RE.fullmatch(table):
-        raise ValueError(f"Invalid sqlite table identifier: {table!r}")
-    return f'PRAGMA table_info("{table}")'
-
-
-def _is_text_compatible_sqlite_type(column_type: str) -> bool:
-    """Return True when a SQLite declared type has TEXT affinity."""
-    normalized = (column_type or "").upper()
-    return any(token in normalized for token in ("TEXT", "CHAR", "CLOB"))
-
-
-async def _get_column_type(conn, table: str, column: str) -> str:
-    """获取指定表的列类型"""
-    rows = (await conn.exec_driver_sql(_sqlite_table_info_sql(table))).fetchall()
-    for row in rows:
-        if row[1] == column:
-            return row[2].upper()
-    return ""
 
 
 class User(RSSHubModel, table=True):
@@ -88,6 +66,12 @@ class User(RSSHubModel, table=True):
     display_entry_tags: int = Field(default=-1, description="显示标签")
     style: int = Field(default=0, description="样式: 0=RSStT, 1=flowerss")
     display_media: int = Field(default=0, description="显示媒体: -1=禁用, 0=启用")
+    translate: int = Field(
+        default=INHERIT_VALUE, description="翻译: -100=继承, 0=禁用, 1=启用"
+    )
+    translate_target_lang: str | None = Field(
+        default=None, max_length=16, description="翻译目标语言"
+    )
     default_target_session: str | None = Field(
         default=None,
         max_length=255,
@@ -167,6 +151,10 @@ class Sub(RSSHubModel, table=True):
     display_entry_tags: int = Field(default=INHERIT_VALUE, description="显示标签")
     style: int = Field(default=INHERIT_VALUE, description="样式")
     display_media: int = Field(default=INHERIT_VALUE, description="显示媒体")
+    translate: int = Field(default=INHERIT_VALUE, description="翻译")
+    translate_target_lang: str | None = Field(
+        default=None, max_length=16, description="翻译目标语言"
+    )
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(
@@ -190,6 +178,20 @@ class MonitorSchedule(RSSHubModel, table=True):
     updated_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column_kwargs={"onupdate": datetime.utcnow},
+    )
+
+
+class TranslationCache(RSSHubModel, table=True):
+    """Translation cache for RSS entries."""
+
+    __tablename__ = "rsshub_translation_cache"
+    id: int | None = Field(default=None, primary_key=True)
+    hash: str = Field(max_length=64, unique=True, index=True, description="原文哈希")
+    provider: str = Field(max_length=32, description="翻译器类型")
+    target_lang: str = Field(max_length=16, description="目标语言")
+    translated_text: str = Field(default="", description="翻译后的文本")
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="创建时间"
     )
 
 
@@ -280,7 +282,7 @@ async def init_db(db_path: str) -> None:
 
     async with _engine.begin() as conn:
         await conn.run_sync(RSSHubModel.metadata.create_all)
-        await _ensure_schema_compat(conn)
+        await ensure_schema_compat(conn)
 
     logger.info(f"RSS数据库初始化完成: {db_path}")
 
@@ -310,294 +312,6 @@ def resolve_effective_options(
         sub_val = getattr(sub, key)
         options[key] = getattr(user, key) if sub_val == INHERIT_VALUE else sub_val
     return options
-
-
-async def _ensure_schema_compat(conn) -> None:
-    """为旧数据库补齐迁移过程尚未纳入的新增列，并处理 user_id 类型迁移。"""
-
-    async def _has_column(table: str, column: str) -> bool:
-        rows = (await conn.exec_driver_sql(_sqlite_table_info_sql(table))).fetchall()
-        return any(row[1] == column for row in rows)
-
-    # 新增列兼容（旧版本迁移）
-    if not await _has_column("rsshub_sub", "target_session"):
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_sub ADD COLUMN target_session TEXT"
-        )
-
-    if not await _has_column("rsshub_user", "default_target_session"):
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_user ADD COLUMN default_target_session TEXT"
-        )
-
-    if not await _has_column("rsshub_user", "needs_binding_notice"):
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_user ADD COLUMN needs_binding_notice INTEGER NOT NULL DEFAULT 0"
-        )
-
-    if not await _has_column("rsshub_sub", "platform_name"):
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_sub ADD COLUMN platform_name TEXT"
-        )
-
-    # User ID 类型迁移: INTEGER -> TEXT
-    await _migrate_user_id_to_text(conn)
-
-
-async def _migrate_user_id_to_text(conn) -> None:
-    """将 user_id 列从 INTEGER 迁移到 TEXT 类型。
-
-    SQLite 不支持直接 ALTER COLUMN，需要重建表。
-    迁移过程中会保留索引和触发器。
-    """
-
-    async def _table_exists(table: str) -> bool:
-        result = await conn.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
-        )
-        return result.fetchone() is not None
-
-    async def _get_indexes(table: str) -> list[dict]:
-        """获取表的所有索引定义（除主键索引外）。"""
-        result = await conn.exec_driver_sql(
-            "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=?",
-            (table,),
-        )
-        rows = result.fetchall()
-        indexes = []
-        for row in rows:
-            name, sql = row[0], row[1]
-            # 跳过 SQLite 自动创建的索引（如 sqlite_autoindex_*）
-            if name and sql and not name.startswith("sqlite_autoindex"):
-                indexes.append({"name": name, "sql": sql})
-        return indexes
-
-    async def _get_triggers(table: str) -> list[dict]:
-        """获取表的所有触发器定义。"""
-        result = await conn.exec_driver_sql(
-            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?",
-            (table,),
-        )
-        rows = result.fetchall()
-        return [{"name": row[0], "sql": row[1]} for row in rows if row[1]]
-
-    # 检查 rsshub_user.id 列类型
-    if not await _table_exists("rsshub_user"):
-        return
-
-    user_id_type = await _get_column_type(conn, "rsshub_user", "id")
-    if _is_text_compatible_sqlite_type(user_id_type):
-        # TEXT affinity types in SQLite are already compatible (e.g. TEXT/VARCHAR).
-        return
-
-    if user_id_type != "INTEGER":
-        logger.warning(f"rsshub_user.id 列类型为 {user_id_type}，无法自动迁移到 TEXT")
-        return
-
-    logger.info("开始迁移 user_id 从 INTEGER 到 TEXT...")
-
-    # 备份索引和触发器
-    user_indexes = await _get_indexes("rsshub_user")
-    sub_indexes = await _get_indexes("rsshub_sub")
-    failed_indexes = await _get_indexes("rsshub_failed_notification")
-
-    user_triggers = await _get_triggers("rsshub_user")
-    sub_triggers = await _get_triggers("rsshub_sub")
-    failed_triggers = await _get_triggers("rsshub_failed_notification")
-
-    logger.debug(
-        f"备份索引: user={len(user_indexes)}, sub={len(sub_indexes)}, failed={len(failed_indexes)}"
-    )
-    logger.debug(
-        f"备份触发器: user={len(user_triggers)}, sub={len(sub_triggers)}, failed={len(failed_triggers)}"
-    )
-
-    # conn 已从 _engine.begin() 传入，已在事务中，直接执行 SQL
-    try:
-        # === 迁移 rsshub_user 表 ===
-        # 1. 创建新表（从当前表结构复制）
-        await conn.exec_driver_sql("""
-            CREATE TABLE rsshub_user_new (
-                id TEXT PRIMARY KEY,
-                state INTEGER NOT NULL DEFAULT 0,
-                lang TEXT NOT NULL DEFAULT 'zh-Hans',
-                sub_limit INTEGER,
-                interval INTEGER,
-                notify INTEGER NOT NULL DEFAULT 1,
-                send_mode INTEGER NOT NULL DEFAULT 0,
-                length_limit INTEGER NOT NULL DEFAULT 0,
-                link_preview INTEGER NOT NULL DEFAULT 0,
-                display_author INTEGER NOT NULL DEFAULT 0,
-                display_via INTEGER NOT NULL DEFAULT 0,
-                display_title INTEGER NOT NULL DEFAULT 0,
-                display_entry_tags INTEGER NOT NULL DEFAULT -1,
-                style INTEGER NOT NULL DEFAULT 0,
-                display_media INTEGER NOT NULL DEFAULT 0,
-                default_target_session TEXT,
-                needs_binding_notice INTEGER NOT NULL DEFAULT 0,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # 2. 迁移数据
-        await conn.exec_driver_sql("""
-            INSERT INTO rsshub_user_new
-            SELECT CAST(id AS TEXT), state, lang, sub_limit, interval, notify, send_mode,
-                   length_limit, link_preview, display_author, display_via, display_title,
-                   display_entry_tags, style, display_media, default_target_session,
-                   needs_binding_notice, created_at, updated_at
-            FROM rsshub_user
-        """)
-
-        # 3. 删除旧表，重命名新表
-        await conn.exec_driver_sql("DROP TABLE rsshub_user")
-        await conn.exec_driver_sql("ALTER TABLE rsshub_user_new RENAME TO rsshub_user")
-
-        # 4. 重建索引
-        for idx in user_indexes:
-            try:
-                await conn.exec_driver_sql(idx["sql"])
-                logger.debug(f"重建索引: {idx['name']}")
-            except Exception as e:
-                logger.warning(f"重建索引 {idx['name']} 失败: {e}")
-
-        # 5. 重建触发器
-        for trig in user_triggers:
-            try:
-                await conn.exec_driver_sql(trig["sql"])
-                logger.debug(f"重建触发器: {trig['name']}")
-            except Exception as e:
-                logger.warning(f"重建触发器 {trig['name']} 失败: {e}")
-
-        logger.info("rsshub_user 表迁移完成")
-
-        # === 迁移 rsshub_sub 表 ===
-        # 1. 创建新表
-        await conn.exec_driver_sql("""
-            CREATE TABLE rsshub_sub_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                state INTEGER NOT NULL DEFAULT 1,
-                user_id TEXT NOT NULL,
-                feed_id INTEGER NOT NULL,
-                title TEXT,
-                tags TEXT,
-                target_session TEXT,
-                platform_name TEXT,
-                interval INTEGER,
-                notify INTEGER NOT NULL DEFAULT -100,
-                send_mode INTEGER NOT NULL DEFAULT -100,
-                length_limit INTEGER NOT NULL DEFAULT -100,
-                link_preview INTEGER NOT NULL DEFAULT -100,
-                display_author INTEGER NOT NULL DEFAULT -100,
-                display_via INTEGER NOT NULL DEFAULT -100,
-                display_title INTEGER NOT NULL DEFAULT -100,
-                display_entry_tags INTEGER NOT NULL DEFAULT -100,
-                style INTEGER NOT NULL DEFAULT -100,
-                display_media INTEGER NOT NULL DEFAULT -100,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES rsshub_user (id),
-                FOREIGN KEY (feed_id) REFERENCES rsshub_feed (id)
-            )
-        """)
-
-        # 2. 迁移数据
-        await conn.exec_driver_sql("""
-            INSERT INTO rsshub_sub_new
-            SELECT id, state, CAST(user_id AS TEXT), feed_id, title, tags, target_session,
-                   platform_name, interval, notify, send_mode, length_limit, link_preview,
-                   display_author, display_via, display_title, display_entry_tags, style,
-                   display_media, created_at, updated_at
-            FROM rsshub_sub
-        """)
-
-        # 3. 删除旧表，重命名新表
-        await conn.exec_driver_sql("DROP TABLE rsshub_sub")
-        await conn.exec_driver_sql("ALTER TABLE rsshub_sub_new RENAME TO rsshub_sub")
-
-        # 4. 重建索引
-        for idx in sub_indexes:
-            try:
-                await conn.exec_driver_sql(idx["sql"])
-                logger.debug(f"重建索引: {idx['name']}")
-            except Exception as e:
-                logger.warning(f"重建索引 {idx['name']} 失败: {e}")
-
-        # 5. 重建触发器
-        for trig in sub_triggers:
-            try:
-                await conn.exec_driver_sql(trig["sql"])
-                logger.debug(f"重建触发器: {trig['name']}")
-            except Exception as e:
-                logger.warning(f"重建触发器 {trig['name']} 失败: {e}")
-
-        logger.info("rsshub_sub 表迁移完成")
-
-        # === 迁移 rsshub_failed_notification 表 ===
-        # 1. 创建新表
-        await conn.exec_driver_sql("""
-            CREATE TABLE rsshub_failed_notification_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sub_id INTEGER NOT NULL,
-                user_id TEXT NOT NULL,
-                content TEXT NOT NULL DEFAULT '',
-                media_urls TEXT,
-                entry_title TEXT,
-                entry_link TEXT,
-                feed_title TEXT,
-                feed_link TEXT,
-                platform_name TEXT,
-                target_session TEXT,
-                options TEXT,
-                retry_count INTEGER NOT NULL DEFAULT 0,
-                fail_reason TEXT,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (sub_id) REFERENCES rsshub_sub (id),
-                FOREIGN KEY (user_id) REFERENCES rsshub_user (id)
-            )
-        """)
-
-        # 2. 迁移数据
-        await conn.exec_driver_sql("""
-            INSERT INTO rsshub_failed_notification_new
-            SELECT id, sub_id, CAST(user_id AS TEXT), content, media_urls, entry_title,
-                   entry_link, feed_title, feed_link, platform_name, target_session,
-                   options, retry_count, fail_reason, created_at, updated_at
-            FROM rsshub_failed_notification
-        """)
-
-        # 3. 删除旧表，重命名新表
-        await conn.exec_driver_sql("DROP TABLE rsshub_failed_notification")
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_failed_notification_new RENAME TO rsshub_failed_notification"
-        )
-
-        # 4. 重建索引
-        for idx in failed_indexes:
-            try:
-                await conn.exec_driver_sql(idx["sql"])
-                logger.debug(f"重建索引: {idx['name']}")
-            except Exception as e:
-                logger.warning(f"重建索引 {idx['name']} 失败: {e}")
-
-        # 5. 重建触发器
-        for trig in failed_triggers:
-            try:
-                await conn.exec_driver_sql(trig["sql"])
-                logger.debug(f"重建触发器: {trig['name']}")
-            except Exception as e:
-                logger.warning(f"重建触发器 {trig['name']} 失败: {e}")
-
-        logger.info("rsshub_failed_notification 表迁移完成")
-
-    except Exception:
-        # 异常由外层事务处理回滚
-        logger.error("user_id 类型迁移失败")
-        raise
-
-    logger.info("user_id 类型迁移完成 (INTEGER -> TEXT)")
 
 
 class SubMethods:
@@ -1246,6 +960,104 @@ class FailedNotificationMethods:
             }
 
 
+class TranslationCacheMethods:
+    """Translation cache helper methods."""
+
+    @staticmethod
+    async def get_by_hash(hash: str) -> TranslationCache | None:
+        """Get cached translation by hash."""
+        async with get_session() as session:
+            from sqlmodel import select
+
+            stmt = select(TranslationCache).where(TranslationCache.hash == hash)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    async def save(
+        hash: str,
+        provider: str,
+        target_lang: str,
+        translated_text: str,
+    ) -> TranslationCache:
+        """Save or update translation cache."""
+        async with get_session() as session:
+            from sqlmodel import select
+
+            # Try to get existing
+            stmt = select(TranslationCache).where(TranslationCache.hash == hash)
+            result = await session.execute(stmt)
+            cache = result.scalar_one_or_none()
+
+            if cache:
+                # Update existing
+                cache.translated_text = translated_text
+                cache.provider = provider
+                cache.target_lang = target_lang
+            else:
+                # Create new
+                cache = TranslationCache(
+                    hash=hash,
+                    provider=provider,
+                    target_lang=target_lang,
+                    translated_text=translated_text,
+                )
+                session.add(cache)
+
+            await session.commit()
+            await session.refresh(cache)
+            return cache
+
+    @staticmethod
+    async def delete_by_hash(hash: str) -> bool:
+        """Delete cache entry by hash."""
+        async with get_session() as session:
+            cache = await session.get(TranslationCache, hash)
+            if cache:
+                await session.delete(cache)
+                await session.commit()
+                return True
+            return False
+
+    @staticmethod
+    async def cleanup_old_entries(limit: int = 5000) -> int:
+        """Clean up old translation cache entries beyond limit.
+
+        Args:
+            limit: Maximum number of entries to keep
+
+        Returns:
+            Number of deleted entries
+        """
+        async with get_session() as session:
+            from sqlalchemy import delete
+            from sqlmodel import select
+
+            # Get count
+            count_stmt = select(func.count()).select_from(TranslationCache)
+            total = (await session.execute(count_stmt)).scalar_one() or 0
+
+            if total <= limit:
+                return 0
+
+            # Delete oldest entries
+            to_delete = total - limit
+            subq = (
+                select(TranslationCache.id)
+                .order_by(TranslationCache.created_at.asc())
+                .limit(to_delete)
+                .subquery()
+            )
+            delete_stmt = (
+                delete(TranslationCache)
+                .where(TranslationCache.id.in_(subq))
+                .execution_options(synchronize_session=False)
+            )
+            result = await session.execute(delete_stmt)
+            await session.commit()
+            return result.rowcount or 0
+
+
 class WebUIMethods:
     """Helper methods used by plugin webui."""
 
@@ -1339,3 +1151,9 @@ FailedNotification.delete_exceeded = staticmethod(
     FailedNotificationMethods.delete_exceeded
 )
 FailedNotification.get_stats = staticmethod(FailedNotificationMethods.get_stats)
+TranslationCache.get_by_hash = staticmethod(TranslationCacheMethods.get_by_hash)
+TranslationCache.save = staticmethod(TranslationCacheMethods.save)
+TranslationCache.delete_by_hash = staticmethod(TranslationCacheMethods.delete_by_hash)
+TranslationCache.cleanup_old_entries = staticmethod(
+    TranslationCacheMethods.cleanup_old_entries
+)

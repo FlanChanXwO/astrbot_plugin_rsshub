@@ -1,61 +1,106 @@
 """RSSHub plugin config bridge for WebUI and commands."""
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from astrbot.api import AstrBotConfig
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
+from ..config import RsshubPluginConfig
 from .log_utils import logger
 
 DEFAULT_RSSHUB_BASE_URL = "https://rsshub.app"
 DEFAULT_LOCAL_IMPORTS_DIRNAME = "imports"
 
 
-@dataclass
 class PluginConfig:
-    """Runtime config with optional AstrBotConfig backing."""
+    """Runtime config wrapper with RsshubPluginConfig for type-safe access.
 
-    data_dir: Path
-    default_interval: int = 10
-    minimal_interval: int = 1
-    timeout: int = 30
-    proxy: str = ""
-    rsshub_base_url: str = DEFAULT_RSSHUB_BASE_URL
-    local_imports_dirname: str = DEFAULT_LOCAL_IMPORTS_DIRNAME
-    download_image_before_send: bool = True
-    video_transcode: bool = False
-    video_transcode_timeout: int = 120
-    ffmpeg: dict = None
-    failed_queue_capacity: int = 50
-    failed_queue_max_retries: int = 3
-    sender_strategies: dict = None
-    deduplicate_multi_bot: bool = True
-    bootstrap_skip_history: bool = True
-    debug_payload: bool = False
-    platform_shared_data: dict = None
-    db_file: str = "rsshub.db"
-    astrbot_config: AstrBotConfig | None = None
-    history_entry_limit: int = 10
+    This class provides backward compatibility with existing code while
+    enabling type-safe configuration access through RsshubPluginConfig.
 
-    def __post_init__(self):
-        if self.sender_strategies is None:
-            self.sender_strategies = {
-                "telegram": True,
-                "aiocqhttp": True,
-                "weixin_oc": True,
-            }
-        if self.platform_shared_data is None:
-            self.platform_shared_data = {"aiocqhttp": False}
-        if self.ffmpeg is None:
-            self.ffmpeg = {
-                "video_transcode": bool(self.video_transcode),
-                "video_transcode_timeout": int(self.video_transcode_timeout),
-                "gif_transcode": False,
-                "gif_transcode_timeout": 60,
-            }
+    Usage:
+        config = PluginConfig.load(
+            plugin_name="astrbot_plugin_rsshub", astrbot_config=...
+        )
+        # Type-safe access
+        print(config.rsshub_config.translation.auto_translate)
+        print(config.rsshub_config.ffmpeg.video_transcode)
+
+        # Backward compatibility (deprecated, migrate to rsshub_config)
+        print(config.default_interval)
+    """
+
+    def __init__(
+        self,
+        data_dir: Path,
+        astrbot_config: AstrBotConfig | None = None,
+    ):
+        self.data_dir = data_dir
+        self.astrbot_config = astrbot_config
+        self._rsshub_config: RsshubPluginConfig | None = None
+
+        # Backward compatibility attributes (deprecated)
+        if astrbot_config:
+            self.default_interval = int(astrbot_config.get("default_interval", 10))
+            self.minimal_interval = int(astrbot_config.get("minimal_interval", 1))
+            self.timeout = int(astrbot_config.get("timeout", 30))
+            self.proxy = str(astrbot_config.get("proxy", "") or "")
+            self.rsshub_base_url = str(
+                astrbot_config.get("rsshub_base_url", DEFAULT_RSSHUB_BASE_URL)
+                or DEFAULT_RSSHUB_BASE_URL
+            )
+            self.download_image_before_send = bool(
+                astrbot_config.get("download_image_before_send", True)
+            )
+            self.failed_queue_capacity = int(
+                astrbot_config.get("failed_queue_capacity", 50)
+            )
+            self.failed_queue_max_retries = int(
+                astrbot_config.get("failed_queue_max_retries", 3)
+            )
+            self.deduplicate_multi_bot = bool(
+                astrbot_config.get("deduplicate_multi_bot", True)
+            )
+            self.bootstrap_skip_history = bool(
+                astrbot_config.get("bootstrap_skip_history", True)
+            )
+            self.debug_payload = bool(astrbot_config.get("debug_payload", False))
+            self.history_entry_limit = int(
+                astrbot_config.get("history_entry_limit", 10)
+            )
+            self.db_file = str(astrbot_config.get("db_file", "rsshub.db"))
+        else:
+            # Defaults
+            self.default_interval = 10
+            self.minimal_interval = 1
+            self.timeout = 30
+            self.proxy = ""
+            self.rsshub_base_url = DEFAULT_RSSHUB_BASE_URL
+            self.download_image_before_send = True
+            self.failed_queue_capacity = 50
+            self.failed_queue_max_retries = 3
+            self.deduplicate_multi_bot = True
+            self.bootstrap_skip_history = True
+            self.debug_payload = False
+            self.history_entry_limit = 10
+            self.db_file = "rsshub.db"
+
+        self.local_imports_dirname = DEFAULT_LOCAL_IMPORTS_DIRNAME
+
+    @property
+    def rsshub_config(self) -> RsshubPluginConfig:
+        """Get the type-safe configuration object.
+
+        This is the recommended way to access configuration.
+
+        Returns:
+            RsshubPluginConfig instance
+        """
+        if self._rsshub_config is None:
+            config_dict = dict(self.astrbot_config) if self.astrbot_config else None
+            self._rsshub_config = RsshubPluginConfig.from_astrbot_config(config_dict)
+        return self._rsshub_config
 
     @classmethod
     def load(
@@ -70,170 +115,58 @@ class PluginConfig:
 
         config = cls(data_dir=data_dir, astrbot_config=astrbot_config)
 
-        if astrbot_config is not None:
-            config.default_interval = int(astrbot_config.get("default_interval", 10))
-            config.minimal_interval = int(astrbot_config.get("minimal_interval", 1))
-            config.timeout = int(astrbot_config.get("timeout", 30))
-            config.proxy = str(astrbot_config.get("proxy", "") or "")
-            config.rsshub_base_url = str(
-                astrbot_config.get("rsshub_base_url", DEFAULT_RSSHUB_BASE_URL)
-                or DEFAULT_RSSHUB_BASE_URL
-            )
-            config.download_image_before_send = bool(
-                astrbot_config.get("download_image_before_send", True)
-            )
-            # Load video transcode settings (global, for all platforms)
-            raw_ffmpeg = astrbot_config.get("ffmpeg", {})
-            if not isinstance(raw_ffmpeg, dict):
-                raw_ffmpeg = {}
-            config.video_transcode = bool(raw_ffmpeg.get("video_transcode", False))
-            config.video_transcode_timeout = int(
-                raw_ffmpeg.get("video_transcode_timeout", 120)
-            )
-            config.ffmpeg = {
-                "video_transcode": bool(config.video_transcode),
-                "video_transcode_timeout": int(config.video_transcode_timeout),
-            }
-            config.failed_queue_capacity = int(
-                astrbot_config.get("failed_queue_capacity", 50)
-            )
-            config.failed_queue_max_retries = int(
-                astrbot_config.get("failed_queue_max_retries", 3)
-            )
-            # Load sender strategies with defaults
-            raw_strategies = astrbot_config.get("sender_strategies", {})
-            config.sender_strategies = {
-                "telegram": bool(raw_strategies.get("telegram", True)),
-                "aiocqhttp": bool(raw_strategies.get("aiocqhttp", True)),
-                "weixin_oc": bool(raw_strategies.get("weixin_oc", True)),
-            }
-            # Load multi-bot deduplication
-            config.deduplicate_multi_bot = bool(
-                astrbot_config.get("deduplicate_multi_bot", True)
-            )
-            config.bootstrap_skip_history = bool(
-                astrbot_config.get("bootstrap_skip_history", True)
-            )
-            config.debug_payload = bool(astrbot_config.get("debug_payload", False))
-            # Load platform shared data
-            raw_shared = astrbot_config.get("platform_shared_data", {})
-            config.platform_shared_data = {
-                "aiocqhttp": bool(raw_shared.get("aiocqhttp", False)),
-            }
-            # Load history entry limit (0-100, default 10)
-            history_limit = int(astrbot_config.get("history_entry_limit", 10))
-            config.history_entry_limit = max(0, min(100, history_limit))
-            # Load ffmpeg gif transcode settings
-            raw_ffmpeg = astrbot_config.get("ffmpeg", {})
-            if isinstance(raw_ffmpeg, dict):
-                config.ffmpeg["gif_transcode"] = bool(raw_ffmpeg.get("gif_transcode", False))
-                gif_timeout = int(raw_ffmpeg.get("gif_transcode_timeout", 60))
-                config.ffmpeg["gif_transcode_timeout"] = max(10, min(300, gif_timeout))
-            return config
-
-        legacy_path = data_dir / "config.json"
-        if legacy_path.exists():
-            try:
-                data = json.loads(legacy_path.read_text(encoding="utf-8"))
-                config.default_interval = int(data.get("default_interval", 10))
-                config.minimal_interval = int(data.get("minimal_interval", 1))
-                config.timeout = int(data.get("timeout", 30))
-                config.proxy = str(data.get("proxy", "") or "")
-                config.rsshub_base_url = str(
-                    data.get("rsshub_base_url", DEFAULT_RSSHUB_BASE_URL)
-                    or DEFAULT_RSSHUB_BASE_URL
-                )
-                config.download_image_before_send = bool(
-                    data.get("download_image_before_send", True)
-                )
-                # Load video transcode settings (global, for all platforms)
-                raw_ffmpeg = data.get("ffmpeg", {})
-                if not isinstance(raw_ffmpeg, dict):
-                    raw_ffmpeg = {}
-                config.video_transcode = bool(raw_ffmpeg.get("video_transcode", False))
-                config.video_transcode_timeout = int(
-                    raw_ffmpeg.get("video_transcode_timeout", 120)
-                )
-                config.ffmpeg = {
-                    "video_transcode": bool(config.video_transcode),
-                    "video_transcode_timeout": int(config.video_transcode_timeout),
-                }
-                config.failed_queue_capacity = int(
-                    data.get("failed_queue_capacity", 50)
-                )
-                config.failed_queue_max_retries = int(
-                    data.get("failed_queue_max_retries", 3)
-                )
-                # Load sender strategies with defaults
-                raw_strategies = data.get("sender_strategies", {})
-                config.sender_strategies = {
-                    "telegram": bool(raw_strategies.get("telegram", True)),
-                    "aiocqhttp": bool(raw_strategies.get("aiocqhttp", True)),
-                    "weixin_oc": bool(raw_strategies.get("weixin_oc", True)),
-                }
-                # Load multi-bot deduplication
-                config.deduplicate_multi_bot = bool(
-                    data.get("deduplicate_multi_bot", True)
-                )
-                config.bootstrap_skip_history = bool(
-                    data.get("bootstrap_skip_history", True)
-                )
-                config.debug_payload = bool(data.get("debug_payload", False))
-                # Load platform shared data
-                raw_shared = data.get("platform_shared_data", {})
-                config.platform_shared_data = {
-                    "aiocqhttp": bool(raw_shared.get("aiocqhttp", False)),
-                }
-                # Load history entry limit (0-100, default 10)
-                history_limit = int(data.get("history_entry_limit", 10))
-                config.history_entry_limit = max(0, min(100, history_limit))
-                # Load ffmpeg gif transcode settings
-                raw_ffmpeg = data.get("ffmpeg", {})
-                if isinstance(raw_ffmpeg, dict):
-                    config.ffmpeg["gif_transcode"] = bool(raw_ffmpeg.get("gif_transcode", False))
-                    gif_timeout = int(raw_ffmpeg.get("gif_transcode_timeout", 60))
-                    config.ffmpeg["gif_transcode_timeout"] = max(10, min(300, gif_timeout))
-                logger.info(f"Loaded legacy config from {legacy_path}")
-            except Exception as ex:
-                logger.warning(f"Failed to load legacy config file: {ex}")
+        # Try to load legacy config file for backward compatibility
+        if astrbot_config is None:
+            legacy_path = data_dir / "config.json"
+            if legacy_path.exists():
+                try:
+                    data = json.loads(legacy_path.read_text(encoding="utf-8"))
+                    config.default_interval = int(data.get("default_interval", 10))
+                    config.minimal_interval = int(data.get("minimal_interval", 1))
+                    config.timeout = int(data.get("timeout", 30))
+                    config.proxy = str(data.get("proxy", "") or "")
+                    config.rsshub_base_url = str(
+                        data.get("rsshub_base_url", DEFAULT_RSSHUB_BASE_URL)
+                        or DEFAULT_RSSHUB_BASE_URL
+                    )
+                    config.download_image_before_send = bool(
+                        data.get("download_image_before_send", True)
+                    )
+                    config.failed_queue_capacity = int(
+                        data.get("failed_queue_capacity", 50)
+                    )
+                    config.failed_queue_max_retries = int(
+                        data.get("failed_queue_max_retries", 3)
+                    )
+                    config.deduplicate_multi_bot = bool(
+                        data.get("deduplicate_multi_bot", True)
+                    )
+                    config.bootstrap_skip_history = bool(
+                        data.get("bootstrap_skip_history", True)
+                    )
+                    config.debug_payload = bool(data.get("debug_payload", False))
+                    config.history_entry_limit = int(
+                        data.get("history_entry_limit", 10)
+                    )
+                    logger.info(f"Loaded legacy config from {legacy_path}")
+                except Exception as ex:
+                    logger.warning(f"Failed to load legacy config file: {ex}")
 
         return config
 
     def save(self) -> None:
-        """Persist mutable fields to AstrBotConfig if available."""
+        """Persist configuration to AstrBotConfig if available."""
         if self.astrbot_config is None:
             return
 
-        self.astrbot_config["default_interval"] = int(self.default_interval)
-        self.astrbot_config["minimal_interval"] = int(self.minimal_interval)
-        self.astrbot_config["timeout"] = int(self.timeout)
-        self.astrbot_config["proxy"] = str(self.proxy)
-        self.astrbot_config["rsshub_base_url"] = str(self.rsshub_base_url)
-        self.astrbot_config["download_image_before_send"] = bool(
-            self.download_image_before_send
-        )
-        # Global video transcode settings
-        self.ffmpeg = {
-            "video_transcode": bool(self.video_transcode),
-            "video_transcode_timeout": int(self.video_transcode_timeout),
-        }
-        self.astrbot_config["ffmpeg"] = dict(self.ffmpeg)
-        self.astrbot_config["failed_queue_capacity"] = int(self.failed_queue_capacity)
-        self.astrbot_config["failed_queue_max_retries"] = int(
-            self.failed_queue_max_retries
-        )
-        self.astrbot_config["sender_strategies"] = dict(self.sender_strategies)
-        self.astrbot_config["deduplicate_multi_bot"] = bool(self.deduplicate_multi_bot)
-        self.astrbot_config["bootstrap_skip_history"] = bool(
-            self.bootstrap_skip_history
-        )
-        self.astrbot_config["debug_payload"] = bool(self.debug_payload)
-        self.astrbot_config["platform_shared_data"] = dict(self.platform_shared_data)
-        self.astrbot_config["history_entry_limit"] = int(self.history_entry_limit)
-        # Update ffmpeg config
-        self.ffmpeg["gif_transcode"] = bool(self.ffmpeg.get("gif_transcode", False))
-        self.ffmpeg["gif_transcode_timeout"] = int(self.ffmpeg.get("gif_transcode_timeout", 60))
-        self.astrbot_config["ffmpeg"] = dict(self.ffmpeg)
+        # Update AstrBotConfig from rsshub_config
+        config_dict = self.rsshub_config.to_dict()
+
+        # Copy to astrbot_config
+        for key, value in config_dict.items():
+            if key != "db_file":  # Don't save db_file to user config
+                self.astrbot_config[key] = value
+
         self.astrbot_config.save_config()
 
     @property
@@ -246,81 +179,25 @@ class PluginConfig:
         """Return sqlite db path under plugin data directory."""
         return str(self.data_dir / self.db_file)
 
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get a config value by key."""
-        # Handle sender_strategy_* keys
-        if key == "sender_strategy_telegram":
-            return self.sender_strategies.get("telegram", True)
-        if key == "sender_strategy_aiocqhttp":
-            return self.sender_strategies.get("aiocqhttp", True)
-        if key == "sender_strategy_weixin_oc":
-            return self.sender_strategies.get("weixin_oc", True)
-        # Handle platform_shared_data_* keys
-        if key == "platform_shared_data_aiocqhttp":
-            return self.platform_shared_data.get("aiocqhttp", False)
-        if key in {"ffmpeg_video_transcode", "video_transcode"}:
-            return bool(self.ffmpeg.get("video_transcode", False))
-        if key in {"ffmpeg_video_transcode_timeout", "video_transcode_timeout"}:
-            return int(self.ffmpeg.get("video_transcode_timeout", 120))
-        if key in {"ffmpeg_gif_transcode", "gif_transcode"}:
-            return bool(self.ffmpeg.get("gif_transcode", False))
-        if key in {"ffmpeg_gif_transcode_timeout", "gif_transcode_timeout"}:
-            return int(self.ffmpeg.get("gif_transcode_timeout", 60))
+    def get(self, key: str, default=None):
+        """Get a config value by key (backward compatibility).
+
+        Deprecated: Use rsshub_config instead.
+        """
+        logger.warning(
+            f"PluginConfig.get() is deprecated. Use config.rsshub_config.{key} instead."
+        )
         return getattr(self, key, default)
 
-    def set(self, key: str, value: Any) -> None:
-        """Set known config and persist when possible."""
-        # Handle sender_strategy_* keys
-        if key == "sender_strategy_telegram":
-            self.sender_strategies["telegram"] = bool(value)
-            self.save()
-            return
-        if key == "sender_strategy_aiocqhttp":
-            self.sender_strategies["aiocqhttp"] = bool(value)
-            self.save()
-            return
-        if key == "sender_strategy_weixin_oc":
-            self.sender_strategies["weixin_oc"] = bool(value)
-            self.save()
-            return
-        # Handle platform_shared_data_* keys
-        if key == "platform_shared_data_aiocqhttp":
-            self.platform_shared_data["aiocqhttp"] = bool(value)
-            self.save()
-            return
-        if key in {"ffmpeg_qq_official_video_transcode", "qq_official_video_transcode"}:
-            parsed = bool(value)
-            self.qq_official_video_transcode = parsed
-            self.ffmpeg["qq_official_video_transcode"] = parsed
-            self.save()
-            return
-        if key in {"ffmpeg_video_transcode", "video_transcode"}:
-            parsed = bool(value)
-            self.video_transcode = parsed
-            self.ffmpeg["video_transcode"] = parsed
-            self.save()
-            return
-        if key in {"ffmpeg_video_transcode_timeout", "video_transcode_timeout"}:
-            parsed = int(value)
-            self.video_transcode_timeout = max(10, min(600, parsed))
-            self.ffmpeg["video_transcode_timeout"] = self.video_transcode_timeout
-            self.save()
-            return
-        if key in {"ffmpeg_gif_transcode", "gif_transcode"}:
-            parsed = bool(value)
-            self.ffmpeg["gif_transcode"] = parsed
-            self.save()
-            return
-        if key in {"ffmpeg_gif_transcode_timeout", "gif_transcode_timeout"}:
-            parsed = int(value)
-            self.ffmpeg["gif_transcode_timeout"] = max(10, min(300, parsed))
-            self.save()
-            return
-        if key == "history_entry_limit":
-            parsed = int(value)
-            self.history_entry_limit = max(0, min(100, parsed))
-            self.save()
-            return
+    def set(self, key: str, value):
+        """Set a config value by key (backward compatibility).
+
+        Deprecated: Use rsshub_config instead.
+        """
+        logger.warning(
+            f"PluginConfig.set() is deprecated. "
+            f"Modify config.rsshub_config.{key} instead."
+        )
         if hasattr(self, key):
             setattr(self, key, value)
             self.save()

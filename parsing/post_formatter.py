@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
+from ..utils.log_utils import logger
 from .html_parser import (
     AudioContent,
     FileContent,
@@ -16,6 +18,9 @@ from .html_parser import (
     VideoContent,
     parse_html,
 )
+
+if TYPE_CHECKING:
+    from ..translation.translator import TranslationManager
 
 
 @dataclass
@@ -125,6 +130,9 @@ class PostFormatter:
         display_entry_tags: int = -1,
         style: int = 0,
         display_media: int = 0,
+        translate: int = -100,
+        translate_target_lang: str | None = None,
+        translation_manager: TranslationManager | None = None,
     ) -> tuple[str, bool, bool] | None:
         parsed = await parse_html(self.html, self.feed_link)
         content = self._strip_media_placeholders(parsed.html_tree.get_plain())
@@ -144,6 +152,70 @@ class PostFormatter:
 
         if send_mode == -1 and self.link:
             return self.link, False, True
+
+        # Handle translation
+        original_title = self.title
+        original_content = content
+
+        logger.debug(
+            "PostFormatter: Translation check - "
+            "translate=%s, has_manager=%s, manager_enabled=%s",
+            translate,
+            translation_manager is not None,
+            translation_manager.is_enabled if translation_manager else False,
+        )
+
+        if translate == 1 and translation_manager and translation_manager.is_enabled:
+            logger.debug(
+                "PostFormatter: Starting translation, target_lang=%s",
+                translate_target_lang or "default"
+            )
+            try:
+                tgt_lang = translate_target_lang or translation_manager.target_lang
+                (
+                    translated_title,
+                    translated_content,
+                ) = await translation_manager.translate_entry(
+                    self.title,
+                    content,
+                    tgt_lang,
+                )
+
+                # Format translated text
+                if translation_manager.translate_title and original_title:
+                    self.title = translation_manager.format_translated_text(
+                        original_title,
+                        translated_title,
+                        translation_failed=False,
+                    )
+
+                if translation_manager.translate_content and original_content:
+                    content = translation_manager.format_translated_text(
+                        original_content,
+                        translated_content,
+                        translation_failed=False,
+                    )
+
+                logger.debug(
+                    f"PostFormatter: Translation complete - "
+                    f"title_translated={self.title != original_title}, "
+                    f"content_translated={content != original_content}"
+                )
+
+            except Exception:
+                # Translation failed, mark but use original
+                if translation_manager.translate_title and original_title:
+                    self.title = translation_manager.format_translated_text(
+                        original_title,
+                        None,
+                        translation_failed=True,
+                    )
+                if translation_manager.translate_content and original_content:
+                    content = translation_manager.format_translated_text(
+                        original_content,
+                        None,
+                        translation_failed=True,
+                    )
 
         parts: list[str] = []
 

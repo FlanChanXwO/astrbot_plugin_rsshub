@@ -95,7 +95,8 @@ async def download_media_to_temp(
     ) as session:
         for candidate_url in _expand_download_candidates(url):
             logger.debug(
-                "Media download attempt: origin=%s, candidate=%s, timeout_seconds=%s, proxy_enabled=%s",
+                "Media download attempt: origin=%s, candidate=%s, "
+                "timeout_seconds=%s, proxy_enabled=%s",
                 url,
                 candidate_url,
                 timeout_seconds,
@@ -110,7 +111,8 @@ async def download_media_to_temp(
                 ) as resp:
                     if resp.history:
                         logger.debug(
-                            "Media redirect followed: origin=%s, candidate=%s, final=%s, hops=%s",
+                            "Media redirect followed: origin=%s, candidate=%s, "
+                            "final=%s, hops=%s",
                             url,
                             candidate_url,
                             str(resp.url),
@@ -118,7 +120,8 @@ async def download_media_to_temp(
                         )
                     if resp.status >= 400:
                         raise RuntimeError(
-                            f"download failed: status={resp.status}, url={candidate_url}"
+                            f"download failed: status={resp.status}, "
+                            f"url={candidate_url}"
                         )
                     data = await resp.read()
                     if not data:
@@ -147,7 +150,8 @@ async def download_media_to_temp(
             except Exception as ex:
                 last_err = ex
                 logger.warning(
-                    "Media download attempt failed: origin=%s, candidate=%s, err_type=%s, err=%r",
+                    "Media download attempt failed: origin=%s, candidate=%s, "
+                    "err_type=%s, err=%r",
                     url,
                     candidate_url,
                     type(ex).__name__,
@@ -301,8 +305,9 @@ async def _run_periodic_cache_gc() -> None:
 
 
 def _read_cache(url: str) -> Path | None:
-    # Try multiple suffixes to handle cases where file was written with different extension
-    # (e.g., GIF conversion where URL suggests .mp4 but file is .gif)
+    # Try multiple suffixes to handle cases where file was written
+    # with different extension (e.g., GIF conversion where URL
+    # suggests .mp4 but file is .gif)
     meta_path = _cache_meta_path(url)
     if not meta_path.exists():
         logger.debug(
@@ -365,7 +370,8 @@ def _write_cache(url: str, source: Path) -> Path:
     expire_ts = time.time() + _CACHE_TTL_SECONDS
     meta_path.write_text(str(expire_ts), encoding="utf-8")
     logger.debug(
-        "Media cache write: url=%s, source_suffix=%s, cache=%s, meta=%s, cache_exists=%s, meta_exists=%s, expire=%s",
+        "Media cache write: url=%s, source_suffix=%s, cache=%s, "
+        "meta=%s, cache_exists=%s, meta_exists=%s, expire=%s",
         url,
         actual_suffix,
         cache_path,
@@ -411,11 +417,14 @@ async def get_or_download_media_to_cache(
     async with _cache_io_lock:
         cached = _read_cache(cache_url)
         if cached is not None:
-            logger.debug("Media cache return existing: url=%s, path=%s", cache_url, cached)
+            logger.debug(
+                "Media cache return existing: url=%s, path=%s", cache_url, cached
+            )
             return cached
 
     logger.debug(
-        "Media cache download start: url=%s, timeout_seconds=%s, proxy_enabled=%s, try_convert_gif=%s",
+        "Media cache download start: url=%s, timeout_seconds=%s, "
+        "proxy_enabled=%s, try_convert_gif=%s",
         url,
         timeout_seconds,
         bool(proxy),
@@ -464,7 +473,9 @@ async def get_or_download_media_to_cache(
                         gif_path.stat().st_size,
                     )
                 else:
-                    logger.warning("GIF conversion failed, using original video: url=%s", url)
+                    logger.warning(
+                        "GIF conversion failed, using original video: url=%s", url
+                    )
         except Exception as ex:
             logger.warning(
                 "GIF conversion error, using original video: url=%s, err=%s",
@@ -484,7 +495,9 @@ async def get_or_download_media_to_cache(
                 )
                 return cached
             written = _write_cache(cache_url, converted_path)
-            logger.debug("Media cache return new write: url=%s, path=%s", cache_url, written)
+            logger.debug(
+                "Media cache return new write: url=%s, path=%s", cache_url, written
+            )
             return written
     finally:
         # Clean up temp file if it's different from the converted file

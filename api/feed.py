@@ -10,7 +10,7 @@ from typing import Final
 import aiohttp
 import feedparser
 
-from ..web.utils import WebError, WebFeed
+from ..web.models import WebError, WebFeed
 
 FEED_ACCEPT: Final = (
     "application/rss+xml, application/rdf+xml, application/atom+xml, "

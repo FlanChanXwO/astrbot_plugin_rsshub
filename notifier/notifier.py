@@ -9,6 +9,7 @@ from datetime import datetime
 
 from ..db import FailedNotification, Feed, Sub, User
 from ..parsing import get_formatter_for_platform, parse_entry
+from ..translation import TranslationManager
 from ..utils.log_utils import logger
 from ..utils.retry_helper import process_failed_notification
 from .senders import (
@@ -62,6 +63,7 @@ class Notifier:
         self.proxy = proxy or ""
         self.download_media_before_send = bool(download_media_before_send)
         self.config = config
+        self._translation_manager: TranslationManager | None = None
         self._stats = {
             "enqueue_failed_count": 0,
             "failed_drop_count": 0,
@@ -70,6 +72,24 @@ class Notifier:
             "failed_process_retry_count": 0,
             "failed_process_exhausted_count": 0,
         }
+
+    @property
+    def translation_manager(self) -> TranslationManager | None:
+        """Lazy initialization of translation manager."""
+        if self._translation_manager is None and self.config is not None:
+            # Get translation config from rsshub_config
+            trans_config = self.config.rsshub_config.translation
+            logger.debug(
+                f"Notifier: Creating TranslationManager with config: "
+                f"auto_translate={trans_config.auto_translate}, "
+                f"provider={trans_config.provider}"
+            )
+            self._translation_manager = TranslationManager(trans_config)
+            logger.debug(
+                "Notifier: TranslationManager created, enabled=%s",
+                self._translation_manager.is_enabled
+            )
+        return self._translation_manager
 
     @property
     def stats(self) -> dict[str, int]:
@@ -137,7 +157,8 @@ class Notifier:
                     if result.needs_rebind:
                         await self._mark_binding_needed(sub.user_id)
                     logger.warning(
-                        "错误通知发送失败: sub=%s, session=%s, rebind=%s, transient=%s, detail=%s",
+                        "错误通知发送失败：sub=%s, session=%s, rebind=%s, "
+                        "transient=%s, detail=%s",
                         sub.id,
                         session_id,
                         result.needs_rebind,
@@ -181,6 +202,22 @@ class Notifier:
         if effective["notify"] == 0:
             return
 
+        # Determine if translation should be applied
+        # translate=1: enable, 0: disable,
+        # -100: inherit from global auto_translate
+        translate_enabled = effective.get("translate", -100)
+        if translate_enabled == -100:
+            # Inherit from global auto_translate setting
+            translate_enabled = (
+                1 if self.config.rsshub_config.translation.auto_translate else 0
+            )
+
+        logger.debug(
+            f"Notifier._send_to_subscriber: translate_enabled={translate_enabled}, "
+            f"effective_translate={effective.get('translate')}, "
+            f"has_translation_manager={self.translation_manager is not None}"
+        )
+
         formatter_cls = get_formatter_for_platform(sender_platform_name)
         formatter = formatter_cls(
             html=entry_parsed.content or entry_parsed.summary,
@@ -205,6 +242,9 @@ class Notifier:
             display_entry_tags=effective["display_entry_tags"],
             style=effective["style"],
             display_media=effective["display_media"],
+            translate=translate_enabled,
+            translate_target_lang=effective.get("translate_target_lang"),
+            translation_manager=self.translation_manager,
         )
 
         if not formatted:
@@ -247,9 +287,15 @@ class Notifier:
                 ffmpeg_cfg = getattr(self.config, "ffmpeg", {})
                 if isinstance(ffmpeg_cfg, dict):
                     gif_transcode_enabled = bool(ffmpeg_cfg.get("gif_transcode", False))
-                    gif_transcode_timeout = int(ffmpeg_cfg.get("gif_transcode_timeout", 60))
-                    video_transcode_enabled = bool(ffmpeg_cfg.get("video_transcode", False))
-                    video_transcode_timeout = int(ffmpeg_cfg.get("video_transcode_timeout", 120))
+                    gif_transcode_timeout = int(
+                        ffmpeg_cfg.get("gif_transcode_timeout", 60)
+                    )
+                    video_transcode_enabled = bool(
+                        ffmpeg_cfg.get("video_transcode", False)
+                    )
+                    video_transcode_timeout = int(
+                        ffmpeg_cfg.get("video_transcode_timeout", 120)
+                    )
             logger.info(
                 "Configuring sender transcode: gif=%s/%ss, video=%s/%ss",
                 gif_transcode_enabled,
@@ -267,7 +313,8 @@ class Notifier:
             prepared_media = await MessageSender.prepare_media(media_items)
 
         logger.debug(
-            "Push strategy selected: platform=%s, sender=%s, has_media=%s, prepared_media=%s, session=%s",
+            "Push strategy selected: platform=%s, sender=%s, has_media=%s, "
+            "prepared_media=%s, session=%s",
             sender_platform_name or sub.platform_name,
             sender.__name__,
             bool(media_items),
@@ -289,7 +336,9 @@ class Notifier:
                 gif_transcode_enabled = bool(ffmpeg_cfg.get("gif_transcode", False))
                 gif_transcode_timeout = int(ffmpeg_cfg.get("gif_transcode_timeout", 60))
                 video_transcode_enabled = bool(ffmpeg_cfg.get("video_transcode", False))
-                video_transcode_timeout = int(ffmpeg_cfg.get("video_transcode_timeout", 120))
+                video_transcode_timeout = int(
+                    ffmpeg_cfg.get("video_transcode_timeout", 120)
+                )
         sender.configure_behavior(
             download_media_before_send=(should_pre_download and prepared_media is None),
             gif_transcode_enabled=gif_transcode_enabled,
@@ -384,7 +433,8 @@ class Notifier:
             # Skip if queue is disabled (capacity <= 0)
             if max_capacity <= 0:
                 logger.debug(
-                    "Failed notification queue disabled (capacity=%s), dropping message",
+                    "Failed notification queue disabled (capacity=%s), "
+                    "dropping message",
                     max_capacity,
                 )
                 self._stats["failed_drop_count"] += 1

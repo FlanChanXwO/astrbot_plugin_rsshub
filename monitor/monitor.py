@@ -163,7 +163,8 @@ class RSSMonitor:
                         # Check if exhausted after retry increment
                         if notif.retry_count + 1 >= max_retries:
                             logger.warning(
-                                "Failed notification exhausted retries: notif=%s, sub=%s",
+                                "Failed notification exhausted retries: "
+                                "notif=%s, sub=%s",
                                 notif.id,
                                 notif.sub_id,
                             )
@@ -383,14 +384,16 @@ class RSSMonitor:
                         if self._config_value("bootstrap_skip_history", True):
                             self._stat.not_updated()
                             logger.info(
-                                "Feed首次初始化完成（不推送历史内容）: %s, fetched_entries=%s, bootstrap_skipped_count=%s",
+                                "Feed 首次初始化完成（不推送历史内容）: "
+                                "%s, fetched_entries=%s, bootstrap_skipped_count=%s",
                                 feed.link,
                                 fetched_entries,
                                 fetched_entries,
                             )
                         else:
                             logger.info(
-                                "Feed首次初始化推送历史内容: %s, fetched_entries=%s, bootstrap_sent_count=%s",
+                                "Feed 首次初始化推送历史内容："
+                                "%s, fetched_entries=%s, bootstrap_sent_count=%s",
                                 feed.link,
                                 fetched_entries,
                                 dedup_new_count,
@@ -490,7 +493,8 @@ class RSSMonitor:
         deduplicated = list(session_subs.values()) + no_session_subs
         if len(deduplicated) < len(subs):
             logger.debug(
-                "Multi-bot deduplication: %d subscriptions -> %d unique sessions (%d without target)",
+                "Multi-bot deduplication: %d subscriptions -> %d unique sessions "
+                "(%d without target)",
                 len(subs),
                 len(session_subs),
                 len(no_session_subs),
@@ -513,6 +517,7 @@ class RSSMonitor:
                     try:
                         # Convert to timestamp for comparison
                         from calendar import timegm
+
                         return timegm(parsed)
                     except Exception:
                         pass
@@ -566,7 +571,11 @@ class RSSMonitor:
         notifier: Notifier,
     ) -> None:
         logger.info(
-            "Feed轮询统计: feed=%s, fetched_entries=%s, dedup_new_count=%s, dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, failed_process_success_count=%s, failed_process_retry_count=%s, failed_process_exhausted_count=%s",
+            "Feed 轮询统计：feed=%s, fetched_entries=%s, dedup_new_count=%s, "
+            "dedup_skipped_count=%s, fanout_sub_count=%s, dedup_before_sub_count=%s, "
+            "enqueue_failed_count=%s, failed_drop_count=%s, failed_process_count=%s, "
+            "failed_process_success_count=%s, failed_process_retry_count=%s, "
+            "failed_process_exhausted_count=%s",
             feed.link,
             fetched_entries,
             dedup_new_count,
@@ -735,12 +744,14 @@ class RSSMonitor:
         """计算哪些条目是新的。
 
         Args:
-            old_entry_groups: 已有的按 entry 分组的指纹，每个子列表是一条 entry 的完整指纹集。
+            old_entry_groups: 已有的按 entry 分组的指纹，
+                每个子列表是一条 entry 的完整指纹集。
             entries: feedparser 解析出的条目列表。
             feed_link: feed 链接，用于解析相对 URL。
 
         Returns:
-            (new_entry_groups, updated_entries) — 新的按 entry 分组的指纹列表，以及需要推送的新条目。
+            (new_entry_groups, updated_entries) —
+            新的按 entry 分组的指纹列表，以及需要推送的新条目。
         """
         old_flat = {h for group in old_entry_groups for h in group if h}
         known_hashes = set(old_flat)

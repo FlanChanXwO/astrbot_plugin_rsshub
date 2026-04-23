@@ -43,7 +43,8 @@ class AiocqhttpMessageSender(MessageSender):
             context: 通知上下文，包含频道元信息和运行时信息
         """
         logger.debug(
-            "Aiocqhttp sender strategy: merged-forward nodes (local-preferred), session=%s, has_media=%s, prepared_media=%s",
+            "Aiocqhttp sender strategy: merged-forward nodes (local-preferred), "
+            "session=%s, has_media=%s, prepared_media=%s",
             session_id,
             bool(media),
             bool(prepared_media),
@@ -59,7 +60,8 @@ class AiocqhttpMessageSender(MessageSender):
                 for item in effective_prepared:
                     source = "local_path" if item.local_path is not None else "url"
                     logger.debug(
-                        "Aiocqhttp media resolved: type=%s, source=%s, session=%s, failed=%s",
+                        "Aiocqhttp media resolved: type=%s, source=%s, "
+                        "session=%s, failed=%s",
                         item.media_type,
                         source,
                         session_id,
@@ -92,7 +94,8 @@ class AiocqhttpMessageSender(MessageSender):
                 return SendResult(ok=False, detail="empty_message")
 
             logger.info(
-                "Aiocqhttp sender node summary: session=%s, header=1, images=%s, tail=%s, total_nodes=%s",
+                "Aiocqhttp sender node summary: session=%s, header=1, "
+                "images=%s, tail=%s, total_nodes=%s",
                 session_id,
                 len(image_components),
                 len(tail_components),
@@ -119,7 +122,8 @@ class AiocqhttpMessageSender(MessageSender):
                 nickname = "RSSHub"
 
             logger.warning(
-                "Aiocqhttp falling back to text-only merged nodes: session=%s, prev_err=%s",
+                "Aiocqhttp falling back to text-only merged nodes: "
+                "session=%s, prev_err=%s",
                 session_id,
                 err_text,
             )

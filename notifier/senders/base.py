@@ -130,7 +130,8 @@ class MessageSender:
                 if try_convert_gif and local_path.suffix.lower() == ".gif":
                     actual_media_type = "image"
                     logger.info(
-                        "Media type changed to image after GIF conversion: url=%s, path=%s, size=%s",
+                        "Media type changed to image after GIF conversion: "
+                        "url=%s, path=%s, size=%s",
                         media_url,
                         local_path,
                         local_path.stat().st_size,
@@ -185,7 +186,8 @@ class MessageSender:
             # Cache file may be pruned externally; refresh just-in-time to avoid ENOENT.
             if local_path is not None and not local_path.exists():
                 logger.warning(
-                    "Cached media missing before send, re-download: type=%s, url=%s, path=%s",
+                    "Cached media missing before send, re-download: "
+                    "type=%s, url=%s, path=%s",
                     media_type,
                     media_url,
                     local_path,
@@ -210,7 +212,8 @@ class MessageSender:
             local_file_uri = local_path.resolve().as_uri() if local_path else ""
             if local_path is not None:
                 logger.debug(
-                    "Prepared local media path: type=%s, url=%s, resolved=%s, exists=%s",
+                    "Prepared local media path: type=%s, url=%s, "
+                    "resolved=%s, exists=%s",
                     media_type,
                     media_url,
                     local_file_path,
@@ -222,7 +225,9 @@ class MessageSender:
             if media_type == "image":
                 if image_count >= 9:
                     logger.warning(
-                        "Image skipped due to limit: url=%s, count=%s", media_url, image_count
+                        "Image skipped due to limit: url=%s, count=%s",
+                        media_url,
+                        image_count,
                     )
                     continue
                 file_size = local_path.stat().st_size if local_path else 0
@@ -233,7 +238,11 @@ class MessageSender:
                     file_size,
                 )
                 # Warn if GIF file is too large (may fail on some platforms)
-                if local_path and local_path.suffix.lower() == ".gif" and file_size > 5 * 1024 * 1024:
+                if (
+                    local_path
+                    and local_path.suffix.lower() == ".gif"
+                    and file_size > 5 * 1024 * 1024
+                ):
                     logger.warning(
                         "Large GIF file may fail to send: url=%s, size=%.1fMB",
                         media_url,
@@ -242,7 +251,9 @@ class MessageSender:
                 # Prefer local file for adapters that call Image.convert_to_base64(),
                 # because that method prioritizes url over file when both are set.
                 image_url_value = "" if local_path else media_url
-                image_components.append(Image(file=media_file_value, url=image_url_value))
+                image_components.append(
+                    Image(file=media_file_value, url=image_url_value)
+                )
                 image_count += 1
             elif media_type == "video":
                 # 视频放在消息上方（与图片一致）
@@ -262,7 +273,8 @@ class MessageSender:
                         if transcoded_path and transcoded_path.exists():
                             media_file_value = transcoded_path.resolve().as_uri()
                             logger.info(
-                                "Video transcoded successfully: url=%s, transcoded=%s, size=%s",
+                                "Video transcoded successfully: "
+                                "url=%s, transcoded=%s, size=%s",
                                 media_url,
                                 transcoded_path,
                                 transcoded_path.stat().st_size,
@@ -278,7 +290,7 @@ class MessageSender:
                             media_url,
                             ex,
                         )
-                
+
                 logger.debug(
                     "Adding video component: url=%s, file=%s",
                     media_url,
@@ -356,7 +368,8 @@ class MessageSender:
                 exists = Path(resolved).exists()
             except Exception as ex:
                 logger.warning(
-                    "Sender media normalize failed: session=%s, component=%s, file=%s, err=%s",
+                    "Sender media normalize failed: session=%s, component=%s, "
+                    "file=%s, err=%s",
                     session_id,
                     type(component).__name__,
                     file_value,
@@ -366,7 +379,8 @@ class MessageSender:
             if resolved != file_value:
                 setattr(component, "file", resolved)
             logger.debug(
-                "Sender media normalized: session=%s, component=%s, original=%s, normalized=%s, exists=%s",
+                "Sender media normalized: session=%s, component=%s, "
+                "original=%s, normalized=%s, exists=%s",
                 session_id,
                 type(component).__name__,
                 file_value,
@@ -401,11 +415,11 @@ class MessageSender:
         normalized_chain = cls._normalize_chain_media_files(chain, session_id)
         if normalized_chain is None:
             normalized_chain = []
-        
+
         # Log chain components for debugging
         for idx, component in enumerate(normalized_chain):
             comp_type = type(component).__name__
-            file_val = getattr(component, 'file', None)
+            file_val = getattr(component, "file", None)
             if file_val:
                 logger.debug(
                     "Chain component %s: type=%s, file=%s",
@@ -413,9 +427,10 @@ class MessageSender:
                     comp_type,
                     file_val[:100] if len(str(file_val)) > 100 else file_val,
                 )
-        
+
         message_chain = MessageChain(chain=normalized_chain)
         import time
+
         start_time = time.time()
         try:
             sent = await StarTools.send_message(session_id, message_chain)
@@ -429,12 +444,15 @@ class MessageSender:
                 )
             else:
                 logger.warning(
-                    "Message send returned False: session=%s, chain_length=%s, elapsed=%.2fs",
+                    "Message send returned False: session=%s, chain_length=%s, "
+                    "elapsed=%.2fs",
                     session_id,
                     len(normalized_chain),
                     elapsed,
                 )
-                return SendResult(ok=False, needs_rebind=True, detail="platform_or_session")
+                return SendResult(
+                    ok=False, needs_rebind=True, detail="platform_or_session"
+                )
             return SendResult(ok=True)
         except Exception as ex:
             logger.error(
@@ -456,7 +474,8 @@ class MessageSender:
     ) -> SendResult:
         try:
             logger.debug(
-                "Default sender path: session=%s, media=%s, prepared_media=%s, context=%s",
+                "Default sender path: session=%s, media=%s, "
+                "prepared_media=%s, context=%s",
                 session_id,
                 bool(media),
                 bool(prepared_media),
@@ -479,14 +498,16 @@ class MessageSender:
 
             if image_components or tail_components:
                 logger.info(
-                    "Default sender building chain: session=%s, images=%s, tail=%s, failed=%s",
+                    "Default sender building chain: session=%s, images=%s, "
+                    "tail=%s, failed=%s",
                     session_id,
                     len(image_components),
                     len(tail_components),
                     failed_media_urls,
                 )
                 logger.debug(
-                    "Default sender trying single-chain: session=%s, images=%s, tail=%s",
+                    "Default sender trying single-chain: session=%s, "
+                    "images=%s, tail=%s",
                     session_id,
                     len(image_components),
                     len(tail_components),
@@ -504,7 +525,8 @@ class MessageSender:
                     return single_chain_result
 
                 logger.warning(
-                    "Single-chain send failed, fallback split send: session=%s, detail=%s",
+                    "Single-chain send failed, fallback split send: "
+                    "session=%s, detail=%s",
                     session_id,
                     single_chain_result.detail,
                 )
@@ -523,7 +545,8 @@ class MessageSender:
         except Exception as err:
             if media:
                 logger.warning(
-                    "Media push failed, fallback to plain text: session=%s, error=%s, media_urls=%s",
+                    "Media push failed, fallback to plain text: "
+                    "session=%s, error=%s, media_urls=%s",
                     session_id,
                     err,
                     cls._format_media_urls(media),

@@ -21,6 +21,7 @@ class FailedQueueStats(TypedDict):
     pending: int
     exhausted: int
 
+
 _plugin_registry = registry()
 
 
@@ -720,7 +721,8 @@ class MonitorScheduleMethods:
             return row
 
     @classmethod
-    async def upsert(cls,
+    async def upsert(
+        cls,
         sub_id: int,
         *,
         next_check_time: datetime | None,
@@ -750,7 +752,8 @@ class FailedNotificationMethods:
     """FailedNotification helper methods for retry queue management."""
 
     @classmethod
-    async def enqueue(cls,
+    async def enqueue(
+        cls,
         sub_id: int,
         user_id: str,
         content: str,
@@ -984,7 +987,8 @@ class TranslationCacheMethods:
             return result.scalar_one_or_none()
 
     @classmethod
-    async def save(cls,
+    async def save(
+        cls,
         hash: str,
         provider: str,
         target_lang: str,

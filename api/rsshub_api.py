@@ -323,7 +323,7 @@ class RSSHubRadarAPI:
 
     @staticmethod
     def _collect_params(
-            raw_params: Any,
+        raw_params: Any,
         required_params: set[str],
         optional_params: set[str],
         param_details: dict[str, dict[str, Any]],

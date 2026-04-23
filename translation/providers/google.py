@@ -68,7 +68,7 @@ class GoogleTranslator(BaseTranslator):
             f"target_lang={target_lang}, source_lang={source_lang}, "
             f"has_session={self._session is not None}"
         )
-        
+
         if not text or not text.strip():
             logger.debug("GoogleTranslator: 空文本，直接返回")
             return text
@@ -110,11 +110,11 @@ class GoogleTranslator(BaseTranslator):
         params: dict,
     ) -> str | None:
         """Perform the actual translation request.
-        
+
         Args:
             session: aiohttp ClientSession to use
             params: API parameters
-            
+
         Returns:
             Translated text or None if failed
         """
@@ -123,7 +123,7 @@ class GoogleTranslator(BaseTranslator):
             f"GoogleTranslator._do_translate: session type={type(session)}, "
             f"has_proxy={hasattr(session, '_proxy') and session._proxy is not None}"
         )
-        
+
         async with session.get(
             self.API_URL,
             params=params,
@@ -183,11 +183,11 @@ class GoogleTranslator(BaseTranslator):
         params: dict,
     ) -> str | None:
         """Perform the actual language detection request.
-        
+
         Args:
             session: aiohttp ClientSession to use
             params: API parameters
-            
+
         Returns:
             Detected language code or None if failed
         """

@@ -119,11 +119,13 @@ class BaiduTranslator(BaseTranslator):
 
             # Use external session if available, otherwise create temporary one
             if self._session is None:
-                logger.warning("BaiduTranslator: No session available, creating temporary session WITHOUT proxy")
+                logger.warning(
+                    "BaiduTranslator: No session available, creating temporary session WITHOUT proxy"
+                )
                 async with aiohttp.ClientSession() as temp_session:
                     return await self._do_translate(temp_session, params)
             else:
-                logger.debug(f"BaiduTranslator: Using provided session for translation")
+                logger.debug("BaiduTranslator: Using provided session for translation")
                 return await self._do_translate(self._session, params)
 
         except Exception as e:
@@ -136,11 +138,11 @@ class BaiduTranslator(BaseTranslator):
         params: dict,
     ) -> str | None:
         """Perform the actual translation request.
-        
+
         Args:
             session: aiohttp ClientSession to use
             params: API parameters
-            
+
         Returns:
             Translated text or None if failed
         """
@@ -210,11 +212,11 @@ class BaiduTranslator(BaseTranslator):
         params: dict,
     ) -> str | None:
         """Perform the actual language detection request.
-        
+
         Args:
             session: aiohttp ClientSession to use
             params: API parameters
-            
+
         Returns:
             Detected language code or None
         """

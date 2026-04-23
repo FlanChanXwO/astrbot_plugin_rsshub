@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from io import BytesIO
 from ssl import SSLError
 from typing import Final
@@ -53,10 +52,10 @@ async def feed_get(
         _headers.update(headers)
     if "Accept" not in _headers:
         _headers["Accept"] = FEED_ACCEPT
-    
+
     # 如果有 proxy，创建临时 session（不使用共享 session）
     use_shared_session = not proxy and session is None
-    
+
     try:
         if use_shared_session:
             client = await _get_shared_session()
@@ -68,7 +67,7 @@ async def feed_get(
             # 创建带 proxy 的临时 session
             temp_session = aiohttp.ClientSession(proxy=proxy if proxy else None)
             client = temp_session
-        
+
         async with client.get(
             url,
             headers=_headers,

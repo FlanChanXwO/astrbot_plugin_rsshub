@@ -94,8 +94,10 @@ class Notifier:
             else:
                 self._translation_session = aiohttp.ClientSession()
                 logger.warning("Notifier: 创建不带代理的翻译 session (proxy 为空)")
-            
-            self._translation_manager = TranslationManager(trans_config, self._translation_session)
+
+            self._translation_manager = TranslationManager(
+                trans_config, self._translation_session
+            )
             logger.info(
                 f"Notifier: 翻译管理器创建完成，enabled={self._translation_manager.is_enabled}, "
                 f"session={self._translation_session is not None}"
@@ -227,9 +229,7 @@ class Notifier:
         translate_enabled = effective.get("translate", -100)
         if translate_enabled == -100:
             # Inherit from global auto_translate setting
-            translate_enabled = (
-                1 if self.config.translation.auto_translate else 0
-            )
+            translate_enabled = 1 if self.config.translation.auto_translate else 0
 
         logger.debug(
             f"Notifier._send_to_subscriber: translate_enabled={translate_enabled}, "
@@ -298,10 +298,18 @@ class Notifier:
                 proxy=self.proxy,
             )
             # Configure transcode settings from config
-            gif_transcode_enabled = self.config.ffmpeg.gif_transcode if self.config else False
-            gif_transcode_timeout = self.config.ffmpeg.gif_transcode_timeout if self.config else 60
-            video_transcode_enabled = self.config.ffmpeg.video_transcode if self.config else False
-            video_transcode_timeout = self.config.ffmpeg.video_transcode_timeout if self.config else 120
+            gif_transcode_enabled = (
+                self.config.ffmpeg.gif_transcode if self.config else False
+            )
+            gif_transcode_timeout = (
+                self.config.ffmpeg.gif_transcode_timeout if self.config else 60
+            )
+            video_transcode_enabled = (
+                self.config.ffmpeg.video_transcode if self.config else False
+            )
+            video_transcode_timeout = (
+                self.config.ffmpeg.video_transcode_timeout if self.config else 120
+            )
             logger.info(
                 "Configuring sender transcode: gif=%s/%ss, video=%s/%ss",
                 gif_transcode_enabled,
@@ -332,10 +340,18 @@ class Notifier:
             proxy=self.proxy,
         )
         # Configure sender with transcode settings
-        gif_transcode_enabled = self.config.ffmpeg.gif_transcode if self.config else False
-        gif_transcode_timeout = self.config.ffmpeg.gif_transcode_timeout if self.config else 60
-        video_transcode_enabled = self.config.ffmpeg.video_transcode if self.config else False
-        video_transcode_timeout = self.config.ffmpeg.video_transcode_timeout if self.config else 120
+        gif_transcode_enabled = (
+            self.config.ffmpeg.gif_transcode if self.config else False
+        )
+        gif_transcode_timeout = (
+            self.config.ffmpeg.gif_transcode_timeout if self.config else 60
+        )
+        video_transcode_enabled = (
+            self.config.ffmpeg.video_transcode if self.config else False
+        )
+        video_transcode_timeout = (
+            self.config.ffmpeg.video_transcode_timeout if self.config else 120
+        )
         sender.configure_behavior(
             download_media_before_send=(should_pre_download and prepared_media is None),
             gif_transcode_enabled=gif_transcode_enabled,

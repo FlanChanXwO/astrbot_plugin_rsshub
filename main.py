@@ -235,7 +235,7 @@ class RSSHubPlugin(Star):
         target: str,
     ) -> tuple[str | None, str | None]:
         """解析命令目标参数，返回 (session, error)。
-        
+
         支持的参数：
         - 空/不传：使用当前会话
         - current/here/this：显式使用当前会话
@@ -493,8 +493,7 @@ class RSSHubPlugin(Star):
                 )
 
         raise RuntimeError(
-            f"未找到平台 {platform_id} 的适配器实例，"
-            "请检查平台配置是否正确"
+            f"未找到平台 {platform_id} 的适配器实例，请检查平台配置是否正确"
         )
 
     async def initialize(self):

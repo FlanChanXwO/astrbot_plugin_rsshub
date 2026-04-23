@@ -163,6 +163,105 @@
       }
     }
   },
+  "translation": {
+    "type": "object",
+    "description": "RSS 内容翻译配置",
+    "hint": "支持自动或手动翻译 RSS 条目内容",
+    "default": {
+      "provider": "google",
+      "target_lang": "zh-CN",
+      "auto_translate": false,
+      "force_translate": false,
+      "translate_title": true,
+      "translate_content": true,
+      "display_orignal_content": false,
+      "cache_translations": true
+    },
+    "items": {
+      "provider": {
+        "type": "string",
+        "description": "翻译服务提供商",
+        "hint": "支持: google(免费)、baidu",
+        "default": "google",
+        "options": [
+          "google",
+          "baidu"
+        ]
+      },
+      "target_lang": {
+        "type": "string",
+        "description": "目标语言代码",
+        "hint": "zh-CN(简体中文)、zh-TW(繁体中文)、en(英文)、ja(日文)",
+        "default": "zh-CN",
+        "options": [
+          "zh-CN",
+          "zh-TW",
+          "en",
+          "ja"
+        ]
+      },
+      "auto_translate": {
+        "type": "bool",
+        "description": "自动翻译条目",
+        "hint": "开启后，RSS 推送时将自动翻译内容",
+        "default": false
+      },
+      "force_translate": {
+        "type": "bool",
+        "description": "强制翻译",
+        "hint": "开启后，无论该语言是不是目标语言都会进行翻译；未开启时，会进行语言检测避免无意义翻译",
+        "default": false
+      },
+      "translate_title": {
+        "type": "bool",
+        "description": "翻译标题",
+        "hint": "是否自动翻译条目标题",
+        "default": true
+      },
+      "translate_content": {
+        "type": "bool",
+        "description": "翻译正文",
+        "hint": "是否自动翻译正文内容",
+        "default": true
+      },
+      "display_orignal_content": {
+        "type": "bool",
+        "description": "是否显示原文",
+        "hint": "是否显示翻译前的原文，显示方式：原文 + 换行 + 分隔线 + 译文",
+        "default": false
+      },
+      "cache_translations": {
+        "type": "bool",
+        "description": "缓存翻译结果",
+        "hint": "开启后可减少重复翻译，节省 API 调用",
+        "default": true
+      },
+      "translation_template": {
+        "description": "翻译器",
+        "type": "template_list",
+        "hint": "配置各个需要认证信息的翻译器，请勿添加相同的翻译器",
+        "templates": {
+          "baidu": {
+            "name": "百度翻译",
+            "items": {
+              "baidu_appid": {
+                "type": "string",
+                "description": "百度翻译 AppID",
+                "hint": "使用百度翻译时必填",
+                "default": ""
+              },
+              "baidu_key": {
+                "type": "string",
+                "description": "百度翻译密钥",
+                "hint": "使用百度翻译时必填",
+                "default": ""
+              }
+            }
+          }
+        }
+      }
+    }
+  },
   "sender_strategies": {
     "type": "object",
     "description": "平台发送策略配置",

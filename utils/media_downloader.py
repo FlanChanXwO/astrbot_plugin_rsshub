@@ -13,10 +13,7 @@ import aiohttp
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.utils.http_ssl import build_tls_connector
 
-from .ffmpeg_helper import (
-    has_audio_stream,
-    transcode_video_to_gif,
-)
+from .ffmpeg_helper import FFmpegTool
 from .log_utils import logger
 
 _CACHE_DIR = (
@@ -48,6 +45,8 @@ def _stale_orphan_age_threshold() -> int:
 
 def _guess_suffix(url: str) -> str:
     lowered = url.lower()
+    if ".m3u8" in lowered:
+        return ".m3u8"
     if ".jpg" in lowered or ".jpeg" in lowered:
         return ".jpg"
     if ".png" in lowered:
@@ -383,6 +382,74 @@ def _write_cache(url: str, source: Path) -> Path:
     return cache_path
 
 
+async def _download_m3u8_to_cache(
+    *,
+    url: str,
+    proxy: str,
+    m3u8_timeout: int,
+) -> Path:
+    """Download m3u8 stream to cache using ffmpeg.
+
+    Args:
+        url: m3u8 URL to download
+        proxy: Proxy URL for download
+        m3u8_timeout: Timeout for m3u8 download
+
+    Returns:
+        Path to the cached mp4 file
+
+    Raises:
+        RuntimeError: If download fails
+    """
+    await _run_periodic_cache_gc()
+
+    # Use mp4 suffix for the cached file
+    cache_url = f"{url}#mp4"
+
+    async with _cache_io_lock:
+        cached = _read_cache(cache_url)
+        if cached is not None:
+            logger.debug("Media cache return existing m3u8: url=%s, path=%s", cache_url, cached)
+            return cached
+
+    # Generate cache path for mp4 output
+    cache_digest = _cache_file_prefix(cache_url)
+    cache_path = _CACHE_DIR / f"{cache_digest}.mp4"
+    meta_path = _CACHE_DIR / f"{cache_digest}.meta"
+
+    logger.debug(
+        "Media cache m3u8 download start: url=%s, timeout=%s, proxy=%s",
+        url,
+        m3u8_timeout,
+        bool(proxy),
+    )
+
+    # Download m3u8 using ffmpeg
+    success = await FFmpegTool.download_m3u8_to_mp4(
+        m3u8_url=url,
+        output_path=cache_path,
+        timeout_seconds=m3u8_timeout,
+        proxy=proxy,
+    )
+
+    if not success:
+        logger.warning("Media cache m3u8 download failed: url=%s", url)
+        raise RuntimeError(f"m3u8 download failed: {url}")
+
+    # Write cache metadata
+    expire_ts = time.time() + _CACHE_TTL_SECONDS
+    meta_path.write_text(str(expire_ts), encoding="utf-8")
+
+    logger.debug(
+        "Media cache m3u8 download complete: url=%s, path=%s, bytes=%s",
+        url,
+        cache_path,
+        cache_path.stat().st_size if cache_path.exists() else 0,
+    )
+
+    return cache_path
+
+
 async def get_or_download_media_to_cache(
     *,
     url: str,
@@ -390,6 +457,7 @@ async def get_or_download_media_to_cache(
     proxy: str,
     try_convert_gif: bool = False,
     gif_transcode_timeout: int = 60,
+    m3u8_timeout: int = 120,
 ) -> Path:
     """Download media to cache with optional GIF conversion for silent videos.
 
@@ -399,11 +467,23 @@ async def get_or_download_media_to_cache(
         proxy: Proxy URL for download
         try_convert_gif: If True, attempt to convert silent videos to GIF
         gif_transcode_timeout: Timeout for GIF transcoding (default 60s)
+        m3u8_timeout: Timeout for m3u8 download (default 120s)
 
     Returns:
         Path to the cached media file (may be converted to GIF)
     """
     await _run_periodic_cache_gc()
+
+    # Check if this is an m3u8 stream
+    is_m3u8 = _guess_suffix(url) == ".m3u8"
+
+    # Handle m3u8 streams separately using ffmpeg
+    if is_m3u8:
+        return await _download_m3u8_to_cache(
+            url=url,
+            proxy=proxy,
+            m3u8_timeout=m3u8_timeout,
+        )
 
     # Check if this is a video that might need conversion
     is_video = _guess_suffix(url) in {".mp4", ".webm", ".mov", ".mkv", ".avi"}
@@ -447,7 +527,7 @@ async def get_or_download_media_to_cache(
     if try_convert_gif and is_video and tmp_path.exists():
         try:
             # Check if video has audio stream
-            has_audio = await has_audio_stream(
+            has_audio = await FFmpegTool.has_audio_stream(
                 tmp_path,
                 timeout_seconds=10,
                 auto_install_ffmpeg=True,
@@ -459,7 +539,7 @@ async def get_or_download_media_to_cache(
                     url,
                     tmp_path,
                 )
-                gif_path = await transcode_video_to_gif(
+                gif_path = await FFmpegTool.transcode_to_gif(
                     tmp_path,
                     timeout_seconds=gif_transcode_timeout,
                     auto_install_ffmpeg=True,

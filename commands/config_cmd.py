@@ -1,140 +1,115 @@
 """配置相关命令逻辑"""
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from ..config import RuntimeConfig
-
-from .types import SetPluginConfigResult, SetUserDefaultOptionResult
+from ..utils.config_parsers import field_loader, parse_bool_value
+from .types import CommandResult
 
 
-def get_plugin_config(config: "RuntimeConfig") -> str:
-    """获取插件配置文本
-
-    Returns:
-        配置信息字符串
-    """
-    strategies = config.sender_strategies if config else None
-    shared_data = config.platform_shared_data if config else None
-    ffmpeg_cfg = config.ffmpeg if config else None
-
-    return (
-        "当前 RSS 插件配置:\n"
-        f"proxy = {config.proxy or '(empty)'}\n"
-        f"rsshub_base_url = {config.rsshub_base_url}\n"
-        f"default_interval = {config.default_interval}\n"
-        f"minimal_interval = {config.minimal_interval}\n"
-        f"timeout = {config.timeout}\n"
-        f"failed_queue_capacity = {config.failed_queue_capacity}\n"
-        f"failed_queue_max_retries = {config.failed_queue_max_retries}\n"
-        f"deduplicate_multi_bot = {config.deduplicate_multi_bot}\n"
-        f"bootstrap_skip_history = {config.bootstrap_skip_history}\n"
-        f"debug_payload = {config.debug_payload}\n"
-        f"history_entry_limit = {config.history_entry_limit}\n"
-        f"download_image_before_send = {config.download_image_before_send}\n"
-        "ffmpeg:\n"
-        f"  video_transcode = {ffmpeg_cfg.video_transcode if ffmpeg_cfg else False}\n"
-        f"  video_transcode_timeout = {ffmpeg_cfg.video_transcode_timeout if ffmpeg_cfg else 120}\n"
-        f"  gif_transcode = {ffmpeg_cfg.gif_transcode if ffmpeg_cfg else False}\n"
-        f"  gif_transcode_timeout = {ffmpeg_cfg.gif_transcode_timeout if ffmpeg_cfg else 60}\n"
-        "sender_strategies:\n"
-        f"  telegram = {strategies.telegram if strategies else True}\n"
-        f"  aiocqhttp = {strategies.aiocqhttp if strategies else True}\n"
-        f"  weixin_oc = {strategies.weixin_oc if strategies else True}\n"
-        "platform_shared_data:\n"
-        f"  aiocqhttp = {shared_data.aiocqhttp if shared_data else False}"
-    )
-
-
-def get_single_config(key: str, config: "RuntimeConfig") -> str:
-    """获取单个配置项"""
-    try:
-        value = getattr(config, key, None)
-        if value is None:
-            return f"{key} = (not found)"
-        return f"{key} = {value}"
-    except Exception as ex:
-        return f"{key} = (error: {ex})"
-
-
-async def set_plugin_config(
-    *,
-    key: str,
-    value: str,
-    config: "RuntimeConfig",
-    parse_plugin_config_value_fn: Callable[[str, str], int | str | bool],
-) -> SetPluginConfigResult:
-    """设置插件配置"""
-    from ..config import PLUGIN_CONFIG_KEYS
-
-    normalized_key = key.strip().lower()
-
-    if normalized_key not in PLUGIN_CONFIG_KEYS:
-        return {
-            "success": False,
-            "error": (
-                "不支持的配置项。可用项: "
-                "proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
-                "download_image_before_send/bootstrap_skip_history/"
-                "history_entry_limit/"
-                "ffmpeg_video_transcode/ffmpeg_video_transcode_timeout/"
-                "ffmpeg_gif_transcode/ffmpeg_gif_transcode_timeout/"
-                "failed_queue_capacity/failed_queue_max_retries/"
-                "debug_payload/"
-                "sender_strategy_telegram/sender_strategy_aiocqhttp/"
-                "sender_strategy_weixin_oc/"
-                "deduplicate_multi_bot/platform_shared_data_aiocqhttp"
-            ),
-        }
-
-    if not value.strip():
-        return {"success": True, "message": get_single_config(normalized_key, config)}
-
-    try:
-        parsed_value = parse_plugin_config_value_fn(normalized_key, value)
-    except ValueError as ex:
-        return {"success": False, "error": str(ex)}
-
-    config.set(normalized_key, parsed_value)
-    return {
-        "success": True,
-        "message": f"插件配置已更新: {normalized_key} = {parsed_value}",
-    }
-
-
-async def set_user_default_option(
+async def set_user_option(
     *,
     key: str,
     value: str,
     user_id: str,
     parse_option_value_fn: Callable[[str, str], int | str],
-) -> SetUserDefaultOptionResult:
-    """设置用户默认选项"""
-    from ..config import USER_DEFAULT_OPTION_KEYS
+) -> CommandResult:
+    """设置用户配置选项
+
+    Args:
+        key: 配置项名称
+        value: 配置值
+        user_id: 用户ID
+        parse_option_value_fn: 选项值解析函数
+
+    Returns:
+        命令结果
+    """
     from ..db import User
 
     if not key or not value:
         return {
             "success": False,
             "error": (
-                "用法: /sub_set_default <选项名> <值>\n"
-                "可用选项: notify/send_mode/length_limit/link_preview/display_author/"
-                "display_via/display_title/display_entry_tags/style/display_media/interval"
+                "用法: /sub_set_user <选项名> <值>\n"
+                "使用 /sub_get_user 查看可用选项"
             ),
         }
 
     option_key = key.strip().lower()
-    if option_key not in USER_DEFAULT_OPTION_KEYS:
-        return {"success": False, "error": "该选项不支持设置为默认值"}
 
-    try:
-        parsed_value = parse_option_value_fn(option_key, value)
-    except ValueError as ex:
-        return {"success": False, "error": str(ex)}
+    # 特殊处理 use_user_config 布尔字段
+    if option_key == "use_user_config":
+        try:
+            parsed_value = parse_bool_value(value)
+        except ValueError as ex:
+            return {"success": False, "error": str(ex)}
+    else:
+        # 获取字段定义以验证
+        field_def = field_loader.get_user_field(option_key)
+        if field_def is None:
+            return {"success": False, "error": f"未知选项: {option_key}"}
 
+        # 解析选项值
+        try:
+            parsed_value = parse_option_value_fn(option_key, value)
+        except ValueError as ex:
+            return {"success": False, "error": str(ex)}
+
+    # 更新用户配置
     await User.update_defaults(user_id, **{option_key: parsed_value})
+
     return {
         "success": True,
-        "message": f"默认选项已更新: {option_key} = {parsed_value}",
+        "message": f"用户配置已更新: {option_key} = {parsed_value}",
     }
+
+
+async def get_user_option(
+    *,
+    key: str | None,
+    user_id: str,
+) -> CommandResult:
+    """获取用户配置选项
+
+    Args:
+        key: 配置项名称（None 表示获取所有）
+        user_id: 用户ID
+
+    Returns:
+        命令结果
+    """
+    from ..db import User
+
+    user = await User.get_or_create(user_id)
+
+    if key:
+        # 获取单个配置项
+        option_key = key.strip().lower()
+        field_def = field_loader.get_user_field(option_key)
+
+        if field_def is None:
+            return {"success": False, "error": f"未知选项: {option_key}"}
+
+        current_value = getattr(user, option_key, None)
+        info = field_loader.format_field_info(option_key, field_def, current_value)
+
+        # 添加设置说明
+        info += f"\n\n使用 /sub_set_user {option_key} <值> 修改配置"
+        if option_key == "use_user_config":
+            info += "\n注意: 设置为 true 后将使用用户独立配置，不再继承全局配置"
+
+        return {"success": True, "message": info}
+    else:
+        # 获取所有配置项
+        all_fields = field_loader.get_all_user_fields()
+        lines = [f"用户配置 (使用独立配置: {user.use_user_config})\n"]
+
+        for field_name, field_def in all_fields.items():
+            current_value = getattr(user, field_name, None)
+            lines.append(f"{field_name} = {current_value if current_value is not None else field_def.get('default', 'null')}")
+            lines.append(f"  {field_def.get('description', '')}")
+
+        lines.append("\n使用 /sub_get_user <选项名> 查看详细信息")
+        lines.append("使用 /sub_set_user <选项名> <值> 修改配置")
+
+        return {"success": True, "message": "\n".join(lines)}

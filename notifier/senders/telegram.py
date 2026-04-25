@@ -41,6 +41,7 @@ class TelegramMessageSender(MessageSender):
                     url=item.original_url,
                     timeout_seconds=cls._get_timeout_seconds(),
                     proxy=cls._get_proxy(),
+                    m3u8_timeout=cls._get_m3u8_timeout(),
                 )
                 normalized.append(
                     PreparedMedia(

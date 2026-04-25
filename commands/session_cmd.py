@@ -1,35 +1,46 @@
 """会话默认设置相关命令逻辑"""
 
-import json
 from collections.abc import Awaitable, Callable
 
-from .types import GetSessionDefaultsResult, SetSessionDefaultResult
+from ..utils.config_parsers import field_loader
+from .types import CommandResult
 
 
-async def set_session_default(
+async def set_session(
     *,
     session_id: str,
     key: str,
     value: str,
-    session_default_keys: set,
     parse_option_value_fn: Callable[[str, str], int | str],
     set_session_defaults_fn: Callable[[str, str, int | str], Awaitable[None]],
-) -> SetSessionDefaultResult:
-    """设置会话默认选项"""
+) -> CommandResult:
+    """设置会话默认选项
+
+    Args:
+        session_id: 会话ID
+        key: 配置项名称
+        value: 配置值
+        parse_option_value_fn: 选项值解析函数
+        set_session_defaults_fn: 设置会话默认值的函数
+
+    Returns:
+        命令结果
+    """
     if not key or not value:
         return {
             "success": False,
             "error": (
-                "用法: /sub_session_default_set <key> <value>\n"
-                "可用 key: notify/send_mode/length_limit/link_preview/display_author/"
-                "display_via/display_title/display_entry_tags/style/display_media/"
-                "interval/title/tags"
+                "用法: /sub_set_session <选项名> <值>\n"
+                "使用 /sub_get_session 查看可用选项"
             ),
         }
 
     normalized_key = key.strip().lower()
-    if normalized_key not in session_default_keys:
-        return {"success": False, "error": "不支持的会话默认配置项"}
+
+    # 获取字段定义以验证
+    field_def = field_loader.get_session_field(normalized_key)
+    if field_def is None:
+        return {"success": False, "error": f"未知选项: {normalized_key}"}
 
     try:
         if normalized_key in {"title", "tags"}:
@@ -46,23 +57,55 @@ async def set_session_default(
     }
 
 
-async def get_session_defaults(
+async def get_session(
     *,
     session_id: str,
+    key: str | None,
     get_session_defaults_fn: Callable[[str], dict],
-) -> GetSessionDefaultsResult:
-    """获取会话默认选项"""
-    defaults = await get_session_defaults_fn(session_id)
-    if not defaults:
-        return {
-            "success": True,
-            "message": "当前会话没有设置订阅默认项",
-            "defaults": {},
-        }
+) -> CommandResult:
+    """获取会话默认选项
 
-    return {
-        "success": True,
-        "message": "当前会话订阅默认项:\n"
-        + json.dumps(defaults, ensure_ascii=False, indent=2),
-        "defaults": defaults,
-    }
+    Args:
+        session_id: 会话ID
+        key: 配置项名称（None 表示获取所有）
+        get_session_defaults_fn: 获取会话默认值的函数
+
+    Returns:
+        命令结果
+    """
+    defaults = await get_session_defaults_fn(session_id)
+
+    if key:
+        # 获取单个配置项
+        option_key = key.strip().lower()
+        field_def = field_loader.get_session_field(option_key)
+
+        if field_def is None:
+            return {"success": False, "error": f"未知选项: {option_key}"}
+
+        current_value = defaults.get(option_key)
+        info = field_loader.format_field_info(option_key, field_def, current_value)
+
+        # 添加设置说明
+        info += f"\n\n使用 /sub_set_session {option_key} <值> 修改配置"
+
+        return {"success": True, "message": info}
+    else:
+        # 获取所有配置项
+        all_fields = field_loader.get_all_session_fields()
+        lines = ["会话默认配置\n"]
+
+        for field_name, field_def in all_fields.items():
+            current_value = defaults.get(field_name)
+            default_label = current_value if current_value is not None else field_def.get("default", "null")
+            lines.append(f"{field_name} = {default_label}")
+            lines.append(f"  {field_def.get('description', '')}")
+
+        if not defaults:
+            lines.append("\n当前会话未设置任何默认值")
+            lines.append("新订阅将继承用户/全局配置")
+
+        lines.append("\n使用 /sub_get_session <选项名> 查看详细信息")
+        lines.append("使用 /sub_set_session <选项名> <值> 修改配置")
+
+        return {"success": True, "message": "\n".join(lines)}

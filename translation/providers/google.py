@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import aiohttp
 
 from ...utils.log_utils import logger
 from .base import BaseTranslator
-
-if TYPE_CHECKING:
-    from ...config import TranslationConfig
 
 
 class GoogleTranslator(BaseTranslator):
@@ -42,10 +37,9 @@ class GoogleTranslator(BaseTranslator):
 
     def __init__(
         self,
-        config: TranslationConfig | None = None,
         session: aiohttp.ClientSession | None = None,
     ):
-        super().__init__(config, session)
+        super().__init__(session)
 
     async def translate(
         self,

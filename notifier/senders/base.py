@@ -7,7 +7,7 @@ from astrbot.api.message_components import File, Image, Plain, Record, Video
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.star.star_tools import StarTools
 
-from ...utils.ffmpeg_helper import transcode_video_to_mp4_for_qq
+from ...utils.ffmpeg_helper import FFmpegTool
 from ...utils.log_utils import logger
 from ...utils.media_downloader import get_or_download_media_to_cache
 from ...utils.media_paths import normalize_local_media_file_value
@@ -27,8 +27,9 @@ class MessageSender:
 
     @classmethod
     def configure_runtime(cls, *, timeout_seconds: int, proxy: str = "") -> None:
-        cls._timeout_seconds = max(1, int(timeout_seconds))
-        cls._proxy = proxy or ""
+        # 始终设置基类的属性，确保所有子类都能继承
+        MessageSender._timeout_seconds = max(1, int(timeout_seconds))
+        MessageSender._proxy = proxy or ""
 
     @classmethod
     def configure_behavior(
@@ -52,7 +53,11 @@ class MessageSender:
 
     @classmethod
     def _get_proxy(cls) -> str:
-        return str(getattr(cls, "_proxy", "") or "")
+        # 优先从当前类获取，如果没有则尝试从基类 MessageSender 获取
+        proxy = getattr(cls, "_proxy", None)
+        if proxy is None:
+            proxy = getattr(MessageSender, "_proxy", None)
+        return str(proxy or "")
 
     @classmethod
     def _should_download_media_before_send(cls) -> bool:
@@ -65,6 +70,10 @@ class MessageSender:
     @classmethod
     def _get_gif_transcode_timeout(cls) -> int:
         return int(getattr(cls, "_gif_transcode_timeout", 60))
+
+    @classmethod
+    def _get_m3u8_timeout(cls) -> int:
+        return int(getattr(cls, "_m3u8_timeout", 120))
 
     @classmethod
     def _is_video_transcode_enabled(cls) -> bool:
@@ -124,6 +133,7 @@ class MessageSender:
                     proxy=cls._get_proxy(),
                     try_convert_gif=try_convert_gif,
                     gif_transcode_timeout=cls._get_gif_transcode_timeout(),
+                    m3u8_timeout=cls._get_m3u8_timeout(),
                 )
                 # Update media_type if converted to GIF
                 actual_media_type = media_type
@@ -197,6 +207,7 @@ class MessageSender:
                         url=media_url,
                         timeout_seconds=cls._get_timeout_seconds(),
                         proxy=cls._get_proxy(),
+                        m3u8_timeout=cls._get_m3u8_timeout(),
                     )
                 except Exception as ex:
                     logger.warning(
@@ -265,7 +276,7 @@ class MessageSender:
                             media_url,
                             local_path,
                         )
-                        transcoded_path = await transcode_video_to_mp4_for_qq(
+                        transcoded_path = await FFmpegTool.transcode_to_mp4(
                             local_path,
                             timeout_seconds=cls._get_video_transcode_timeout(),
                             auto_install_ffmpeg=True,

@@ -23,10 +23,9 @@ def get_help_text(is_admin: bool) -> str:
     ]
 
     if is_admin:
-        command_lines.append(
-            "管理员测试推送: /sub_test <订阅 ID> "
-            "[latest|all|数量|count:数量|first:数量|newest:数量]"
-        )
+        command_lines.append("管理员测试推送: /sub_test <订阅ID或URL> [起始编号] [结束编号]")
+        command_lines.append("  示例: /sub_test 5 1 3    # 测试订阅ID=5，推送条目1-3")
+        command_lines.append("  示例: /sub_test https://xxx 1  # 测试URL，推送条目1")
 
     command_lines.append("帮助: /rsshelp")
 
@@ -42,8 +41,8 @@ def get_help_text(is_admin: bool) -> str:
         + "- display_media: -1/0\n"
         + "插件配置项:\n"
         + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
-        + "download_image_before_send/bootstrap_skip_history/"
-        + "ffmpeg_video_transcode/"
+        + "download_media_before_send/download_media_timeout/"
+        + "bootstrap_skip_history/ffmpeg_video_transcode/"
         + "failed_queue_capacity/failed_queue_max_retries\n"
         + "- sender_strategy_telegram/sender_strategy_aiocqhttp/"
         + "sender_strategy_weixin_oc: 平台发送策略开关\n"

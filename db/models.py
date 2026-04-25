@@ -88,6 +88,10 @@ class User(RSSHubModel, table=True):
         description="默认推送目标会话(unified_msg_origin)",
     )
     needs_binding_notice: int = Field(default=0, description="是否需要提示绑定推送目标")
+    use_user_config: bool = Field(
+        default=False,
+        description="是否使用用户自身配置: true=使用User表, false=继承全局配置",
+    )
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="创建时间"
@@ -164,6 +168,10 @@ class Sub(RSSHubModel, table=True):
     translate: int = Field(default=INHERIT_VALUE, description="翻译")
     translate_target_lang: str | None = Field(
         default=None, max_length=16, description="翻译目标语言"
+    )
+    use_sub_config: bool = Field(
+        default=False,
+        description="是否使用订阅自身配置: true=使用Sub表, false=继承上层",
     )
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -315,12 +323,44 @@ def get_session() -> AsyncSession:
 def resolve_effective_options(
     sub: "Sub",
     user: "User",
+    cfg: object | None = None,
 ) -> dict[str, int | str | None]:
-    """解析订阅生效选项：订阅值优先，-100 继承用户默认。"""
+    """解析订阅生效选项（三层配置继承架构）。
+
+    配置优先级：
+    1. 如果 sub.use_sub_config = True: 使用 Sub 表配置
+    2. 如果 sub.use_sub_config = False 且 user.use_user_config = True: 使用 User 表配置
+    3. 如果 sub.use_sub_config = False 且 user.use_user_config = False: 使用全局配置(cfg)
+
+    Args:
+        sub: 订阅对象
+        user: 用户对象
+        cfg: 全局配置对象（ConfigProxy）
+
+    Returns:
+        生效的配置选项字典
+    """
+    from ..config import cfg as global_cfg
+
+    # 如果没有传入 cfg，使用全局 cfg
+    if cfg is None:
+        cfg = global_cfg
+
     options: dict[str, int | str | None] = {}
     for key in EFFECTIVE_OPTION_KEYS:
-        sub_val = getattr(sub, key)
-        options[key] = getattr(user, key) if sub_val == INHERIT_VALUE else sub_val
+        if sub.use_sub_config:
+            # 使用订阅自身配置
+            options[key] = getattr(sub, key)
+        elif user.use_user_config:
+            # 使用用户配置
+            options[key] = getattr(user, key)
+        else:
+            # 使用全局配置
+            if cfg and hasattr(cfg, key):
+                options[key] = getattr(cfg, key)
+            else:
+                # 如果全局配置没有，使用用户配置作为回退
+                options[key] = getattr(user, key)
     return options
 
 
@@ -349,12 +389,13 @@ class SubMethods:
 
     @staticmethod
     async def get_by_user(user_id: str) -> list[Sub]:
+        """获取用户的所有订阅（包括禁用状态）"""
         async with get_session() as session:
             from sqlmodel import select
 
             stmt = (
                 select(Sub)
-                .where(Sub.user_id == user_id, Sub.state == 1)
+                .where(Sub.user_id == user_id)
                 .options(selectinload(Sub.feed))
                 .order_by(Sub.id.asc())
             )
@@ -421,12 +462,13 @@ class SubMethods:
 
     @classmethod
     async def get_by_id(cls, sub_id: int) -> Sub | None:
+        """根据ID查询订阅（包含禁用状态的订阅）"""
         async with get_session() as session:
             from sqlmodel import select
 
             stmt = (
                 select(Sub)
-                .where(Sub.id == sub_id, Sub.state == 1)
+                .where(Sub.id == sub_id)
                 .options(selectinload(Sub.feed), selectinload(Sub.user))
             )
             result = await session.execute(stmt)

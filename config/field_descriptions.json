@@ -1,0 +1,297 @@
+{
+  "sub_fields": {
+    "use_sub_config": {
+      "description": "是否使用订阅自身配置",
+      "type": "bool",
+      "default": "false",
+      "values": {
+        "true": "使用 Sub 表配置",
+        "false": "继承 User/Global 配置"
+      }
+    },
+    "state": {
+      "description": "订阅推送状态",
+      "type": "int",
+      "default": "1",
+      "values": {
+        "0": "禁用推送",
+        "1": "启用推送"
+      }
+    },
+    "notify": {
+      "description": "是否通知",
+      "type": "int",
+      "default": "1",
+      "values": {
+        "0": "禁用",
+        "1": "启用"
+      }
+    },
+    "send_mode": {
+      "description": "发送模式",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "-1": "仅链接",
+        "0": "自动",
+        "2": "直接消息"
+      }
+    },
+    "interval": {
+      "description": "监控间隔",
+      "type": "int",
+      "default": "5",
+      "unit": "分钟"
+    },
+    "length_limit": {
+      "description": "长度限制",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "0": "不限制"
+      }
+    },
+    "link_preview": {
+      "description": "链接预览",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "0": "自动",
+        "1": "强制启用"
+      }
+    },
+    "display_author": {
+      "description": "显示作者",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "-1": "禁用",
+        "0": "自动",
+        "1": "强制"
+      }
+    },
+    "display_via": {
+      "description": "显示来源",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "-2": "完全禁用",
+        "-1": "仅链接",
+        "0": "自动",
+        "1": "强制"
+      }
+    },
+    "display_title": {
+      "description": "显示标题",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "-1": "禁用",
+        "0": "自动",
+        "1": "强制"
+      }
+    },
+    "display_entry_tags": {
+      "description": "显示标签",
+      "type": "int",
+      "default": "-1",
+      "values": {
+        "-1": "禁用",
+        "0": "启用"
+      }
+    },
+    "style": {
+      "description": "样式",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "0": "RSStT",
+        "1": "flowerss"
+      }
+    },
+    "display_media": {
+      "description": "显示媒体",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "-1": "禁用",
+        "0": "启用"
+      }
+    },
+    "translate": {
+      "description": "翻译",
+      "type": "int",
+      "default": "0",
+      "values": {
+        "0": "禁用",
+        "1": "启用"
+      }
+    },
+    "translate_target_lang": {
+      "description": "翻译目标语言",
+      "type": "str",
+      "default": "zh-CN",
+      "values": {
+        "zh-CN": "简体中文",
+        "zh-TW": "繁体中文",
+        "en": "英文",
+        "ja": "日文"
+      }
+    },
+    "title": {
+      "description": "订阅标题",
+      "type": "str",
+      "default": "null"
+    },
+    "tags": {
+      "description": "标签",
+      "type": "str",
+      "default": "null"
+    }
+  },
+  "user_fields": {
+    "use_user_config": {
+      "description": "是否使用用户自身配置",
+      "type": "bool",
+      "default": "false",
+      "values": {
+        "true": "使用 User 表配置",
+        "false": "继承全局配置"
+      }
+    },
+    "notify": {
+      "description": "是否通知",
+      "type": "int",
+      "default": "1"
+    },
+    "send_mode": {
+      "description": "发送模式",
+      "type": "int",
+      "default": "0"
+    },
+    "interval": {
+      "description": "监控间隔",
+      "type": "int",
+      "default": "5",
+      "unit": "分钟"
+    },
+    "length_limit": {
+      "description": "长度限制",
+      "type": "int",
+      "default": "0"
+    },
+    "link_preview": {
+      "description": "链接预览",
+      "type": "int",
+      "default": "0"
+    },
+    "display_author": {
+      "description": "显示作者",
+      "type": "int",
+      "default": "0"
+    },
+    "display_via": {
+      "description": "显示来源",
+      "type": "int",
+      "default": "0"
+    },
+    "display_title": {
+      "description": "显示标题",
+      "type": "int",
+      "default": "0"
+    },
+    "display_entry_tags": {
+      "description": "显示标签",
+      "type": "int",
+      "default": "-1"
+    },
+    "style": {
+      "description": "样式",
+      "type": "int",
+      "default": "0"
+    },
+    "display_media": {
+      "description": "显示媒体",
+      "type": "int",
+      "default": "0"
+    },
+    "translate": {
+      "description": "翻译",
+      "type": "int",
+      "default": "0"
+    },
+    "translate_target_lang": {
+      "description": "翻译目标语言",
+      "type": "str",
+      "default": "zh-CN"
+    }
+  },
+  "session_fields": {
+    "notify": {
+      "description": "是否通知",
+      "type": "int",
+      "default": "继承"
+    },
+    "send_mode": {
+      "description": "发送模式",
+      "type": "int",
+      "default": "继承"
+    },
+    "interval": {
+      "description": "监控间隔",
+      "type": "int",
+      "default": "继承",
+      "unit": "分钟"
+    },
+    "length_limit": {
+      "description": "长度限制",
+      "type": "int",
+      "default": "继承"
+    },
+    "link_preview": {
+      "description": "链接预览",
+      "type": "int",
+      "default": "继承"
+    },
+    "display_author": {
+      "description": "显示作者",
+      "type": "int",
+      "default": "继承"
+    },
+    "display_via": {
+      "description": "显示来源",
+      "type": "int",
+      "default": "继承"
+    },
+    "display_title": {
+      "description": "显示标题",
+      "type": "int",
+      "default": "继承"
+    },
+    "display_entry_tags": {
+      "description": "显示标签",
+      "type": "int",
+      "default": "继承"
+    },
+    "style": {
+      "description": "样式",
+      "type": "int",
+      "default": "继承"
+    },
+    "display_media": {
+      "description": "显示媒体",
+      "type": "int",
+      "default": "继承"
+    },
+    "title": {
+      "description": "订阅标题",
+      "type": "str",
+      "default": "null"
+    },
+    "tags": {
+      "description": "标签",
+      "type": "str",
+      "default": "null"
+    }
+  }
+}

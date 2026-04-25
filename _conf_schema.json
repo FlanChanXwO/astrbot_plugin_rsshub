@@ -1,94 +1,217 @@
 {
-  "proxy": {
-    "type": "string",
-    "description": "代理地址",
-    "hint": "HTTP/SOCKS 代理地址，留空则不使用代理。例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
-    "default": ""
+  "basic_config": {
+    "type": "object",
+    "description": "基础设施配置",
+    "hint": "插件运行的基础设置，包括网络、去重、队列等系统级配置",
+    "items": {
+      "proxy": {
+        "type": "string",
+        "description": "代理地址",
+        "hint": "HTTP/SOCKS 代理地址，留空则不使用代理。例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
+        "default": ""
+      },
+      "rsshub_base_url": {
+        "type": "string",
+        "description": "默认 RSSHub 域名",
+        "hint": "用于 RSSHub 路由检索与订阅链接拼接的默认域名。支持在 LLM 工具调用时通过 base_url 临时覆盖",
+        "default": "https://rsshub.app"
+      },
+      "timeout": {
+        "type": "int",
+        "description": "请求超时（秒）",
+        "hint": "获取 RSS 源时的 HTTP 请求超时时间",
+        "default": 30
+      },
+      "minimal_interval": {
+        "type": "int",
+        "description": "订阅最小监控间隔（分钟）",
+        "hint": "限制用户通过 /sub_set 命令设置单个订阅监控间隔的最小值，防止过于频繁抓取对RSS源服务器造成压力",
+        "default": 1
+      },
+      "hash_history_min": {
+        "type": "int",
+        "description": "去重历史最小保留数量",
+        "hint": "每个 Feed 至少保留多少条去重哈希记录，值越大越能避免历史回流重复推送，但会增加存储与比对开销",
+        "default": 200
+      },
+      "hash_history_multiplier": {
+        "type": "int",
+        "description": "去重历史增长倍数",
+        "hint": "按当前抓取条目数动态扩展历史窗口，实际窗口≈entries * 该倍数（再受最小值与硬上限约束）",
+        "default": 2
+      },
+      "hash_history_hard_limit": {
+        "type": "int",
+        "description": "去重历史硬上限",
+        "hint": "每个 Feed 最多保留的去重哈希数量，用于限制数据库行体积与监控循环内存/CPU开销",
+        "default": 5000
+      },
+      "tracking_query_params": {
+        "type": "list",
+        "description": "链接去重时忽略的查询参数",
+        "hint": "用于清理常见追踪参数（如 utm_source/gclid/fbclid）。仅建议填写明确的追踪参数名，避免误删业务语义参数",
+        "default": [
+          "utm_source",
+          "utm_medium",
+          "utm_campaign",
+          "utm_term",
+          "utm_content",
+          "utm_id",
+          "gclid",
+          "fbclid",
+          "mc_cid",
+          "mc_eid",
+          "spm",
+          "ref",
+          "ref_src"
+        ]
+      },
+      "failed_queue_capacity": {
+        "type": "int",
+        "description": "失败队列容量",
+        "hint": "当推送因平台连接失败时，消息会进入失败队列等待重试。每个订阅最多保留多少条失败消息。0=禁用失败队列",
+        "default": 50
+      },
+      "failed_queue_max_retries": {
+        "type": "int",
+        "description": "失败队列最大重试次数",
+        "hint": "失败消息的最大重试次数，超过此次数的消息将被视为已耗尽",
+        "default": 3
+      },
+      "deduplicate_multi_bot": {
+        "type": "bool",
+        "description": "单会话多 BOT 去重",
+        "hint": "开启后，当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息，避免重复推送",
+        "default": true
+      },
+      "bootstrap_skip_history": {
+        "type": "bool",
+        "description": "首轮跳过历史条目",
+        "hint": "开启后，首次监控仅建立去重历史不推送旧条目；关闭后首次监控会按抓取结果推送历史条目",
+        "default": true
+      },
+      "debug_payload": {
+        "type": "bool",
+        "description": "推送调试字段",
+        "hint": "开启后，会在每条推送末尾附加调试信息，便于观察 guid/id/link/published/updated 等原始字段",
+        "default": false
+      },
+      "history_entry_limit": {
+        "type": "int",
+        "description": "历史条目推送限制",
+        "hint": "限制每次推送时最多发送多少条历史条目，按发布时间降序取最新N条。0=不限制，建议10-50",
+        "default": 10
+      },
+      "download_media_before_send": {
+        "type": "bool",
+        "description": "先下载媒体后发送",
+        "hint": "开启后会先下载媒体到本地再推送。支持普通图片、视频和 m3u8/HLS 流媒体格式（会自动合并为 mp4）。注意：在 docker 环境下需要共享数据卷",
+        "default": false
+      },
+      "download_media_timeout": {
+        "type": "int",
+        "description": "媒体下载超时（秒）",
+        "hint": "仅当「先下载媒体后发送」开启时有效。控制媒体下载的最大等待时间，包括 m3u8/HLS 流媒体。默认 30 秒，m3u8 建议 60-180 秒",
+        "default": 30
+      }
+    }
   },
-  "rsshub_base_url": {
-    "type": "string",
-    "description": "默认 RSSHub 域名",
-    "hint": "用于 RSSHub 路由检索与订阅链接拼接的默认域名。支持在 LLM 工具调用时通过 base_url 临时覆盖",
-    "default": "https://rsshub.app"
-  },
-  "default_interval": {
-    "type": "int",
-    "description": "默认监控间隔（分钟）",
-    "hint": "订阅未设置 interval 时使用",
-    "default": 10
-  },
-  "minimal_interval": {
-    "type": "int",
-    "description": "订阅最小监控间隔（分钟）",
-    "hint": "限制用户通过 /sub_set 命令设置单个订阅监控间隔的最小值，防止过于频繁抓取对RSS源服务器造成压力。例如设置为5，则用户不能设置小于5分钟的间隔",
-    "default": 1
-  },
-  "timeout": {
-    "type": "int",
-    "description": "请求超时（秒）",
-    "hint": "获取 RSS 源时的 HTTP 请求超时时间",
-    "default": 30
-  },
-  "hash_history_min": {
-    "type": "int",
-    "description": "去重历史最小保留数量",
-    "hint": "每个 Feed 至少保留多少条去重哈希记录，值越大越能避免历史回流重复推送，但会增加存储与比对开销",
-    "default": 200
-  },
-  "hash_history_multiplier": {
-    "type": "int",
-    "description": "去重历史增长倍数",
-    "hint": "按当前抓取条目数动态扩展历史窗口，实际窗口≈entries * 该倍数（再受最小值与硬上限约束）",
-    "default": 2
-  },
-  "hash_history_hard_limit": {
-    "type": "int",
-    "description": "去重历史硬上限",
-    "hint": "每个 Feed 最多保留的去重哈希数量，用于限制数据库行体积与监控循环内存/CPU开销",
-    "default": 5000
-  },
-  "tracking_query_params": {
-    "type": "list",
-    "description": "链接去重时忽略的查询参数",
-    "hint": "用于清理常见追踪参数（如 utm_source/gclid/fbclid）。仅建议填写明确的追踪参数名，避免误删业务语义参数",
-    "default": [
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_term",
-      "utm_content",
-      "utm_id",
-      "gclid",
-      "fbclid",
-      "mc_cid",
-      "mc_eid",
-      "spm",
-      "ref",
-      "ref_src"
-    ]
-  },
-  "download_image_before_send": {
-    "type": "bool",
-    "description": "先下载媒体后发送",
-    "hint": "开启后会先下载媒体到本地再推送，可复用缓存，但是在docker环境下需要共享数据卷",
-    "default": false
-  },
-  "history_entry_limit": {
-    "type": "int",
-    "description": "历史条目推送限制",
-    "hint": "限制每次推送时最多发送多少条历史条目，按发布时间降序取最新N条。0=不限制，建议10-50。注意：此限制在监控器级别生效，会影响所有订阅",
-    "default": 10
+  "global_config": {
+    "type": "object",
+    "description": "订阅全局默认配置",
+    "hint": "新订阅的默认配置值。可被用户配置(/sub_set_user)和订阅配置(/sub_set)覆盖",
+    "items": {
+      "interval": {
+        "type": "int",
+        "description": "默认监控间隔（分钟）",
+        "hint": "订阅未设置监控间隔时使用的默认值",
+        "default": 10
+      },
+      "notify": {
+        "type": "bool",
+        "description": "启用通知",
+        "hint": "是否发送 RSS 更新通知",
+        "default": true
+      },
+      "send_mode": {
+        "type": "string",
+        "description": "发送模式",
+        "default": "自动",
+        "options": ["仅链接", "自动", "直接消息"],
+        "hint": "仅链接=只发送链接；自动=根据内容智能选择；直接消息=总是直接发送"
+      },
+      "length_limit": {
+        "type": "int",
+        "description": "内容长度限制",
+        "hint": "0=不限制，正数=限制字符数",
+        "default": 0
+      },
+      "link_preview": {
+        "type": "string",
+        "description": "链接预览",
+        "default": "自动",
+        "options": ["自动", "强制启用"],
+        "hint": "自动=由平台决定；强制启用=总是生成预览"
+      },
+      "display_author": {
+        "type": "string",
+        "description": "显示作者",
+        "default": "自动",
+        "options": ["禁用", "自动", "强制"],
+        "hint": "是否在推送中显示 RSS 条目作者"
+      },
+      "display_via": {
+        "type": "string",
+        "description": "显示来源",
+        "default": "自动",
+        "options": ["完全禁用", "仅链接", "自动", "强制"],
+        "hint": "完全禁用=不显示；仅链接=只显示链接；自动=根据内容决定；强制=总是显示"
+      },
+      "display_title": {
+        "type": "string",
+        "description": "显示标题",
+        "default": "自动",
+        "options": ["禁用", "自动", "强制"],
+        "hint": "是否在推送中显示 RSS 标题"
+      },
+      "display_entry_tags": {
+        "type": "bool",
+        "description": "显示标签",
+        "hint": "是否在推送中显示 RSS 条目标签",
+        "default": false
+      },
+      "style": {
+        "type": "string",
+        "description": "推送样式",
+        "default": "RSStT",
+        "options": ["RSStT", "flowerss"],
+        "hint": "RSStT=详细格式；flowerss=简洁格式"
+      },
+      "display_media": {
+        "type": "bool",
+        "description": "显示媒体",
+        "hint": "是否在推送中显示图片、视频等媒体",
+        "default": true
+      },
+      "translate": {
+        "type": "bool",
+        "description": "启用翻译",
+        "hint": "是否自动翻译 RSS 内容",
+        "default": false
+      },
+      "translate_target_lang": {
+        "type": "string",
+        "description": "翻译目标语言",
+        "default": "zh-CN",
+        "options": ["zh-CN", "zh-TW", "en", "ja"],
+        "hint": "翻译后的目标语言"
+      }
+    }
   },
   "ffmpeg": {
     "type": "object",
     "description": "FFmpeg 配置",
     "hint": "用于控制视频转码、无声视频GIF转换及 FFmpeg 自动准备行为",
-    "default": {
-      "video_transcode": false,
-      "video_transcode_timeout": 120,
-      "gif_transcode": false,
-      "gif_transcode_timeout": 60
-    },
     "items": {
       "video_transcode": {
         "type": "bool",
@@ -116,44 +239,10 @@
       }
     }
   },
-  "failed_queue_capacity": {
-    "type": "int",
-    "description": "失败队列容量",
-    "hint": "当推送因平台连接失败时，消息会进入失败队列等待重试。每个订阅最多保留多少条失败消息。0=禁用失败队列",
-    "default": 50
-  },
-  "failed_queue_max_retries": {
-    "type": "int",
-    "description": "失败队列最大重试次数",
-    "hint": "失败消息的最大重试次数，超过此次数的消息将被视为已耗尽",
-    "default": 3
-  },
-
-  "deduplicate_multi_bot": {
-    "type": "bool",
-    "description": "单会话多 BOT 去重",
-    "hint": "开启后，当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息，避免重复推送",
-    "default": true
-  },
-  "bootstrap_skip_history": {
-    "type": "bool",
-    "description": "首轮跳过历史条目",
-    "hint": "开启后，首次监控仅建立去重历史不推送旧条目；关闭后首次监控会按抓取结果推送历史条目",
-    "default": true
-  },
-  "debug_payload": {
-    "type": "bool",
-    "description": "推送调试字段",
-    "hint": "开启后，会在每条推送末尾附加调试信息，便于观察 guid/id/link/published/updated 等原始字段",
-    "default": false
-  },
   "platform_shared_data": {
     "type": "object",
     "description": "平台共享数据源配置",
     "hint": "配置特定平台是否开启共享数据源。开启后，该平台下不同 BOT 的订阅操作被视为共享数据",
-    "default": {
-      "aiocqhttp": false
-    },
     "items": {
       "aiocqhttp": {
         "type": "bool",
@@ -167,38 +256,20 @@
     "type": "object",
     "description": "RSS 内容翻译配置",
     "hint": "支持自动或手动翻译 RSS 条目内容",
-    "default": {
-      "provider": "google",
-      "target_lang": "zh-CN",
-      "auto_translate": false,
-      "force_translate": false,
-      "translate_title": true,
-      "translate_content": true,
-      "display_orignal_content": false,
-      "cache_translations": true
-    },
     "items": {
       "provider": {
         "type": "string",
         "description": "翻译服务提供商",
         "hint": "支持: google(免费)、baidu",
         "default": "google",
-        "options": [
-          "google",
-          "baidu"
-        ]
+        "options": ["google", "baidu"]
       },
       "target_lang": {
         "type": "string",
         "description": "目标语言代码",
         "hint": "zh-CN(简体中文)、zh-TW(繁体中文)、en(英文)、ja(日文)",
         "default": "zh-CN",
-        "options": [
-          "zh-CN",
-          "zh-TW",
-          "en",
-          "ja"
-        ]
+        "options": ["zh-CN", "zh-TW", "en", "ja"]
       },
       "auto_translate": {
         "type": "bool",
@@ -266,11 +337,6 @@
     "type": "object",
     "description": "平台发送策略配置",
     "hint": "配置各平台使用的发送策略。关闭特定平台策略后将使用默认发送策略",
-    "default": {
-      "telegram": true,
-      "aiocqhttp": true,
-      "weixin_oc": true
-    },
     "items": {
       "telegram": {
         "type": "bool",

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -27,18 +26,23 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import File
 from astrbot.api.star import Context, Star
 
-from .api import RSSHubRadarAPI, close_shared_session, normalize_base_url
+from .api import RSSHubRadarAPI, close_shared_session
 from .commands import (
-    bind_target,
+    IMPORT_MAX_FILE_SIZE_BYTES,
+    batch_activate_subs,
+    batch_deactivate_subs,
+    batch_subscribe_feeds,
+    batch_unsubscribe_feeds,
     export_subscriptions,
-    get_plugin_config,
-    get_session_defaults,
+    get_session,
+    get_user_option,
     import_subscriptions,
     list_subscriptions,
-    set_plugin_config,
-    set_session_default,
+    read_import_toml_content,
+    read_uploaded_toml_content,
+    set_session,
     set_subscription_option,
-    set_user_default_option,
+    set_user_option,
     subscribe_feed,
     test_subscription,
     unsubscribe_all_feeds,
@@ -49,16 +53,14 @@ from .config import (
     SESSION_DEFAULT_KV_PREFIX,
     SUB_OPTION_CASTERS,
     RuntimeConfig,
+    cfg,
 )
 from .db import Sub, User, close_db, init_db
 from .monitor import Monitor
 from .notifier.senders import set_bot_self_id_provider
-from .utils.ffmpeg_helper import ensure_ffmpeg_ready
+from .utils.ffmpeg_helper import FFmpegTool
 from .utils.log_utils import logger
 from .web import RSSHubWebUI, resolve_webui_config
-
-IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
-IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
 
 
 class RSSHubPlugin(Star):
@@ -78,119 +80,12 @@ class RSSHubPlugin(Star):
         self._import_session_timeout = 300  # 5 分钟超时
         self._unsub_export_retention_seconds = 24 * 60 * 60
 
-    def _select_test_entries(self, entries: list, granularity: str) -> tuple[list, str]:
-        """根据测试粒度参数选择要推送的条目。"""
-        mode = (granularity or "latest").strip().lower()
-
-        if mode in {"latest", "last"}:
-            return [entries[0]], "latest"
-
-        if mode == "all":
-            return entries, f"all({len(entries)})"
-
-        # 语义化别名：默认和 count 一样，都是取前 n 个
-        if (
-            mode.startswith("first:")
-            or mode.startswith("head:")
-            or mode.startswith("oldest:")
-        ):
-            count_raw = mode.split(":", 1)[1]
-            if not count_raw.isdigit() or int(count_raw) <= 0:
-                raise ValueError("粒度数量必须大于 0")
-            count = int(count_raw)
-            selected = entries[:count]
-            return selected, f"first:{len(selected)}"
-
-        if mode.startswith("newest:") or mode.startswith("tail:"):
-            count_raw = mode.split(":", 1)[1]
-            if not count_raw.isdigit() or int(count_raw) <= 0:
-                raise ValueError("粒度数量必须大于 0")
-            count = int(count_raw)
-            selected = entries[-count:]
-            return selected, f"newest:{len(selected)}"
-
-        count_raw = mode.removeprefix("count:") if mode.startswith("count:") else mode
-        if count_raw.isdigit():
-            count = int(count_raw)
-            if count <= 0:
-                raise ValueError("粒度数量必须大于 0")
-            selected = entries[:count]
-            return selected, f"count:{len(selected)}"
-
-        raise ValueError(
-            "粒度参数无效。可选: latest / all / <数量> / count:<数量> / first:<数量> / newest:<数量>"
-        )
-
     @staticmethod
-    def _parse_plugin_config_value(key: str, value: str):
-        """Parse plugin-level config values from command."""
-        normalized_key = key.strip().lower()
-        raw_value = value.strip()
-
-        if normalized_key in {"default_interval", "minimal_interval", "timeout"}:
-            if not raw_value.isdigit() or int(raw_value) <= 0:
-                raise ValueError(f"{normalized_key} 需要大于 0 的整数")
-            return int(raw_value)
-
-        if normalized_key == "download_image_before_send":
-            lowered = raw_value.lower()
-            if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
-                return True
-            if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
-                return False
-            raise ValueError("download_image_before_send 仅支持布尔值: true/false")
-
-        if normalized_key == "bootstrap_skip_history":
-            lowered = raw_value.lower()
-            if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
-                return True
-            if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
-                return False
-            raise ValueError("bootstrap_skip_history 仅支持布尔值: true/false")
-
-        if normalized_key == "debug_payload":
-            lowered = raw_value.lower()
-            if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
-                return True
-            if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
-                return False
-            raise ValueError("debug_payload 仅支持布尔值: true/false")
-
-        if normalized_key == "proxy":
-            return raw_value
-
-        if normalized_key == "rsshub_base_url":
-            try:
-                return normalize_base_url(raw_value)
-            except ValueError as ex:
-                raise ValueError(f"rsshub_base_url 非法: {ex}") from ex
-
-        if normalized_key in {"failed_queue_capacity", "failed_queue_max_retries"}:
-            if not raw_value.isdigit() or int(raw_value) < 0:
-                raise ValueError(f"{normalized_key} 需要大于等于 0 的整数")
-            return int(raw_value)
-
-        if normalized_key in {
-            "sender_strategy_telegram",
-            "sender_strategy_aiocqhttp",
-            "sender_strategy_weixin_oc",
-            "deduplicate_multi_bot",
-            "platform_shared_data_aiocqhttp",
-        }:
-            lowered = raw_value.lower()
-            if lowered in {"1", "true", "yes", "on", "enable", "enabled"}:
-                return True
-            if lowered in {"0", "false", "no", "off", "disable", "disabled"}:
-                return False
-            raise ValueError(f"{normalized_key} 仅支持布尔值: true/false")
-
-        raise ValueError(f"不支持的插件配置项: {normalized_key}")
-
-    def _is_platform_shared(self, platform_name: str) -> bool:
+    def _is_platform_shared(platform_name: str) -> bool:
         """Check if platform shared data is enabled for the given platform."""
-        if self.config and self.config.platform_shared_data:
+        if cfg and cfg.platform_shared_data:
             return bool(
-                self.config.platform_shared_data.aiocqhttp
+                cfg.platform_shared_data.aiocqhttp
                 if platform_name == "aiocqhttp"
                 else False
             )
@@ -259,7 +154,8 @@ class RSSHubPlugin(Star):
             "目标参数无效。可选：current/here/this 或完整 session 格式 (platform:MessageType:id)",
         )
 
-    def _parse_option_value(self, key: str, value: str):
+    @staticmethod
+    def _parse_option_value(key: str, value: str):
         """解析命令中的选项值并做基础校验"""
         caster = SUB_OPTION_CASTERS.get(key)
         if caster is None:
@@ -270,8 +166,8 @@ class RSSHubPlugin(Star):
             parsed = caster(value)
         except ValueError as ex:
             raise ValueError(f"选项 {key} 需要数字值") from ex
-        if key == "interval" and self.config is not None:
-            minimal = self.config.minimal_interval
+        if key == "interval" and cfg is not None:
+            minimal = cfg.minimal_interval
             if parsed < minimal:
                 raise ValueError(f"interval 不能小于 minimal_interval ({minimal})")
         return parsed
@@ -329,107 +225,6 @@ class RSSHubPlugin(Star):
                     path.unlink(missing_ok=True)
             except OSError as ex:
                 logger.debug("Skip stale export cleanup for %s: %s", path, ex)
-
-    async def _read_uploaded_toml_content(
-        self,
-        event: AstrMessageEvent,
-        *,
-        max_file_size: int,
-    ) -> tuple[str | None, str | None, bool]:
-        """Read TOML content from uploaded file components.
-
-        Returns: (content, error, has_file_component)
-        """
-        has_file_component = False
-        file_messages = event.get_messages()
-        for component in file_messages:
-            if not isinstance(component, File):
-                continue
-
-            has_file_component = True
-            file_path = ""
-            try:
-                file_path = await component.get_file()
-                if not file_path:
-                    continue
-                candidate = Path(file_path)
-                if not candidate.is_file():
-                    continue
-                if candidate.stat().st_size > max_file_size:
-                    return (
-                        None,
-                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
-                        True,
-                    )
-                return candidate.read_text(encoding="utf-8-sig"), None, True
-            except OSError as ex:
-                return None, f"读取上传文件失败：{ex}", True
-            finally:
-                if file_path:
-                    try:
-                        os.unlink(file_path)
-                    except OSError:
-                        pass
-
-        return None, None, has_file_component
-
-    async def _read_import_toml_content(
-        self,
-        event: AstrMessageEvent,
-        import_path: str = "",
-    ) -> tuple[str | None, str | None, bool]:
-        """Read import TOML content from local path or uploaded file.
-
-        Returns: (content, error, should_wait_upload)
-        """
-        if import_path.strip():
-            if not event.is_admin():
-                return (
-                    None,
-                    "出于安全考虑，仅管理员可使用本地路径导入，请改为上传 TOML 文件。",
-                    False,
-                )
-            if self.config is None:
-                return None, "插件配置尚未初始化", False
-
-            path = Path(import_path.strip()).expanduser().resolve()
-            allowed_dir = self.config.local_imports_dir.resolve()
-            allowed_dir.mkdir(parents=True, exist_ok=True)
-
-            try:
-                path.relative_to(allowed_dir)
-            except ValueError:
-                return (
-                    None,
-                    f"仅允许从导入目录读取文件：{allowed_dir}",
-                    False,
-                )
-
-            if not path.is_file():
-                return None, f"导入文件不存在：{path}", False
-            try:
-                if path.stat().st_size > IMPORT_MAX_FILE_SIZE_BYTES:
-                    return (
-                        None,
-                        f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
-                        False,
-                    )
-                return path.read_text(encoding="utf-8-sig"), None, False
-            except OSError as ex:
-                return None, f"读取导入文件失败：{ex}", False
-
-        content, read_err, has_file_component = await self._read_uploaded_toml_content(
-            event,
-            max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
-        )
-        if content:
-            return content, None, False
-        if read_err:
-            return None, read_err, False
-        if has_file_component:
-            return None, "读取上传文件失败", False
-
-        return None, None, True
 
     def _validate_import_record_options(
         self,
@@ -504,19 +299,22 @@ class RSSHubPlugin(Star):
             plugin_name=self.name,
             astrbot_config=dict(self.astrbot_config) if self.astrbot_config else None,
         )
+
+        # 初始化 ConfigProxy 单例
+        await cfg.init(self.config)
         logger.info(f"RSS 插件配置加载完成，数据目录：{self.config.data_dir}")
 
-        if self.config.ffmpeg.video_transcode:
-            ffmpeg_path = ensure_ffmpeg_ready(auto_install=True)
+        if cfg.ffmpeg.video_transcode:
+            ffmpeg_path = FFmpegTool.ensure_ffmpeg_ready(auto_install=True)
             if ffmpeg_path:
                 logger.info("RSS插件 FFmpeg 已就绪: %s", ffmpeg_path)
             else:
                 logger.warning("RSS插件 FFmpeg 未就绪，视频将尝试原始格式发送")
 
-        await init_db(self.config.db_path)
+        await init_db(cfg.db_path)
         logger.info("RSS插件数据库初始化完成")
 
-        self.monitor = Monitor(self.config)
+        self.monitor = Monitor()
         logger.info("RSS监控器初始化完成")
 
         # 设置 bot_self_id provider
@@ -582,54 +380,201 @@ class RSSHubPlugin(Star):
 
     # ===== 命令方法 =====
 
-    @filter.command("sub", alias={"订阅"})
-    async def cmd_sub(self, event: AstrMessageEvent, url: str = "", target: str = ""):
+    @filter.command_group("sub", alias={"订阅"})
+    async def cmd_sub(self, event: AstrMessageEvent, *urls: str, target: str = ""):
         """订阅 RSS 源
 
-        Usage: /sub https://example.com/rss.xml
+        Usage:
+            /sub https://example.com/rss.xml
+            /sub https://rss1.xml https://rss2.xml https://rss3.xml
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
-        result = await subscribe_feed(
-            url=url,
-            target=target,
-            user_id=event.get_sender_id(),
-            platform_name=event.platform_meta.name,
-            timeout=self.config.timeout if self.config else 30,
-            proxy=self.config.proxy if self.config else "",
-            is_platform_shared=self._is_platform_shared(event.platform_meta.name),
-            session_defaults=await self._get_session_defaults(event.unified_msg_origin),
-            parse_target_fn=lambda t: self._parse_target_session(event, t),
-        )
+        # 过滤有效的 RSS URL（以 http 或 https 开头）
+        valid_urls = [
+            u for u in urls if u.startswith(("http://", "https://"))
+        ]
 
-        if result["success"]:
-            yield event.plain_result(result["message"])
+        if not valid_urls:
+            yield event.plain_result(
+                "请提供至少一个有效的 RSS 链接（需以 http 或 https 开头）\n"
+                "使用 /sub state <id> on/off 控制订阅推送启停"
+            )
+            return
+
+        # 单个链接使用原有方式
+        if len(valid_urls) == 1:
+            result = await subscribe_feed(
+                url=valid_urls[0],
+                target=target,
+                user_id=event.get_sender_id(),
+                platform_name=event.platform_meta.name,
+                timeout=cfg.timeout if cfg else 30,
+                proxy=cfg.proxy if cfg else "",
+                is_platform_shared=self._is_platform_shared(event.platform_meta.name),
+                session_defaults=await self._get_session_defaults(event.unified_msg_origin),
+                parse_target_fn=lambda t: self._parse_target_session(event, t),
+            )
+            if result["success"]:
+                yield event.plain_result(result["message"])
+            else:
+                yield event.plain_result(result["error"])
         else:
-            yield event.plain_result(result["error"])
+            # 多个链接使用批量订阅
+            result = await batch_subscribe_feeds(
+                urls=valid_urls,
+                target=target,
+                user_id=event.get_sender_id(),
+                platform_name=event.platform_meta.name,
+                timeout=cfg.timeout if cfg else 30,
+                proxy=cfg.proxy if cfg else "",
+                is_platform_shared=self._is_platform_shared(event.platform_meta.name),
+                session_defaults=await self._get_session_defaults(event.unified_msg_origin),
+                parse_target_fn=lambda t: self._parse_target_session(event, t),
+            )
+
+            # 构建批量结果消息
+            messages = []
+            if result.get("successful"):
+                messages.append(f"✅ 成功订阅 {len(result['successful'])} 个源：")
+                for item in result["successful"]:
+                    messages.append(f"  • {item.get('title', '未知')} (ID: {item.get('sub_id', 0)})")
+
+            if result.get("failed"):
+                messages.append(f"\n❌ 失败 {len(result['failed'])} 个：")
+                for item in result["failed"]:
+                    messages.append(f"  • {item.get('url', '未知')} - {item.get('reason', '未知错误')}")
+
+            if messages:
+                yield event.plain_result("\n".join(messages))
+
+
+    @cmd_sub.command("state")
+    async def cmd_sub_state(self, event: AstrMessageEvent, sub_id: str = "", state: str = ""):
+        """快速启停订阅推送
+
+        Usage:
+            /sub state <订阅ID> on      # 启用推送
+            /sub state <订阅ID> off     # 禁用推送
+            /sub state <订阅ID> true    # 同 on
+            /sub state <订阅ID> false   # 同 off
+        """
+        if not sub_id or not state:
+            yield event.plain_result(
+                "用法: /sub state <订阅ID> on/off\n"
+                "支持: on/off, true/false, yes/no, y/n, 1/0"
+            )
+            return
+
+        from .utils.config_parsers import parse_bool_value
+
+        try:
+            enable = parse_bool_value(state)
+        except ValueError as ex:
+            yield event.plain_result(str(ex))
+            return
+
+        try:
+            sub_id_int = int(sub_id)
+        except ValueError:
+            yield event.plain_result("订阅 ID 必须是数字")
+            return
+
+        from sqlmodel import select
+
+        from .db import Sub, get_session
+
+        async with get_session() as session:
+            stmt = select(Sub).where(
+                Sub.id == sub_id_int,
+                Sub.user_id == event.get_sender_id()
+            )
+            result = await session.execute(stmt)
+            sub = result.scalar_one_or_none()
+
+            if not sub:
+                yield event.plain_result("未找到该订阅或无权限")
+                return
+
+            sub.state = 1 if enable else 0
+            session.add(sub)
+            await session.commit()
+
+            action = "启用" if enable else "禁用"
+            yield event.plain_result(f"已{action}订阅 (ID: {sub_id_int}) 的推送")
 
     @filter.command("unsub", alias={"取消订阅"})
-    async def cmd_unsub(self, event: AstrMessageEvent, sub_id: str = ""):
+    async def cmd_unsub(self, event: AstrMessageEvent, targets: str = ""):
         """取消订阅
 
-        Usage: /unsub <订阅 ID>
+        Usage:
+            /unsub <订阅 ID>
+            /unsub 1 2 3 4
+            /unsub https://example.com/rss.xml
+            /unsub https://rss1.xml https://rss2.xml
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
-        result = await unsubscribe_feed(
-            sub_id=sub_id,
-            user_id=event.get_sender_id(),
-            current_session=event.unified_msg_origin,
-            is_admin=event.is_admin(),
-            platform_name=event.platform_meta.name,
-            is_platform_shared=self._is_platform_shared(event.platform_meta.name),
-        )
+        # 解析目标（支持空格分隔的多个值）
+        target_list = [t.strip() for t in targets.split() if t.strip()]
 
-        if result["success"]:
-            yield event.plain_result(result["message"])
+        if not target_list:
+            yield event.plain_result("请提供至少一个订阅 ID 或 URL")
+            return
+
+        # 单个目标使用原有方式
+        if len(target_list) == 1:
+            target = target_list[0]
+            # 判断是 ID 还是 URL
+            if target.isdigit():
+                result = await unsubscribe_feed(
+                    sub_id=target,
+                    user_id=event.get_sender_id(),
+                    current_session=event.unified_msg_origin,
+                    is_admin=event.is_admin(),
+                    platform_name=event.platform_meta.name,
+                    is_platform_shared=self._is_platform_shared(event.platform_meta.name),
+                )
+            else:
+                # 按 URL 取消
+                result = await batch_unsubscribe_feeds(
+                    targets=[target],
+                    user_id=event.get_sender_id(),
+                    current_session=event.unified_msg_origin,
+                    is_admin=event.is_admin(),
+                    platform_name=event.platform_meta.name,
+                    is_platform_shared=self._is_platform_shared(event.platform_meta.name),
+                )
+
+            if result["success"]:
+                yield event.plain_result(result["message"])
+            else:
+                yield event.plain_result(result["error"])
         else:
-            yield event.plain_result(result["error"])
+            # 多个目标使用批量取消
+            result = await batch_unsubscribe_feeds(
+                targets=target_list,
+                user_id=event.get_sender_id(),
+                current_session=event.unified_msg_origin,
+                is_admin=event.is_admin(),
+                platform_name=event.platform_meta.name,
+                is_platform_shared=self._is_platform_shared(event.platform_meta.name),
+            )
+
+            # 构建批量结果消息
+            messages = []
+            if result.get("successful_count", 0) > 0:
+                messages.append(f"✅ 成功取消 {result['successful_count']} 个订阅")
+
+            if result.get("failed"):
+                messages.append(f"\n❌ 失败 {len(result['failed'])} 个：")
+                for item in result["failed"]:
+                    messages.append(f"  • {item.get('target', '未知')} - {item.get('reason', '未知错误')}")
+
+            if messages:
+                yield event.plain_result("\n".join(messages))
 
     @filter.command("sub_list", alias={"订阅列表"})
     async def cmd_list(
@@ -667,22 +612,63 @@ class RSSHubPlugin(Star):
     async def cmd_sub_test(
         self,
         event: AstrMessageEvent,
-        sub_id: str = "",
-        granularity: str = "latest",
+        target: str = "",
+        start: str = "1",
+        end: str = "",
     ):
-        """管理员手动触发单个订阅测试推送
+        """管理员手动触发测试推送
 
-        Usage: /sub_test <订阅ID> [latest|all|数量|count:数量|first:数量|newest:数量]
+        支持通过订阅ID或URL进行测试推送。
+
+        Usage:
+            /sub_test <订阅ID> [起始编号] [结束编号]
+            /sub_test <URL> [起始编号] [结束编号]
+
+        示例:
+            /sub_test 5              # 测试订阅ID=5，推送条目1（最新）
+            /sub_test 5 1 3          # 测试订阅ID=5，推送条目1,2,3
+            /sub_test https://xxx 2  # 测试URL，只推送条目2
+            /sub_test https://xxx 1 5 # 测试URL，推送条目1-5
+
+        说明:
+            - 条目编号从1开始，1表示最新发布的条目
+            - 只提供1个编号：推送该编号的单个条目
+            - 提供2个编号：推送从起始到结束的所有条目
         """
+        if not target:
+            yield event.plain_result(
+                "请提供订阅ID或RSS链接\n"
+                "用法: /sub_test <订阅ID或URL> [起始编号] [结束编号]\n"
+                "示例: /sub_test 5 1 3  # 推送订阅ID=5的条目1-3"
+            )
+            return
+
+        # 解析条目编号
+        try:
+            start_index = int(start) if start else 1
+        except ValueError:
+            yield event.plain_result("起始条目编号必须是数字")
+            return
+
+        end_index: int | None = None
+        if end:
+            try:
+                end_index = int(end)
+            except ValueError:
+                yield event.plain_result("结束条目编号必须是数字")
+                return
+
         result = await test_subscription(
-            sub_id=sub_id,
-            granularity=granularity,
-            timeout=self.config.timeout if self.config else 30,
-            proxy=self.config.proxy if self.config else "",
-            download_image_before_send=(
-                self.config.download_image_before_send if self.config else True
+            target=target,
+            start_index=start_index,
+            end_index=end_index,
+            target_session=event.unified_msg_origin,
+            platform_name=event.platform_meta.name,
+            timeout=cfg.timeout if cfg else 30,
+            proxy=cfg.proxy if cfg else "",
+            download_media_before_send=(
+                cfg.download_media_before_send if cfg else True
             ),
-            config=self.config,
         )
 
         if result["success"]:
@@ -760,8 +746,11 @@ class RSSHubPlugin(Star):
             yield notice
 
         # 读取导入内容
-        content, read_err, should_wait_upload = await self._read_import_toml_content(
-            event, import_path
+        content, read_err, should_wait_upload = await read_import_toml_content(
+            event,
+            import_path,
+            cfg.local_imports_dir if cfg else Path("."),
+            event.is_admin(),
         )
 
         if content:
@@ -830,7 +819,7 @@ class RSSHubPlugin(Star):
         has_file = False
 
         try:
-            content, read_err, has_file = await self._read_uploaded_toml_content(
+            content, read_err, has_file = await read_uploaded_toml_content(
                 event,
                 max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
             )
@@ -890,18 +879,29 @@ class RSSHubPlugin(Star):
         else:
             yield event.plain_result(result["error"])
 
-    @filter.command("sub_set_default", alias={"设置默认订阅"})
-    async def cmd_set_default_option(
+    @filter.command("sub_set_user", alias={"设置用户"})
+    async def cmd_sub_set_user(
         self, event: AstrMessageEvent, key: str = "", value: str = ""
     ):
-        """设置当前用户默认订阅选项
+        """设置当前用户配置选项
 
-        Usage: /sub_set_default <选项名> <值>
+        Usage: /sub_set_user <选项名> <值>
+
+        布尔值支持: true/false, yes/no, y/n, 1/0, on/off, enable/disable
         """
         async for notice in self._emit_binding_notice_if_needed(event):
             yield notice
 
-        result = await set_user_default_option(
+        if not key or not value:
+            # 显示帮助信息
+            result = await get_user_option(
+                key=None,
+                user_id=event.get_sender_id(),
+            )
+            yield event.plain_result(result["message"])
+            return
+
+        result = await set_user_option(
             key=key,
             value=value,
             user_id=event.get_sender_id(),
@@ -913,25 +913,22 @@ class RSSHubPlugin(Star):
         else:
             yield event.plain_result(result["error"])
 
-    @filter.command("sub_bind", alias={"绑定订阅"})
-    async def cmd_sub_bind(self, event: AstrMessageEvent, target: str = ""):
-        """绑定当前用户默认推送目标
+    @filter.command("sub_get_user", alias={"获取用户"})
+    async def cmd_sub_get_user(self, event: AstrMessageEvent, key: str = ""):
+        """获取当前用户配置选项
 
-        Usage: /sub_bind <private|group|session>
+        Usage:
+            /sub_get_user           # 获取所有配置
+            /sub_get_user <选项名>   # 获取指定配置
         """
-        result = await bind_target(
-            target=target,
+        result = await get_user_option(
+            key=key if key else None,
             user_id=event.get_sender_id(),
-            parse_target_session_fn=lambda t: self._parse_target_session(event, t),
         )
+        yield event.plain_result(result["message"])
 
-        if result["success"]:
-            yield event.plain_result(result["message"])
-        else:
-            yield event.plain_result(result["error"])
-
-    @filter.command("sub_session_default_set", alias={"设置会话默认"})
-    async def cmd_sub_session_default_set(
+    @filter.command("sub_set_session", alias={"设置会话"})
+    async def cmd_sub_set_session(
         self,
         event: AstrMessageEvent,
         key: str = "",
@@ -939,13 +936,22 @@ class RSSHubPlugin(Star):
     ):
         """设置会话级默认选项
 
-        Usage: /sub_session_default_set <key> <value>
+        Usage: /sub_set_session <key> <value>
         """
-        result = await set_session_default(
+        if not key or not value:
+            # 显示帮助信息
+            result = await get_session(
+                session_id=event.unified_msg_origin,
+                key=None,
+                get_session_defaults_fn=self._get_session_defaults,
+            )
+            yield event.plain_result(result["message"])
+            return
+
+        result = await set_session(
             session_id=event.unified_msg_origin,
             key=key,
             value=value,
-            session_default_keys=SESSION_DEFAULT_KEYS,
             parse_option_value_fn=self._parse_option_value,
             set_session_defaults_fn=self._set_session_default,
         )
@@ -955,44 +961,41 @@ class RSSHubPlugin(Star):
         else:
             yield event.plain_result(result["error"])
 
-    @filter.command("sub_session_default_get", alias={"获取会话默认"})
-    async def cmd_sub_session_default_get(self, event: AstrMessageEvent):
+    @filter.command("sub_get_session", alias={"获取会话"})
+    async def cmd_sub_get_session(self, event: AstrMessageEvent, key: str = ""):
         """获取会话级默认选项
 
-        Usage: /sub_session_default_get
+        Usage:
+            /sub_get_session          # 获取所有
+            /sub_get_session <key>    # 获取指定选项
         """
-        result = await get_session_defaults(
+        result = await get_session(
             session_id=event.unified_msg_origin,
+            key=key if key else None,
             get_session_defaults_fn=self._get_session_defaults,
         )
         yield event.plain_result(result["message"])
 
-    @filter.command("rss_conf", alias={"RSS配置"})
-    async def cmd_rss_conf(
-        self, event: AstrMessageEvent, key: str = "", value: str = ""
-    ):
-        """查看或设置插件配置
+    @filter.command("activate_subs", alias={"enable_subs", "启用订阅"})
+    async def cmd_activate_subs(self, event: AstrMessageEvent):
+        """启用当前会话中的所有订阅
 
-        Usage: /rss_conf [key] [value]
+        Usage: /activate_subs
         """
-        if self.config is None:
-            yield event.plain_result("插件配置尚未初始化")
-            return
-
-        normalized_key = key.strip().lower()
-
-        if not normalized_key:
-            yield event.plain_result(get_plugin_config(self.config))
-            return
-
-        result = await set_plugin_config(
-            key=key,
-            value=value,
-            config=self.config,
-            parse_plugin_config_value_fn=self._parse_plugin_config_value,
+        result = await batch_activate_subs(
+            user_id=event.get_sender_id(),
+            current_session=event.unified_msg_origin,
         )
+        yield event.plain_result(result["message"])
 
-        if result.get("success"):
-            yield event.plain_result(result.get("message", "配置已更新"))
-        else:
-            yield event.plain_result(result.get("error", "设置配置失败"))
+    @filter.command("deactivate_subs", alias={"disable_subs", "禁用订阅"})
+    async def cmd_deactivate_subs(self, event: AstrMessageEvent):
+        """禁用当前会话中的所有订阅
+
+        Usage: /deactivate_subs
+        """
+        result = await batch_deactivate_subs(
+            user_id=event.get_sender_id(),
+            current_session=event.unified_msg_origin,
+        )
+        yield event.plain_result(result["message"])

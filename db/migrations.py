@@ -109,6 +109,22 @@ async def ensure_schema_compat(conn) -> None:
         )
         logger.info("迁移: 添加 rsshub_sub.translate_target_lang 列")
 
+    # v1.1.0+ 新增配置继承架构列
+    if not await _has_column("rsshub_user", "use_user_config"):
+        await conn.exec_driver_sql(
+            "ALTER TABLE rsshub_user ADD COLUMN use_user_config INTEGER NOT NULL DEFAULT 0"
+        )
+        logger.info("迁移: 添加 rsshub_user.use_user_config 列")
+
+    if not await _has_column("rsshub_sub", "use_sub_config"):
+        await conn.exec_driver_sql(
+            "ALTER TABLE rsshub_sub ADD COLUMN use_sub_config INTEGER NOT NULL DEFAULT 0"
+        )
+        logger.info("迁移: 添加 rsshub_sub.use_sub_config 列")
+
+    # v1.1.0+ 替换 INHERIT_VALUE (-100) 为实际默认值
+    await _migrate_inherit_values_to_defaults(conn)
+
     # ========== 复杂迁移 ==========
 
     # User ID 类型迁移: INTEGER -> TEXT
@@ -386,3 +402,77 @@ async def _migrate_user_id_to_text(conn) -> None:
         raise
 
     logger.info("user_id 类型迁移完成 (INTEGER -> TEXT)")
+
+
+# noinspection SqlNoDataSourceInspection
+async def _migrate_inherit_values_to_defaults(conn) -> None:
+    """将 INHERIT_VALUE (-100) 替换为实际默认值（v1.1.0+）"""
+    INHERIT_VALUE = -100
+
+    # Sub 表默认值映射
+    SUB_DEFAULTS = {
+        "interval": 5,
+        "notify": 1,
+        "send_mode": 0,
+        "length_limit": 0,
+        "link_preview": 0,
+        "display_author": 0,
+        "display_via": 0,
+        "display_title": 0,
+        "display_entry_tags": -1,
+        "style": 0,
+        "display_media": 0,
+        "translate": 0,
+    }
+
+    # User 表默认值映射
+    USER_DEFAULTS = {
+        "interval": 5,
+        "notify": 1,
+        "send_mode": 0,
+        "length_limit": 0,
+        "link_preview": 0,
+        "display_author": 0,
+        "display_via": 0,
+        "display_title": 0,
+        "display_entry_tags": -1,
+        "style": 0,
+        "display_media": 0,
+        "translate": 0,
+    }
+
+    try:
+        # 检查是否需要迁移（通过检查是否存在 -100 的值）
+        result = await conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM rsshub_sub WHERE notify = ? LIMIT 1",
+            (INHERIT_VALUE,)
+        )
+        count = result.scalar()
+
+        if count == 0:
+            # 没有需要迁移的数据
+            return
+
+        logger.info("开始迁移 INHERIT_VALUE (-100) 到实际默认值...")
+
+        # 迁移 Sub 表
+        for column, default_value in SUB_DEFAULTS.items():
+            await conn.exec_driver_sql(
+                f"UPDATE rsshub_sub SET {column} = ? WHERE {column} = ?",
+                (default_value, INHERIT_VALUE)
+            )
+
+        logger.info("Sub 表默认值迁移完成")
+
+        # 迁移 User 表
+        for column, default_value in USER_DEFAULTS.items():
+            await conn.exec_driver_sql(
+                f"UPDATE rsshub_user SET {column} = ? WHERE {column} = ?",
+                (default_value, INHERIT_VALUE)
+            )
+
+        logger.info("User 表默认值迁移完成")
+
+    except Exception as e:
+        logger.error(f"默认值迁移失败: {e}")
+        raise

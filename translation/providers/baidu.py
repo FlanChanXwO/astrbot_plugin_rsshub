@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import random
-from typing import TYPE_CHECKING
 
 import aiohttp
 
+from ...config import cfg
 from ...utils.log_utils import logger
 from .base import BaseTranslator
-
-if TYPE_CHECKING:
-    from ...config import TranslationConfig
 
 
 class BaiduTranslator(BaseTranslator):
@@ -38,25 +35,24 @@ class BaiduTranslator(BaseTranslator):
 
     def __init__(
         self,
-        config: TranslationConfig | None = None,
         session: aiohttp.ClientSession | None = None,
     ):
-        super().__init__(config, session)
+        super().__init__(session)
         self._appid = ""
         self._key = ""
 
     def _load_credentials(self) -> bool:
-        """Load Baidu API credentials from config.
+        """Load Baidu API credentials from cfg.
 
         Returns:
             True if credentials are valid
         """
-        if self.config is None:
+        if not cfg:
             return False
 
         try:
             # Get baidu credentials from translation_template
-            templates = self.config.translation_template or []
+            templates = cfg.translation.translation_template or []
             for template in templates:
                 if template.get("provider") == "baidu":
                     self._appid = template.get("baidu_appid", "")

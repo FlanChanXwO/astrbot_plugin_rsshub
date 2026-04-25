@@ -1,36 +1,30 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from ...config import cfg
 from .aiocqhttp import AiocqhttpMessageSender
 from .base import MessageSender
 from .qq_official import QQOfficialMessageSender
 from .telegram import TelegramMessageSender
 from .weixin_oc import WeixinOCMessageSender
 
-if TYPE_CHECKING:
-    from ...config import RuntimeConfig
-
 
 def get_sender_for_platform_name(
     platform_name: str | None,
-    config: RuntimeConfig | None = None,
 ) -> type[MessageSender]:
     """根据平台类型名选择最优发送器。
 
     Args:
         platform_name: 平台类型名，如 "telegram", "aiocqhttp" 等
-        config: 插件配置对象，包含 sender_strategies 配置
 
     Returns:
         对应的 MessageSender 子类，用于实现平台特定的发送策略
     """
     normalized = (platform_name or "").strip().lower()
 
-    # Check if config has sender_strategies
-    strategies = config.sender_strategies if config else None
+    # Check if cfg has sender_strategies
+    strategies = cfg.sender_strategies if cfg else None
     if strategies is None:
-        # Use default values when config is not available
+        # Use default values when cfg is not available
         telegram_enabled = True
         aiocqhttp_enabled = True
         qq_official_enabled = True
@@ -38,9 +32,7 @@ def get_sender_for_platform_name(
     else:
         telegram_enabled = strategies.telegram
         aiocqhttp_enabled = strategies.aiocqhttp
-        qq_official_enabled = (
-            strategies.qq_official if hasattr(strategies, "qq_official") else True
-        )
+        qq_official_enabled = strategies.qq_official if hasattr(strategies, "qq_official") else True
         weixin_oc_enabled = strategies.weixin_oc
 
     # Telegram strategy

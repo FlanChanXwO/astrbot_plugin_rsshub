@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from itertools import chain, repeat
-from typing import TYPE_CHECKING, Final
+from typing import Final
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from sqlalchemy.orm import selectinload
@@ -22,7 +22,7 @@ from sqlmodel import select
 from ..api import feed_get
 from ..db import FailedNotification, Feed, MonitorSchedule, Sub, User, get_session
 from ..notifier import Notifier
-from ..utils.locks import feed_lock
+from ..utils.locks import locked
 from ..utils.log_utils import logger
 from ..utils.monitor_helpers import (
     looks_like_bare_domain_scheme,
@@ -36,6 +36,17 @@ from ..utils.monitor_helpers import (
 )
 from ..utils.retry_helper import process_failed_notification
 
+# Deferred import to avoid circular import during module load
+_cfg = None
+
+
+def _get_cfg():
+    global _cfg
+    if _cfg is None:
+        from ..config import cfg
+        _cfg = cfg
+    return _cfg
+
 
 def _ensure_utc_aware(dt: datetime | None) -> datetime | None:
     """Normalize datetime to UTC-aware for safe comparisons."""
@@ -44,10 +55,6 @@ def _ensure_utc_aware(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
-
-
-if TYPE_CHECKING:
-    from ..config import RuntimeConfig
 
 
 class RSSMonitor:
@@ -79,8 +86,7 @@ class RSSMonitor:
         "ref_src",
     }
 
-    def __init__(self, config: RuntimeConfig | None = None):
-        self.config = config
+    def __init__(self):
         self._stat = MonitorStat()
         self._bg_task: asyncio.Task | None = None
         self._subtask_defer_map: Final[defaultdict[int, TaskState]] = defaultdict(
@@ -91,17 +97,19 @@ class RSSMonitor:
         self._cached_tracking_query_params: set[str] | None = None
         self._cached_tracking_query_params_source: tuple[str, ...] | None = None
 
-    def _config_value(self, key: str, default=None):
+    @staticmethod
+    def _config_value(key: str, default=None):
         """Read plugin config with attribute-first fallback to mapping style."""
-        if self.config is None:
+        cfg = _get_cfg()
+        if not cfg:
             return default
 
-        if hasattr(self.config, key):
-            value = getattr(self.config, key)
+        if hasattr(cfg, key):
+            value = getattr(cfg, key)
             if value is not None:
                 return value
 
-        getter = getattr(self.config, "get", None)
+        getter = getattr(cfg, "get", None)
         if callable(getter):
             value = getter(key, default)
             return default if value is None else value
@@ -153,9 +161,8 @@ class RSSMonitor:
                     # Use shared retry helper
                     success, _ = await process_failed_notification(
                         notif,
-                        config=self.config,
-                        timeout_seconds=self.config.timeout if self.config else 30,
-                        proxy=self.config.proxy if self.config else "",
+                        timeout_seconds=_get_cfg().timeout if _get_cfg() else 30,
+                        proxy=_get_cfg().proxy if _get_cfg() else "",
                         max_retries=max_retries,
                     )
 
@@ -298,7 +305,7 @@ class RSSMonitor:
         return next_check is None or now >= next_check
 
     async def _monitor_feed_with_subs(self, session, feed: Feed, subs: list[Sub]):
-        """抓取一次 feed 并按订阅粒度更新调度与通知。"""
+        """抓取一次 feed 并按订阅粒度更新调度与通知（加锁版本）。"""
         if feed.id is None:
             logger.warning(
                 "跳过未持久化的 Feed 监控: link=%s, title=%s, sub_count=%s",
@@ -308,124 +315,100 @@ class RSSMonitor:
             )
             return
 
+        return await self._do_monitor_feed(session, feed, subs)
+
+    @locked("#feed.id")
+    async def _do_monitor_feed(self, session, feed: Feed, subs: list[Sub]):
+        """实际抓取 feed 的逻辑（已加锁）。"""
         # 调度操作延迟到 session commit 之后执行，避免嵌套 session
         schedule_action: tuple[str, str | None] | None = None
         notifier_to_run: Notifier | None = None
 
-        async with feed_lock(feed.id):
-            headers = {
-                "If-Modified-Since": format_datetime(
-                    feed.last_modified or feed.updated_at
-                )
-            }
-            if feed.etag:
-                headers["If-None-Match"] = feed.etag
-
-            wf = await feed_get(
-                feed.link,
-                headers=headers,
-                verbose=False,
-                timeout=self.config.timeout if self.config else None,
-                proxy=self.config.proxy if self.config else "",
+        headers = {
+            "If-Modified-Since": format_datetime(
+                feed.last_modified or feed.updated_at
             )
-            rss_d = wf.rss_d
+        }
+        if feed.etag:
+            headers["If-None-Match"] = feed.etag
 
-            feed_updated_fields: set[str] = set()
+        wf = await feed_get(
+            feed.link,
+            headers=headers,
+            verbose=False,
+            timeout=_get_cfg().timeout if _get_cfg() else None,
+            proxy=_get_cfg().proxy if _get_cfg() else "",
+        )
+        rss_d = wf.rss_d
 
-            try:
-                if wf.status == 304:
+        feed_updated_fields: set[str] = set()
+
+        try:
+            if wf.status == 304:
+                schedule_action = ("success", None)
+                self._stat.cached()
+
+            elif rss_d is None:
+                schedule_action = (
+                    "error",
+                    wf.error.error_name if wf.error else "未知错误",
+                )
+                if self._all_subs_blocked(subs):
+                    feed.state = 0
+                    feed_updated_fields.add("state")
+                self._stat.failed()
+
+            elif not rss_d.entries:
+                schedule_action = ("success", None)
+                self._stat.empty()
+
+            else:
+                if (etag := wf.etag) != feed.etag:
+                    feed.etag = etag
+                    feed_updated_fields.add("etag")
+
+                title = rss_d.feed.get("title", "")
+                if title and title != feed.title:
+                    feed.title = title[:1024]
+                    feed_updated_fields.add("title")
+
+                old_groups = self._migrate_flat_hashes(feed.entry_hashes or [])
+                fetched_entries = len(rss_d.entries)
+                new_groups, updated_entries = self._calculate_update(
+                    old_groups,
+                    rss_d.entries,
+                    feed_link=feed.link,
+                )
+                dedup_new_count = len(updated_entries)
+                dedup_skipped_count = max(0, fetched_entries - dedup_new_count)
+                merged = self._merge_hash_history(
+                    old_groups,
+                    new_groups,
+                    fetched_entries,
+                )
+
+                if not old_groups:
+                    feed.last_modified = wf.last_modified
+                    feed.entry_hashes = merged
+                    feed_updated_fields.update({"last_modified", "entry_hashes"})
                     schedule_action = ("success", None)
-                    self._stat.cached()
-
-                elif rss_d is None:
-                    schedule_action = (
-                        "error",
-                        wf.error.error_name if wf.error else "未知错误",
-                    )
-                    if self._all_subs_blocked(subs):
-                        feed.state = 0
-                        feed_updated_fields.add("state")
-                    self._stat.failed()
-
-                elif not rss_d.entries:
-                    schedule_action = ("success", None)
-                    self._stat.empty()
-
-                else:
-                    if (etag := wf.etag) != feed.etag:
-                        feed.etag = etag
-                        feed_updated_fields.add("etag")
-
-                    title = rss_d.feed.get("title", "")
-                    if title and title != feed.title:
-                        feed.title = title[:1024]
-                        feed_updated_fields.add("title")
-
-                    old_groups = self._migrate_flat_hashes(feed.entry_hashes or [])
-                    fetched_entries = len(rss_d.entries)
-                    new_groups, updated_entries = self._calculate_update(
-                        old_groups,
-                        rss_d.entries,
-                        feed_link=feed.link,
-                    )
-                    dedup_new_count = len(updated_entries)
-                    dedup_skipped_count = max(0, fetched_entries - dedup_new_count)
-                    merged = self._merge_hash_history(
-                        old_groups,
-                        new_groups,
-                        fetched_entries,
-                    )
-
-                    if not old_groups:
-                        feed.last_modified = wf.last_modified
-                        feed.entry_hashes = merged
-                        feed_updated_fields.update({"last_modified", "entry_hashes"})
-                        schedule_action = ("success", None)
-                        if self._config_value("bootstrap_skip_history", True):
-                            self._stat.not_updated()
-                            logger.info(
-                                "Feed 首次初始化完成（不推送历史内容）: "
-                                "%s, fetched_entries=%s, bootstrap_skipped_count=%s",
-                                feed.link,
-                                fetched_entries,
-                                fetched_entries,
-                            )
-                        else:
-                            logger.info(
-                                "Feed 首次初始化推送历史内容："
-                                "%s, fetched_entries=%s, bootstrap_sent_count=%s",
-                                feed.link,
-                                fetched_entries,
-                                dedup_new_count,
-                            )
-                            notifier_to_run = await self._build_feed_notifier(
-                                feed=feed,
-                                subs=subs,
-                                entries=updated_entries,
-                            )
-                            self._log_feed_polling_stats(
-                                feed=feed,
-                                fetched_entries=fetched_entries,
-                                dedup_new_count=dedup_new_count,
-                                dedup_skipped_count=dedup_skipped_count,
-                                notifier=notifier_to_run,
-                            )
-                            self._stat.updated()
-
-                    elif not updated_entries:
-                        if merged != old_groups:
-                            feed.entry_hashes = merged
-                            feed_updated_fields.add("entry_hashes")
-                        schedule_action = ("success", None)
+                    if self._config_value("bootstrap_skip_history", True):
                         self._stat.not_updated()
-
+                        logger.info(
+                            "Feed 首次初始化完成（不推送历史内容）: "
+                            "%s, fetched_entries=%s, bootstrap_skipped_count=%s",
+                            feed.link,
+                            fetched_entries,
+                            fetched_entries,
+                        )
                     else:
                         logger.info(
-                            f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
+                            "Feed 首次初始化推送历史内容："
+                            "%s, fetched_entries=%s, bootstrap_sent_count=%s",
+                            feed.link,
+                            fetched_entries,
+                            dedup_new_count,
                         )
-                        feed.last_modified = wf.last_modified
-                        feed.entry_hashes = merged
-                        feed_updated_fields.update({"last_modified", "entry_hashes"})
                         notifier_to_run = await self._build_feed_notifier(
                             feed=feed,
                             subs=subs,
@@ -438,13 +421,41 @@ class RSSMonitor:
                             dedup_skipped_count=dedup_skipped_count,
                             notifier=notifier_to_run,
                         )
-                        schedule_action = ("success", None)
                         self._stat.updated()
-            finally:
-                if feed_updated_fields:
-                    session.add(feed)
-                    await session.commit()
-                    logger.debug(f"Feed {feed.id} 已更新字段: {feed_updated_fields}")
+
+                elif not updated_entries:
+                    if merged != old_groups:
+                        feed.entry_hashes = merged
+                        feed_updated_fields.add("entry_hashes")
+                    schedule_action = ("success", None)
+                    self._stat.not_updated()
+
+                else:
+                    logger.info(
+                        f"Feed已更新: {feed.link} ({len(updated_entries)}条新内容)"
+                    )
+                    feed.last_modified = wf.last_modified
+                    feed.entry_hashes = merged
+                    feed_updated_fields.update({"last_modified", "entry_hashes"})
+                    notifier_to_run = await self._build_feed_notifier(
+                        feed=feed,
+                        subs=subs,
+                        entries=updated_entries,
+                    )
+                    self._log_feed_polling_stats(
+                        feed=feed,
+                        fetched_entries=fetched_entries,
+                        dedup_new_count=dedup_new_count,
+                        dedup_skipped_count=dedup_skipped_count,
+                        notifier=notifier_to_run,
+                    )
+                    schedule_action = ("success", None)
+                    self._stat.updated()
+        finally:
+            if feed_updated_fields:
+                session.add(feed)
+                await session.commit()
+                logger.debug(f"Feed {feed.id} 已更新字段: {feed_updated_fields}")
 
         if notifier_to_run is not None:
             try:
@@ -510,7 +521,7 @@ class RSSMonitor:
         ordered_entries = list(reversed(entries))
 
         # Apply history entry limit if configured
-        history_limit = self.config.history_entry_limit if self.config else 10
+        history_limit = _get_cfg().history_entry_limit if _get_cfg() else 10
         if history_limit > 0:
             # Sort by published_parsed (newest first) and limit
             def _entry_sort_key(entry):
@@ -545,7 +556,7 @@ class RSSMonitor:
             fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
 
         dedup_before_sub_count = len(fanout_subs)
-        if self.config and self.config.deduplicate_multi_bot:
+        if _get_cfg() and _get_cfg().deduplicate_multi_bot:
             fanout_subs = self._deduplicate_session_subscriptions(fanout_subs)
         fanout_sub_count = len(fanout_subs)
 
@@ -553,12 +564,11 @@ class RSSMonitor:
             feed=feed,
             subs=fanout_subs,
             entries=ordered_entries,
-            timeout_seconds=self.config.timeout if self.config else 30,
-            proxy=self.config.proxy if self.config else "",
+            timeout_seconds=_get_cfg().timeout if _get_cfg() else 30,
+            proxy=_get_cfg().proxy if _get_cfg() else "",
             download_media_before_send=(
-                self.config.download_image_before_send if self.config else True
+                _get_cfg().download_media_before_send if _get_cfg() else True
             ),
-            config=self.config,
         )
         notifier.stats.setdefault("fanout_sub_count", fanout_sub_count)
         notifier.stats.setdefault("dedup_before_sub_count", dedup_before_sub_count)
@@ -651,14 +661,13 @@ class RSSMonitor:
                             feed=feed,
                             subs=subs,
                             reason=reason,
-                            timeout_seconds=self.config.timeout if self.config else 30,
-                            proxy=self.config.proxy if self.config else "",
+                            timeout_seconds=_get_cfg().timeout if _get_cfg() else 30,
+                            proxy=_get_cfg().proxy if _get_cfg() else "",
                             download_media_before_send=(
-                                self.config.download_image_before_send
-                                if self.config
+                                _get_cfg().download_media_before_send
+                                if _get_cfg()
                                 else True
                             ),
-                            config=self.config,
                         ).notify_all()
                         return
 
@@ -693,12 +702,11 @@ class RSSMonitor:
                     feed=sub.feed,
                     subs=[sub],
                     reason=reason,
-                    timeout_seconds=self.config.timeout if self.config else 30,
-                    proxy=self.config.proxy if self.config else "",
+                    timeout_seconds=_get_cfg().timeout if _get_cfg() else 30,
+                    proxy=_get_cfg().proxy if _get_cfg() else "",
                     download_media_before_send=(
-                        self.config.download_image_before_send if self.config else True
+                        _get_cfg().download_media_before_send if _get_cfg() else True
                     ),
-                    config=self.config,
                 ).notify_all()
                 await MonitorSchedule.upsert(
                     sub.id,
@@ -735,7 +743,7 @@ class RSSMonitor:
         if user.interval and user.interval > 0:
             return user.interval
 
-        plugin_default = self.config.default_interval if self.config else 10
+        plugin_default = _get_cfg().default_interval if _get_cfg() else 10
         return max(1, int(plugin_default))
 
     def _calculate_update(

@@ -78,10 +78,6 @@ class SetSubscriptionOptionResult(CommandResult):
     """Set subscription option command result."""
 
 
-class BindTargetResult(CommandResult):
-    """Bind target command result."""
-
-
 class GetFailedQueueStatusResult(CommandResult):
     """Get failed queue status command result."""
 
@@ -90,6 +86,20 @@ class GetFailedQueueStatusResult(CommandResult):
 
 class TestSubscriptionResult(CommandResult):
     """Test subscription command result."""
+
+
+class BatchSubscribeResult(CommandResult):
+    """Batch subscribe command result."""
+
+    successful: list[dict[str, object]]  # 成功的订阅信息列表 [{sub_id, title, url}]
+    failed: list[dict[str, str]]  # 失败的信息列表 [{url, reason}]
+
+
+class BatchUnsubscribeResult(CommandResult):
+    """Batch unsubscribe command result."""
+
+    successful_count: int
+    failed: list[dict[str, str]]  # 失败的信息列表 [{target, reason}]
 
 
 T = TypeVar("T", bound=CommandResult)

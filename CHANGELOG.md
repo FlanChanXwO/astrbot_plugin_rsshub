@@ -2,6 +2,78 @@
 
 ## [1.1.0] - 2026-04-23
 
+### Breaking Changes
+
+- **命令更名**:
+  - `/sub_set_default` → `/sub_set_user` (设置用户配置)
+  - `/sub_session_default_set` → `/sub_set_session` (设置会话默认)
+  - `/sub_session_default_get` → `/sub_get_session` (获取会话默认)
+  - `/sub_bind` → **已删除** (功能已整合)
+
+- **`/sub_test` 命令重构**（破坏性变更）：
+  - 参数格式完全改变：从粒度模式 (`latest`/`all`/`<数量>`) 改为条目编号范围
+  - 新格式：`/sub_test <目标> [起始编号] [结束编号]`
+  - 支持通过 URL 直接测试（无需先订阅）
+  - 条目编号从 1 开始（1 = 最新发布的条目）
+  - 示例：`/sub_test 5 1 3`（推送订阅ID=5的条目1-3）
+  - URL测试示例：`/sub_test https://example.com/rss.xml 1 5`
+  - URL测试时使用全局配置
+
+- **配置管理架构重构**：
+  - 引入 ConfigProxy 单例模式，全局配置通过 `cfg` 对象统一管理
+  - 所有模块通过 `from ..config import cfg` 访问配置，无需层层传递
+  - 支持配置热重载 (`cfg.reload()`) 和重载钩子机制 (`register_reload_hook`)
+  - 细粒度写锁保护，单配置项修改 (`cfg.set_value()`) 线程安全
+
+- **命令调整**：
+  - 移除 `/rss_conf` 命令，全局配置请前往 AstrBot 管理面板 设置
+
+### Added
+
+- **三层配置继承架构**:
+  - Sub 表新增 `use_sub_config` 字段：控制是否使用订阅自身配置
+  - User 表新增 `use_user_config` 字段：控制是否使用用户自身配置
+  - 默认行为：订阅 → 继承用户 → 继承全局（开箱即用）
+  - 新增命令：
+    - `/sub_set_user` / `/sub_get_user` - 用户配置管理
+    - `/sub_set_session` / `/sub_get_session` - 会话默认管理
+  - 布尔值支持多种格式：true/false, yes/no, y/n, 1/0, on/off, enable/disable
+
+- **批量操作命令**:
+  - `/sub <url1> [url2...]` - 批量订阅多个 RSS 源
+  - `/unsub <id1> [id2...]` - 批量取消订阅（支持 ID 或 URL）
+  - `/activate_subs` (别名 `/enable_subs`) - 启用当前会话所有订阅
+  - `/deactivate_subs` (别名 `/disable_subs`) - 禁用当前会话所有订阅
+
+- **订阅状态管理**:
+  - `/sub state <id> on/off` - 快速启停单个订阅推送
+  - 支持多种布尔值格式
+
+- **RSS 内容自动翻译功能** (Translation Support):
+  - 新增 Google 翻译支持（免费，开箱即用）
+  - 新增百度翻译支持（需申请 AppID 和密钥）
+  - 支持目标语言：`zh-CN`(简体中文)、`zh-TW`(繁体中文)、`en`(英文)、`ja`(日文)
+  - 支持标题和正文分别控制是否翻译
+  - 支持显示原文与译文（格式：`原文 + 
+--【译文】--
+ + 译文`）
+  - 智能语言检测，避免无意义翻译（可强制翻译跳过检测）
+  - 翻译结果缓存，减少重复 API 调用，缓存跟随条目淘汰策略
+  - 按订阅级翻译控制，可通过 `/sub_set` 为特定订阅单独配置
+
+- **翻译提供商扩展架构**:
+  - 新增 `BaseTranslator` 抽象基类，便于后续添加更多翻译提供商
+  - 提供 `register_provider()` 函数支持动态注册新提供商
+  - 完整的提供商开发文档 (`translation/providers/README.md`)
+
+- **数据库迁移管理优化**:
+  - 将数据库迁移逻辑抽取到独立的 `db/migrations.py` 文件
+  - 新增 `TranslationCache` 表用于存储翻译缓存
+  - 新增 `translate` 和 `translate_target_lang` 字段到 User 和 Sub 表
+  - 新增 `use_sub_config` 和 `use_user_config` 字段
+  - v1.1.0 迁移：将 INHERIT_VALUE (-100) 替换为实际默认值
+  - 完善数据库迁移逻辑，支持旧版本平滑升级
+
 ### Added
 
 - **RSS 内容自动翻译功能** (Translation Support):
@@ -34,6 +106,39 @@
 - `post_formatter.py` 集成翻译逻辑，在格式化阶段处理翻译
 - 更新配置架构 `_conf_schema.json`，添加翻译相关配置项
 - 简化 `/sub` 命令目标参数：移除冗余的 `private` 和 `group` 参数
+
+### Refactored
+
+- **工具模块重构为 OOP 风格**：
+  - `utils/ffmpeg_helper.py` → `FFmpegTool` 类（静态方法）
+    - 删除无效的 `imageio_ffmpeg` try-except 导入
+    - 修复 `process` 变量未赋值警告（提前初始化为 `None`）
+    - 细化异常捕获：`except Exception` → `except (OSError, asyncio.TimeoutError, ValueError)`
+    - 删除 `process.kill()/wait()` 的冗余异常捕获
+    - 函数名变更：`transcode_video_to_mp4_for_qq()` → `transcode_to_mp4()`
+  - `utils/aio_helper.py` → `utils/concurrent.py`
+    - 删除旧文件，功能合并到 `concurrent.py`
+    - 提供 `AsyncTool` 静态方法类和装饰器
+  - `utils/locks.py` → 新增 `locked()` 装饰器（基于 SpEL 表达式）
+    - 支持 `@locked("#feed.id")`、`@locked("#user_id")` 等语法
+    - 保留向后兼容的便捷函数
+
+### Fixed
+
+- **修复批量操作 SQLAlchemy Greenlet 错误**：
+  - `batch_activate_subs` / `batch_deactivate_subs` 使用 `selectinload(Sub.feed)` 预加载 feed
+  - 避免访问 `sub.feed.title` 时触发懒加载导致的 greenlet 错误
+- **TranslationManager 单例化**：
+  - 避免每次通知都创建新的 TranslationManager 和 aiohttp.ClientSession
+  - 减少资源开销，提高性能
+- **修复 `sub_list` 显示问题**：
+  - `Sub.get_by_user()` 现在返回所有订阅（包括禁用状态）
+  - 添加会话状态统计：显示总订阅数、启用数、禁用数
+  - 每个订阅前添加状态图标（✓ 启用 / ✗ 禁用）
+- **修复 `sub_test` URL 模式推送目标缺失**：
+  - 创建临时 Sub 对象时添加 `target_session` 字段
+- **修复命令组语法**：
+  - `@filter.command(cmd_sub, sub_command="state")` → `@cmd_sub.command("state")`
 
 ## [1.0.20] - 2026-04-20
 

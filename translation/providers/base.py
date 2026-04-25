@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import aiohttp
-    from ...config import RuntimeConfig
 
 
 class BaseTranslator(ABC):
@@ -25,16 +24,13 @@ class BaseTranslator(ABC):
 
     def __init__(
         self,
-        config: RuntimeConfig | None = None,
         session: aiohttp.ClientSession | None = None,
     ):
         """Initialize the translator.
 
         Args:
-            config: Plugin configuration for loading provider-specific settings
             session: Shared aiohttp ClientSession with proxy/timeout configured
         """
-        self.config = config
         self._session = session
 
     @abstractmethod

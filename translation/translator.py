@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING
 
 import aiohttp
 
+from ..config import cfg
 from ..utils.log_utils import logger
 from .language_detect import should_translate
 from .providers.baidu import BaiduTranslator
 from .providers.base import BaseTranslator
 from .providers.google import GoogleTranslator
-
-if TYPE_CHECKING:
-    from ..config import TranslationConfig
-
 
 # Registry of available translation providers
 _PROVIDER_REGISTRY: dict[str, type[BaseTranslator]] = {
@@ -57,45 +53,62 @@ def get_available_providers() -> list[str]:
 
 
 class TranslationManager:
-    """Manages text translation with caching support."""
+    """Manages text translation with caching support.
+
+    使用单例模式，避免重复创建实例和 session。
+    """
 
     # Separator for translated content display
     TRANSLATION_SEPARATOR = "\n--【译文】--\n"
     TRANSLATION_FAILED_MARKER = "\n--【译文】--\n（翻译失败）"
 
-    def __init__(
-        self,
-        config: TranslationConfig | None = None,
-        session: aiohttp.ClientSession | None = None,
-    ):
-        self.config = config
+    # 单例实例
+    _instance: TranslationManager | None = None
+    _initialized: bool = False
+
+    def __new__(cls, session: aiohttp.ClientSession | None = None) -> TranslationManager:
+        """创建或返回单例实例。"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, session: aiohttp.ClientSession | None = None):
+        """初始化（仅第一次创建时执行）。"""
+        # 避免重复初始化
+        if TranslationManager._initialized:
+            return
+
+        TranslationManager._initialized = True
         self._session = session
         self._provider: BaseTranslator | None = None
-        self._cache_enabled = True
-        self._target_lang = "zh-CN"
-        self._force_translate = False
-        self._translate_title = True
-        self._translate_content = True
-        self._display_original = False
         self._load_config()
+        logger.info("TranslationManager: 单例实例已创建")
 
     def _load_config(self) -> None:
-        """Load translation configuration."""
+        """Load translation configuration from cfg."""
         logger.debug("TranslationManager: Loading configuration...")
-        if self.config is None:
-            logger.debug("TranslationManager: Config is None, skipping")
+        if not cfg:
+            logger.debug("TranslationManager: cfg not initialized, using defaults")
+            self._target_lang = "zh-CN"
+            self._force_translate = False
+            self._translate_title = True
+            self._translate_content = True
+            self._display_original = False
+            self._cache_enabled = True
+            self._init_provider("google")
             return
 
         try:
-            # Load from TranslationConfig object
-            logger.debug(f"TranslationManager: Config type={type(self.config)}")
+            # Load from cfg.translation
+            trans_config = cfg.translation
+            logger.debug("TranslationManager: Loading from cfg.translation")
 
-            self._target_lang = self.config.target_lang
-            self._force_translate = self.config.force_translate
-            self._translate_title = self.config.translate_title
-            self._translate_content = self.config.translate_content
-            self._display_original = self.config.display_orignal_content
-            self._cache_enabled = self.config.cache_translations
+            self._target_lang = trans_config.target_lang
+            self._force_translate = trans_config.force_translate
+            self._translate_title = trans_config.translate_title
+            self._translate_content = trans_config.translate_content
+            self._display_original = trans_config.display_orignal_content
+            self._cache_enabled = trans_config.cache_translations
 
             logger.debug(
                 f"TranslationManager: Settings loaded - "
@@ -106,7 +119,7 @@ class TranslationManager:
             )
 
             # Initialize provider
-            self._init_provider(self.config.provider)
+            self._init_provider(trans_config.provider)
 
         except Exception as e:
             logger.warning(f"Failed to load translation config: {e}", exc_info=True)
@@ -126,7 +139,7 @@ class TranslationManager:
             provider_name = "google"
 
         provider_class = _PROVIDER_REGISTRY[provider_name]
-        self._provider = provider_class(self.config, self._session)
+        self._provider = provider_class(self._session)
 
         # Check if provider is properly configured
         if not self._provider.is_configured():

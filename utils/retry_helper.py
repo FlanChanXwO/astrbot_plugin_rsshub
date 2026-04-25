@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from ..db import FailedNotification
 from ..notifier.senders import (
     ChannelInfo,
@@ -12,14 +10,10 @@ from ..notifier.senders import (
 )
 from .log_utils import logger
 
-if TYPE_CHECKING:
-    from ..config import RuntimeConfig
-
 
 async def process_failed_notification(
     notif: FailedNotification,
     *,
-    config: RuntimeConfig | None = None,
     timeout_seconds: int = 30,
     proxy: str = "",
     max_retries: int = 3,
@@ -28,10 +22,9 @@ async def process_failed_notification(
 
     Args:
         notif: The failed notification to retry
-        config: Plugin configuration
         timeout_seconds: Request timeout for sender
         proxy: Proxy URL for sender
-        max_retries: Maximum retry count (from config)
+        max_retries: Maximum retry count (from cfg)
 
     Returns:
         Tuple of (success: bool, error_detail: str | None)
@@ -57,7 +50,7 @@ async def process_failed_notification(
         if not sender_platform_name and notif.target_session:
             sender_platform_name = notif.target_session.split(":", 1)[0]
 
-        sender = get_sender_for_platform_name(sender_platform_name, config)
+        sender = get_sender_for_platform_name(sender_platform_name)
         sender.configure_runtime(
             timeout_seconds=timeout_seconds,
             proxy=proxy,
@@ -103,7 +96,6 @@ async def process_failed_notification(
 async def process_failed_notifications_batch(
     notifications: list[FailedNotification],
     *,
-    config: RuntimeConfig | None = None,
     timeout_seconds: int = 30,
     proxy: str = "",
     max_retries: int = 3,
@@ -112,7 +104,6 @@ async def process_failed_notifications_batch(
 
     Args:
         notifications: List of failed notifications to retry
-        config: Plugin configuration
         timeout_seconds: Request timeout for sender
         proxy: Proxy URL for sender
         max_retries: Maximum retry count (for logging exhausted notifications)
@@ -125,7 +116,6 @@ async def process_failed_notifications_batch(
     for notif in notifications:
         success, _ = await process_failed_notification(
             notif,
-            config=config,
             timeout_seconds=timeout_seconds,
             proxy=proxy,
             max_retries=max_retries,

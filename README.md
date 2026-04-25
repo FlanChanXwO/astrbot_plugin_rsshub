@@ -116,6 +116,8 @@
 
 ## 🛠️ 配置项
 
+> **注意**：v1.1.0 版本起，全局配置请前往 AstrBot 管理面板的「配置」页面或 WebUI 进行设置，不再支持通过 `/rss_conf` 命令修改。
+
 在 AstrBot 管理面板的「配置」页面，找到 `RSSHub` 插件配置：
 
 ### 网络配置
@@ -232,78 +234,82 @@
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
-| `/sub <RSS 链接> [目标]` | `/订阅` | 新增订阅，目标可选 `current`/`here`/`this`（当前会话）或完整 session 格式（跨平台推送） |
-| `/unsub <订阅 ID>` | `/取消订阅` | 删除单个订阅 |
+| `/sub <RSS 链接> [链接2...]` | `/订阅` | 新增订阅，支持批量订阅多个 RSS 源 |
+| `/sub state <ID> on/off` | - | 快速启停订阅推送（子命令） |
+| `/unsub <ID/URL...>` | `/取消订阅` | 取消订阅，支持批量（ID 或 URL） |
 | `/unsub_all [global]` | `/取消全部订阅` | 删除订阅；默认仅清除当前会话，`global` 清除所有会话（需管理员） |
 | `/sub_list [scope] [page] [page_size]` | `/订阅列表` | 查看当前用户订阅列表（管理员可用 `all` 查看所有会话） |
 | `/sub_export [all]` | `/导出订阅` | 导出订阅到 TOML 文件，默认当前会话，`all`=所有订阅（管理员） |
 | `/sub_import [文件路径]` | `/导入订阅` | 从 TOML 文件导入订阅 |
+| `/activate_subs` | `/enable_subs`, `/启用订阅` | 启用当前会话所有订阅 |
+| `/deactivate_subs` | `/disable_subs`, `/禁用订阅` | 禁用当前会话所有订阅 |
 
-**`/sub` 命令目标参数说明：**
-
-| 参数 | 效果 | 示例 |
-|------|------|------|
-| 不传 | 使用当前会话 | `/sub https://example.com/rss.xml` |
-| `current`/`here`/`this` | 显式使用当前会话 | `/sub https://example.com/rss.xml current` |
-| 完整 session 格式 | 跨平台推送到指定会话 | `/sub https://example.com/rss.xml telegram:GroupMessage:123456` |
-
-> **跨平台推送示例：** 在 QQ 群中执行 `/sub https://example.com/rss.xml telegram:GroupMessage:987654`，RSS 更新会推送到 Telegram 群组。
+**布尔值格式支持**：所有命令中的布尔值参数支持以下格式：`true`/`false`, `yes`/`no`, `y`/`n`, `1`/`0`, `on`/`off`, `enable`/`disable`
 
 ### 订阅设置
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
 | `/sub_set <订阅 ID> <选项> <值>` | `/设置订阅` | 设置订阅选项 |
-| `/sub_set_default <选项> <值>` | `/设置默认订阅` | 设置用户默认选项 |
-| `/sub_session_default_set <key> <value>` | `/设置会话默认` | 设置会话级订阅默认项（新订阅自动继承） |
-| `/sub_session_default_get` | `/获取会话默认` | 查看当前会话默认项 |
-| `/sub_bind <private\|group\|session>` | `/绑定订阅` | 绑定当前用户默认推送目标 |
+| `/sub_set_user [选项] [值]` | `/设置用户` | 设置用户默认选项（无参数显示帮助） |
+| `/sub_get_user [选项]` | `/获取用户` | 查看用户配置（无参数显示所有） |
+| `/sub_set_session [key] [value]` | `/设置会话` | 设置会话级默认项（无参数显示帮助） |
+| `/sub_get_session [key]` | `/获取会话` | 查看会话默认项（无参数显示所有） |
 
-### 插件配置
+### 配置继承架构
 
-| 命令 | 中文别名 | 说明 |
-|------|---------|------|
-| `/rss_conf` | `/RSS 配置` | 查看当前插件配置 |
-| `/rss_conf <key>` | `/RSS 配置 <key>` | 查看指定配置项 |
-| `/rss_conf <key> <value>` | `/RSS 配置 <key> <value>` | 设置指定配置项 |
+v1.1.0 起引入三层配置继承体系：
+
+1. **订阅级配置** (`/sub_set`): 通过 `use_sub_config` 控制
+   - `true`: 使用 `/sub_set` 设置的独立配置
+   - `false` (默认): 继承用户级配置
+
+2. **用户级配置** (`/sub_set_user`): 通过 `use_user_config` 控制
+   - `true`: 使用 `/sub_set_user` 设置的用户配置
+   - `false` (默认): 继承全局配置
+
+3. **全局配置**: AstrBot JSON 配置（默认）
+   - 新用户开箱即用，无需额外配置
+
+**示例**：
+```bash
+# 让订阅使用独立配置
+/sub_set 1 use_sub_config true
+
+# 让用户使用独立配置
+/sub_set_user use_user_config true
+
+# 查看配置来源
+/sub_get_user          # 查看用户配置
+/sub_get_session       # 查看会话默认
+```
 
 ### 管理命令
 
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
-| `/sub_test <订阅 ID> [粒度]` | `/测试订阅` | 管理员手动触发测试推送，粒度可选 `latest`/`all`/`<数量>`/`first:<数量>`/`newest:<数量>` |
+| `/sub_test <目标> [起始] [结束]` | `/测试订阅` | 管理员测试推送。目标可以是订阅ID或RSS URL；条目编号从1开始（1=最新） |
 | `/rsshelp` | `/RSS 帮助` | 查看帮助 |
 
-### 可配置项
+**`/sub_test` 命令示例：**
 
-通过 `/rss_conf <key> <value>` 命令可配置以下选项：
+| 命令 | 说明 |
+|------|------|
+| `/sub_test 5` | 测试订阅ID=5，推送条目1（最新） |
+| `/sub_test 5 1 3` | 测试订阅ID=5，推送条目1、2、3 |
+| `/sub_test https://example.com/rss.xml 2` | 测试URL，只推送条目2 |
+| `/sub_test https://example.com/rss.xml 1 5` | 测试URL，推送条目1-5 |
 
-| 配置项 | 类型 | 说明 |
-|--------|------|------|
-| `proxy` | 字符串 | 代理地址 |
-| `rsshub_base_url` | 字符串 | RSSHub 基础 URL |
-| `default_interval` | 整数 | 默认监控间隔（分钟） |
-| `minimal_interval` | 整数 | 最小监控间隔（分钟） |
-| `timeout` | 整数 | 请求超时（秒） |
-| `download_image_before_send` | 布尔值 | 发送前下载图片 |
-| `bootstrap_skip_history` | 布尔值 | 首轮跳过历史条目 |
-| `debug_payload` | 布尔值 | 调试模式 |
-| `failed_queue_capacity` | 整数 | 失败队列容量 |
-| `failed_queue_max_retries` | 整数 | 失败队列最大重试次数 |
-| `sender_strategy_telegram` | 布尔值 | Telegram 发送策略 |
-| `sender_strategy_aiocqhttp` | 布尔值 | OneBot 发送策略 |
-| `sender_strategy_weixin_oc` | 布尔值 | 企业微信发送策略 |
-| `deduplicate_multi_bot` | 布尔值 | 单会话多 BOT 去重 |
-| `platform_shared_data_aiocqhttp` | 布尔值 | aiocqhttp 平台共享数据 |
-
-> 说明：监控主循环没有固定"每周期条目上限"。实际可见推送量受 RSS 源更新量、失败队列容量（`failed_queue_capacity`）、最大重试次数（`failed_queue_max_retries`）以及平台发送限流共同影响。
+> **说明：** 使用URL测试时，将使用全局配置进行推送。
 
 ### 订阅选项说明
 
-**订阅级选项：**
+**订阅级选项（通过 `/sub_set` 设置）：**
 
 | 选项 | 类型 | 说明 |
 |------|------|------|
+| `use_sub_config` | bool | 是否使用订阅独立配置（默认 false） |
+| `state` | 0/1 | 推送状态：0=禁用, 1=启用 |
 | `notify` | 0/1 | 是否通知 |
 | `send_mode` | -1/0/2 | -1(仅链接)/0(自动)/2(直接消息) |
 | `length_limit` | 正整数 | 0 表示不限制 |
@@ -314,9 +320,11 @@
 | `display_entry_tags` | -1~1 | 显示标签 |
 | `style` | 0/1 | 样式 (RSStT/flowerss) |
 | `display_media` | -1/0 | 显示媒体 |
-| `interval` | 正整数 | 监控间隔（分钟） |
+| `interval` | 正整数 | 监控间隔（分钟，默认 5） |
 | `title` | 字符串 | 订阅标题 |
 | `tags` | 字符串 | 标签 |
+| `translate` | 0/1 | 翻译开关 |
+| `translate_target_lang` | 字符串 | 翻译目标语言 |
 
 ---
 

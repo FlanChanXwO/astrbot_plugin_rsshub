@@ -9,6 +9,7 @@ from datetime import datetime
 
 import aiohttp
 
+from ..config import cfg
 from ..db import FailedNotification, Feed, Sub, User
 from ..parsing import get_formatter_for_platform, parse_entry
 from ..translation import TranslationManager
@@ -55,7 +56,6 @@ class Notifier:
         timeout_seconds: int = 30,
         proxy: str = "",
         download_media_before_send: bool = True,
-        config: object | None = None,
     ):
         self.feed = feed
         self.subs = subs or []
@@ -64,7 +64,6 @@ class Notifier:
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.proxy = proxy or ""
         self.download_media_before_send = bool(download_media_before_send)
-        self.config = config
         self._translation_manager: TranslationManager | None = None
         self._translation_session: aiohttp.ClientSession | None = None
         self._stats = {
@@ -79,9 +78,9 @@ class Notifier:
     @property
     def translation_manager(self) -> TranslationManager | None:
         """Lazy initialization of translation manager."""
-        if self._translation_manager is None and self.config is not None:
-            # Get translation config from config
-            trans_config = self.config.translation
+        if self._translation_manager is None and cfg:
+            # Get translation config from cfg
+            trans_config = cfg.translation
             logger.info(
                 f"Notifier.translation_manager: 创建翻译管理器，"
                 f"provider={trans_config.provider}, auto_translate={trans_config.auto_translate}, "
@@ -95,15 +94,13 @@ class Notifier:
                 self._translation_session = aiohttp.ClientSession()
                 logger.warning("Notifier: 创建不带代理的翻译 session (proxy 为空)")
 
-            self._translation_manager = TranslationManager(
-                trans_config, self._translation_session
-            )
+            self._translation_manager = TranslationManager(self._translation_session)
             logger.info(
                 f"Notifier: 翻译管理器创建完成，enabled={self._translation_manager.is_enabled}, "
                 f"session={self._translation_session is not None}"
             )
-        elif self._translation_manager is None and self.config is None:
-            logger.warning("Notifier: 无法创建翻译管理器，config 为 None")
+        elif self._translation_manager is None and not cfg:
+            logger.warning("Notifier: 无法创建翻译管理器，cfg 未初始化")
         return self._translation_manager
 
     async def close(self) -> None:
@@ -229,7 +226,9 @@ class Notifier:
         translate_enabled = effective.get("translate", -100)
         if translate_enabled == -100:
             # Inherit from global auto_translate setting
-            translate_enabled = 1 if self.config.translation.auto_translate else 0
+            translate_enabled = (
+                1 if cfg.translation.auto_translate else 0
+            )
 
         logger.debug(
             f"Notifier._send_to_subscriber: translate_enabled={translate_enabled}, "
@@ -270,7 +269,7 @@ class Notifier:
             return
 
         content, need_media, _need_link_preview = formatted
-        if self.config and self.config.debug_payload:
+        if cfg and cfg.debug_payload:
             content = f"{content}\n{self._build_debug_payload(entry_parsed)}"
 
         media_items: list[tuple[str, str]] = []
@@ -288,7 +287,7 @@ class Notifier:
         if not sender_platform_name and session_id:
             sender_platform_name = session_id.split(":", 1)[0]
 
-        sender = get_sender_for_platform_name(sender_platform_name, self.config)
+        sender = get_sender_for_platform_name(sender_platform_name)
         should_pre_download = self.download_media_before_send
 
         prepared_media = None
@@ -297,19 +296,11 @@ class Notifier:
                 timeout_seconds=self.timeout_seconds,
                 proxy=self.proxy,
             )
-            # Configure transcode settings from config
-            gif_transcode_enabled = (
-                self.config.ffmpeg.gif_transcode if self.config else False
-            )
-            gif_transcode_timeout = (
-                self.config.ffmpeg.gif_transcode_timeout if self.config else 60
-            )
-            video_transcode_enabled = (
-                self.config.ffmpeg.video_transcode if self.config else False
-            )
-            video_transcode_timeout = (
-                self.config.ffmpeg.video_transcode_timeout if self.config else 120
-            )
+            # Configure transcode settings from cfg
+            gif_transcode_enabled = cfg.ffmpeg.gif_transcode if cfg else False
+            gif_transcode_timeout = cfg.ffmpeg.gif_transcode_timeout if cfg else 60
+            video_transcode_enabled = cfg.ffmpeg.video_transcode if cfg else False
+            video_transcode_timeout = cfg.ffmpeg.video_transcode_timeout if cfg else 120
             logger.info(
                 "Configuring sender transcode: gif=%s/%ss, video=%s/%ss",
                 gif_transcode_enabled,
@@ -340,18 +331,10 @@ class Notifier:
             proxy=self.proxy,
         )
         # Configure sender with transcode settings
-        gif_transcode_enabled = (
-            self.config.ffmpeg.gif_transcode if self.config else False
-        )
-        gif_transcode_timeout = (
-            self.config.ffmpeg.gif_transcode_timeout if self.config else 60
-        )
-        video_transcode_enabled = (
-            self.config.ffmpeg.video_transcode if self.config else False
-        )
-        video_transcode_timeout = (
-            self.config.ffmpeg.video_transcode_timeout if self.config else 120
-        )
+        gif_transcode_enabled = cfg.ffmpeg.gif_transcode if cfg else False
+        gif_transcode_timeout = cfg.ffmpeg.gif_transcode_timeout if cfg else 60
+        video_transcode_enabled = cfg.ffmpeg.video_transcode if cfg else False
+        video_transcode_timeout = cfg.ffmpeg.video_transcode_timeout if cfg else 120
         sender.configure_behavior(
             download_media_before_send=(should_pre_download and prepared_media is None),
             gif_transcode_enabled=gif_transcode_enabled,
@@ -438,8 +421,8 @@ class Notifier:
     ) -> None:
         """Enqueue a failed notification for retry."""
         try:
-            # Get max capacity from config (default 50)
-            max_capacity = self.config.failed_queue_capacity if self.config else 50
+            # Get max capacity from cfg (default 50)
+            max_capacity = cfg.failed_queue_capacity if cfg else 50
 
             # Skip if queue is disabled (capacity <= 0)
             if max_capacity <= 0:
@@ -502,8 +485,8 @@ class Notifier:
     ) -> None:
         """Process pending failed notifications for this subscription."""
         try:
-            # Get max retries from config
-            max_retries = self.config.failed_queue_max_retries if self.config else 3
+            # Get max retries from cfg
+            max_retries = cfg.failed_queue_max_retries if cfg else 3
 
             # Process in bounded batches to avoid long blocking bursts
             pending = await FailedNotification.get_by_sub(sub.id, limit=10)
@@ -520,7 +503,6 @@ class Notifier:
                 self._stats["failed_process_count"] += 1
                 success, _detail = await process_failed_notification(
                     notif,
-                    config=self.config,
                     timeout_seconds=self.timeout_seconds,
                     proxy=self.proxy,
                     max_retries=max_retries,

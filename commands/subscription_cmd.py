@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from astrbot.api.message_components import File
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from ..api import feed_get
+from ..config import cfg
 from ..db import Feed, Sub, User
 from ..utils.command_helpers import (
     ImportApplyResult,
@@ -20,7 +24,8 @@ from ..utils.command_helpers import (
 )
 from ..utils.subscription_io import parse_subscriptions_toml
 from .types import (
-    BindTargetResult,
+    BatchSubscribeResult,
+    BatchUnsubscribeResult,
     CommandResult,
     ExportSubscriptionsResult,
     ImportSubscriptionsResult,
@@ -29,6 +34,9 @@ from .types import (
     SubscribeResult,
     UnsubscribeAllResult,
 )
+
+if TYPE_CHECKING:
+    from astrbot.api.event import AstrMessageEvent
 
 
 async def subscribe_feed(
@@ -180,8 +188,219 @@ async def unsubscribe_feed(
         if not (is_owner or is_current_session or is_same_platform):
             return {"success": False, "error": "无权限删除该订阅"}
 
+    # 构建取消订阅的详细信息（简约列表格式）
+    feed_title = sub.feed.title if sub.feed else "未知"
+    feed_link = sub.feed.link if sub.feed else ""
+    custom_title = f" ({sub.title})" if sub.title else ""
+
     await Sub.delete(sub)
-    return {"success": True, "message": f"已取消订阅 (ID: {sub_id_int})"}
+
+    lines = [
+        "已取消的订阅列表（当前会话）:",
+        "共 1 个订阅",
+        f"1. [{sub_id_int}] ✗ {feed_title}{custom_title}",
+    ]
+    if feed_link:
+        lines.append(f"    {feed_link}")
+
+    return {"success": True, "message": "\n".join(lines)}
+
+
+async def unsubscribe_feed_by_url(
+    *,
+    url: str,
+    user_id: str,
+    current_session: str,
+    is_admin: bool,
+    platform_name: str,
+    is_platform_shared: bool,
+) -> CommandResult:
+    """根据 URL 取消当前会话的订阅（精确匹配）"""
+    # 验证 URL 格式
+    if not re.match(r"^https?://", url):
+        return {"success": False, "error": f"无效的 URL: {url}"}
+
+    # 根据模式查找订阅
+    if is_platform_shared:
+        sub = await Sub.get_by_platform_and_link(platform_name, url, current_session)
+    else:
+        sub = await Sub.get_by_user_and_link(user_id, url, current_session)
+
+    if not sub:
+        return {
+            "success": False,
+            "error": f"当前会话未找到此订阅: {url}",
+        }
+
+    # 权限检查
+    if not is_admin:
+        is_owner = sub.user_id == user_id
+        is_current_session = bool(sub.target_session) and (
+            sub.target_session == current_session
+        )
+        is_same_platform = is_platform_shared and sub.platform_name == platform_name
+
+        if not (is_owner or is_current_session or is_same_platform):
+            return {"success": False, "error": f"无权限取消订阅: {url}"}
+
+    # 构建取消订阅的详细信息（简约列表格式）
+    feed_title = sub.feed.title if sub.feed else "未知"
+    feed_link = sub.feed.link if sub.feed else url
+    custom_title = f" ({sub.title})" if sub.title else ""
+    sub_id = sub.id
+
+    await Sub.delete(sub)
+
+    lines = [
+        "已取消的订阅列表（当前会话）:",
+        "共 1 个订阅",
+        f"1. [{sub_id}] ✗ {feed_title}{custom_title}",
+    ]
+    if feed_link:
+        lines.append(f"    {feed_link}")
+
+    return {"success": True, "message": "\n".join(lines)}
+
+
+async def batch_subscribe_feeds(
+    *,
+    urls: list[str],
+    target: str,
+    user_id: str,
+    platform_name: str,
+    timeout: int,
+    proxy: str,
+    is_platform_shared: bool,
+    session_defaults: dict[str, int | str],
+    parse_target_fn: Callable[[str], tuple[str | None, str | None]],
+) -> BatchSubscribeResult:
+    """批量订阅多个 RSS 源"""
+    if not urls:
+        return {
+            "success": False,
+            "error": "请提供至少一个 RSS 链接",
+            "successful": [],
+            "failed": [],
+        }
+
+    successful: list[dict[str, object]] = []
+    failed: list[dict[str, str]] = []
+
+    for url in urls:
+        result = await subscribe_feed(
+            url=url,
+            target=target,
+            user_id=user_id,
+            platform_name=platform_name,
+            timeout=timeout,
+            proxy=proxy,
+            is_platform_shared=is_platform_shared,
+            session_defaults=session_defaults,
+            parse_target_fn=parse_target_fn,
+        )
+
+        if result["success"]:
+            successful.append(
+                {
+                    "sub_id": result.get("sub_id", 0),
+                    "title": result.get("sub_title", url),
+                    "url": url,
+                }
+            )
+        else:
+            failed.append({"url": url, "reason": result.get("error", "未知错误")})
+
+    success_count = len(successful)
+    fail_count = len(failed)
+
+    if success_count == 0:
+        return {
+            "success": False,
+            "error": f"所有 {fail_count} 个订阅均失败",
+            "successful": successful,
+            "failed": failed,
+        }
+
+    return {
+        "success": True,
+        "message": f"批量订阅完成：成功 {success_count} 个，失败 {fail_count} 个",
+        "successful": successful,
+        "failed": failed,
+    }
+
+
+async def batch_unsubscribe_feeds(
+    *,
+    targets: list[str],
+    user_id: str,
+    current_session: str,
+    is_admin: bool,
+    platform_name: str,
+    is_platform_shared: bool,
+) -> BatchUnsubscribeResult:
+    """批量取消订阅（支持 ID 列表或 URL 列表）"""
+    if not targets:
+        return {
+            "success": False,
+            "error": "请提供至少一个订阅 ID 或 URL",
+            "successful_count": 0,
+            "failed": [],
+        }
+
+    successful_count = 0
+    failed: list[dict[str, str]] = []
+
+    for target in targets:
+        target = target.strip()
+        if not target:
+            continue
+
+        # 判断是 ID 还是 URL
+        is_id = target.isdigit()
+
+        if is_id:
+            # 按 ID 取消
+            result = await unsubscribe_feed(
+                sub_id=target,
+                user_id=user_id,
+                current_session=current_session,
+                is_admin=is_admin,
+                platform_name=platform_name,
+                is_platform_shared=is_platform_shared,
+            )
+        else:
+            # 按 URL 取消
+            result = await unsubscribe_feed_by_url(
+                url=target,
+                user_id=user_id,
+                current_session=current_session,
+                is_admin=is_admin,
+                platform_name=platform_name,
+                is_platform_shared=is_platform_shared,
+            )
+
+        if result["success"]:
+            successful_count += 1
+        else:
+            failed.append({"target": target, "reason": result.get("error", "未知错误")})
+
+    total = len(targets)
+    fail_count = len(failed)
+
+    if successful_count == 0:
+        return {
+            "success": False,
+            "error": f"所有 {total} 个取消操作均失败",
+            "successful_count": 0,
+            "failed": failed,
+        }
+
+    return {
+        "success": True,
+        "message": f"批量取消完成：成功 {successful_count} 个，失败 {fail_count} 个",
+        "successful_count": successful_count,
+        "failed": failed,
+    }
 
 
 async def list_subscriptions(
@@ -247,6 +466,11 @@ async def list_subscriptions(
             for sub in subs
             if (sub.target_session or current_session) == current_session
         ]
+        # 统计会话状态
+        total_count = len(subs)
+        active_count = sum(1 for sub in subs if sub.state == 1)
+        inactive_count = total_count - active_count
+
         if not subs:
             return {
                 "success": True,
@@ -256,15 +480,19 @@ async def list_subscriptions(
                 ),
             }
 
+        lines.append(f"共 {total_count} 个订阅 | 启用: {active_count} | 禁用: {inactive_count}")
+
     for idx, sub in enumerate(subs, list_offset + 1):
         feed_title = sub.feed.title if sub.feed else "未知"
         feed_link = sub.feed.link if sub.feed else ""
         custom_title = f" ({sub.title})" if sub.title else ""
-        lines.append(f"{idx}. [{sub.id}] {feed_title}{custom_title}")
+        state_icon = "✓" if sub.state == 1 else "✗"
+        lines.append(f"{idx}. [{sub.id}] {state_icon} {feed_title}{custom_title}")
         if show_all_sessions or is_platform_shared:
             lines.append(f"    user: {sub.user_id}")
             lines.append(f"    platform: {sub.platform_name or '(unknown)'}'")
             lines.append(f"    target: {sub.target_session or '(未绑定)'}'")
+            lines.append(f"    state: {'启用' if sub.state == 1 else '禁用'}")
         if feed_link:
             lines.append(f"    {feed_link}")
 
@@ -277,97 +505,171 @@ async def list_subscriptions(
 
 async def test_subscription(
     *,
-    sub_id: str,
-    granularity: str,
+    target: str,
+    start_index: int,
+    end_index: int | None,
+    target_session: str,
+    platform_name: str,
     timeout: int,
     proxy: str,
-    download_image_before_send: bool,
-    config: object,
+    download_media_before_send: bool,
 ) -> CommandResult:
     """管理员测试推送
+
+    支持通过订阅ID或URL进行测试推送。
+    - 订阅ID: 使用订阅的配置
+    - URL: 使用全局配置创建临时订阅
+
+    Args:
+        target: 订阅ID或RSS URL
+        start_index: 起始条目编号（从1开始，1=最新）
+        end_index: 结束条目编号（可选，None表示只推送起始条目）
+        target_session: 推送目标会话
+        platform_name: 平台类型名（如 aiocqhttp, telegram 等）
+        timeout: 请求超时时间
+        proxy: 代理设置
+        download_media_before_send: 是否在发送前下载媒体
 
     Returns:
         {"success": bool, "message": str, "error": str}
     """
-    if not sub_id:
-        return {"success": False, "error": "请提供订阅 ID"}
+    if not target:
+        return {"success": False, "error": "请提供订阅ID或RSS链接"}
 
-    try:
-        sub_id_int = int(sub_id)
-    except ValueError:
-        return {"success": False, "error": "订阅 ID 必须是数字"}
+    # 判断目标是订阅ID还是URL
+    is_url = target.startswith(("http://", "https://"))
 
-    sub = await Sub.get_by_id(sub_id_int)
-    if not sub:
-        return {"success": False, "error": "未找到该订阅"}
+    feed_link: str
+    feed_title: str
+    sub: Sub | None = None
 
-    if not sub.feed:
-        return {"success": False, "error": "该订阅缺少 Feed 信息"}
+    if is_url:
+        # URL模式：使用全局配置
+        feed_link = target
+        feed_title = "测试订阅"
+    else:
+        # 订阅ID模式：查询数据库
+        try:
+            sub_id_int = int(target)
+        except ValueError:
+            return {"success": False, "error": "订阅ID必须是数字，或提供有效的RSS链接"}
 
-    target_session = sub.target_session
-    if not target_session:
-        user = sub.user or await User.get_or_create(sub.user_id)
-        target_session = user.default_target_session
-    if not target_session:
-        return {"success": False, "error": "该订阅尚未绑定推送目标"}
+        sub = await Sub.get_by_id(sub_id_int)
+        if not sub:
+            return {"success": False, "error": f"未找到订阅ID={target}"}
+        if not sub.feed:
+            return {"success": False, "error": "该订阅缺少Feed信息"}
 
-    wf = await feed_get(sub.feed.link, timeout=timeout, proxy=proxy)
+        feed_link = sub.feed.link
+        feed_title = sub.feed.title
+
+    # 抓取Feed
+    wf = await feed_get(feed_link, timeout=timeout, proxy=proxy)
     if wf.error:
-        return {"success": False, "error": f"测试抓取失败: {wf.error.error_name}"}
+        # 构建详细错误信息
+        error_parts = [f"测试抓取失败: {wf.error.error_name}", f"URL: {feed_link}"]
+        if wf.error.status:
+            error_parts.append(f"状态码: {wf.error.status}")
+        if wf.error.base_error:
+            error_parts.append(f"详情: {wf.error.base_error}")
+        return {"success": False, "error": " | ".join(error_parts)}
 
     if wf.rss_d is None or not wf.rss_d.entries:
         return {"success": True, "message": "测试抓取成功，但该源暂无可推送条目"}
 
-    # 选择条目
+    # 准备Feed和Sub对象
     entries = list(wf.rss_d.entries)
-    mode = (granularity or "latest").strip().lower()
+    total_entries = len(entries)
 
-    if mode in {"latest", "last"}:
-        selected = [entries[0]]
-        mode_label = "latest"
-    elif mode == "all":
-        selected = entries
-        mode_label = f"all({len(entries)})"
-    elif mode.startswith("count:") or mode.isdigit():
-        count_raw = mode.removeprefix("count:") if mode.startswith("count:") else mode
-        try:
-            count = int(count_raw)
-            if count <= 0:
-                raise ValueError
-            selected = entries[:count]
-            mode_label = f"count:{len(selected)}"
-        except ValueError:
-            return {"success": False, "error": "数量参数无效"}
+    # 创建临时Feed对象
+    from ..db import Feed
+    feed = Feed(
+        link=feed_link,
+        title=wf.rss_d.feed.get("title", feed_title),
+        entry_hashes=[],
+    )
+
+    if is_url:
+        # URL模式：创建临时Sub对象，使用全局配置
+        # 使用传入的 platform_name（平台类型名，如 aiocqhttp, telegram 等）
+        # 注意：不要从 target_session 提取，因为那是适配器ID（如 default），不是平台类型名
+        # 使用 to_db_values() 获取转换后的整数值
+        db_values = cfg.global_config.to_db_values()
+
+        sub = Sub(
+            id=0,  # 临时ID
+            state=1,
+            user_id="test",
+            feed_id=0,
+            target_session=target_session,
+            platform_name=platform_name,
+            use_sub_config=True,
+            interval=db_values["interval"],
+            notify=db_values["notify"],
+            send_mode=db_values["send_mode"],
+            length_limit=db_values["length_limit"],
+            link_preview=db_values["link_preview"],
+            display_author=db_values["display_author"],
+            display_via=db_values["display_via"],
+            display_title=db_values["display_title"],
+            display_entry_tags=db_values["display_entry_tags"],
+            style=db_values["style"],
+            display_media=db_values["display_media"],
+            translate=db_values["translate"],
+            translate_target_lang=db_values["translate_target_lang"],
+        )
+        target_desc = f"URL={feed_link}"
     else:
-        return {
-            "success": False,
-            "error": "粒度参数无效。可选: latest / all / <数量> / count:<数量>",
-        }
+        target_desc = f"订阅ID={target}"
+
+    # 验证条目编号范围
+    if start_index < 1:
+        return {"success": False, "error": "起始条目编号必须大于等于1"}
+
+    if start_index > total_entries:
+        return {"success": False, "error": f"起始条目编号超出范围（最大{total_entries}）"}
+
+    # 确定结束编号
+    actual_end = end_index if end_index is not None else start_index
+    if actual_end > total_entries:
+        actual_end = total_entries
+
+    if actual_end < start_index:
+        return {"success": False, "error": "结束条目编号不能小于起始编号"}
+
+    # 选择条目（编号1 = 索引0）
+    selected = entries[start_index - 1 : actual_end]
 
     # 发送通知
     from ..notifier import Notifier
 
     notifier = Notifier(
-        feed=sub.feed,
+        feed=feed,
         subs=[sub],
         entries=selected,
         timeout_seconds=timeout,
         proxy=proxy,
-        download_media_before_send=download_image_before_send,
-        config=config,
+        download_media_before_send=download_media_before_send,
     )
     try:
         await notifier.notify_all()
     finally:
         await notifier.close()
 
+    # 构建结果消息
+    if len(selected) == 1:
+        entry_desc = f"条目{start_index}"
+    else:
+        entry_desc = f"条目{start_index}-{actual_end}（共{len(selected)}条）"
+
     first_title = selected[0].get("title") or "(无标题)"
     return {
         "success": True,
         "message": (
-            f"已触发测试推送: 订阅ID={sub_id_int} -> {target_session}\n"
-            f"粒度: {mode_label}，条目数: {len(selected)}\n"
-            f"首条: {first_title}"
+            f"✅ 测试推送成功\n"
+            f"目标: {target_desc}\n"
+            f"推送: {entry_desc} -> {target_session}\n"
+            f"首条: {first_title[:50]}..."
         ),
     }
 
@@ -625,26 +927,234 @@ async def set_subscription_option(
     }
 
 
-async def bind_target(
+async def batch_activate_subs(
     *,
-    target: str,
     user_id: str,
-    parse_target_session_fn: callable,
-) -> BindTargetResult:
-    """绑定推送目标
+    current_session: str,
+) -> CommandResult:
+    """激活当前会话中的所有订阅
+
+    Args:
+        user_id: 用户ID
+        current_session: 当前会话ID
 
     Returns:
-        {"success": bool, "message": str, "error": str}
+        命令结果
     """
-    target_session, target_err = parse_target_session_fn(target)
-    if target_err:
-        return {"success": False, "error": target_err}
+    from sqlalchemy.orm import selectinload
+    from sqlmodel import select
 
-    if not target_session:
+    from ..db import Sub, get_session
+
+    async with get_session() as session:
+        # 查询当前会话中该用户的所有订阅（当前禁用的），预加载 feed
+        stmt = (
+            select(Sub)
+            .options(selectinload(Sub.feed))
+            .where(
+                Sub.user_id == user_id,
+                Sub.target_session == current_session,
+                Sub.state == 0,
+            )
+        )
+        result = await session.execute(stmt)
+        subs = list(result.scalars().all())
+
+        if not subs:
+            return {
+                "success": True,
+                "message": "当前会话没有需要启用的订阅",
+            }
+
+        # 激活所有订阅
+        activated_count = 0
+        sub_titles = []
+        for sub in subs:
+            sub.state = 1
+            session.add(sub)
+            activated_count += 1
+            title = sub.feed.title if sub.feed else f"订阅 {sub.id}"
+            sub_titles.append(f"  • {title}")
+
+        await session.commit()
+
+        message_lines = [
+            f"已启用当前会话的 {activated_count} 个订阅：",
+            *sub_titles,
+            "\n当前会话订阅已全部启用",
+        ]
+
         return {
-            "success": False,
-            "error": "请提供目标，用法: /sub_bind <private|group|session>",
+            "success": True,
+            "message": "\n".join(message_lines),
         }
 
-    await User.set_default_target(user_id, target_session)
-    return {"success": True, "message": f"已绑定默认推送目标: {target_session}"}
+
+async def batch_deactivate_subs(
+    *,
+    user_id: str,
+    current_session: str,
+) -> CommandResult:
+    """停用当前会话中的所有订阅
+
+    Args:
+        user_id: 用户ID
+        current_session: 当前会话ID
+
+    Returns:
+        命令结果
+    """
+    from sqlalchemy.orm import selectinload
+    from sqlmodel import select
+
+    from ..db import Sub, get_session
+
+    async with get_session() as session:
+        # 查询当前会话中该用户的所有订阅（当前启用的），预加载 feed
+        stmt = (
+            select(Sub)
+            .options(selectinload(Sub.feed))
+            .where(
+                Sub.user_id == user_id,
+                Sub.target_session == current_session,
+                Sub.state == 1,
+            )
+        )
+        result = await session.execute(stmt)
+        subs = list(result.scalars().all())
+
+        if not subs:
+            return {
+                "success": True,
+                "message": "当前会话没有需要禁用的订阅",
+            }
+
+        # 停用所有订阅
+        deactivated_count = 0
+        for sub in subs:
+            sub.state = 0
+            session.add(sub)
+            deactivated_count += 1
+
+        await session.commit()
+
+        return {
+            "success": True,
+            "message": (
+                f"已禁用当前会话的 {deactivated_count} 个订阅\n\n"
+                "当前会话订阅已全部禁用，不再推送更新\n"
+                "使用 /activate_subs 可随时重新启用"
+            ),
+        }
+
+
+# Import file reading constants
+IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
+IMPORT_MAX_FILE_SIZE_DISPLAY = f"{IMPORT_MAX_FILE_SIZE_BYTES / 1024 / 1024:g}MB"
+
+
+async def read_uploaded_toml_content(
+    event: AstrMessageEvent,
+    *,
+    max_file_size: int,
+) -> tuple[str | None, str | None, bool]:
+    """Read TOML content from uploaded file components.
+
+    Returns: (content, error, has_file_component)
+    """
+    has_file_component = False
+    file_messages = event.get_messages()
+    for component in file_messages:
+        if not isinstance(component, File):
+            continue
+
+        has_file_component = True
+        file_path = ""
+        try:
+            file_path = await component.get_file()
+            if not file_path:
+                continue
+            candidate = Path(file_path)
+            if not candidate.is_file():
+                continue
+            if candidate.stat().st_size > max_file_size:
+                return (
+                    None,
+                    f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                    True,
+                )
+            return candidate.read_text(encoding="utf-8-sig"), None, True
+        except OSError as ex:
+            return None, f"读取上传文件失败：{ex}", True
+        finally:
+            if file_path:
+                try:
+                    os.unlink(file_path)
+                except OSError:
+                    pass
+
+    return None, None, has_file_component
+
+
+async def read_import_toml_content(
+    event: AstrMessageEvent,
+    import_path: str,
+    local_imports_dir: Path,
+    is_admin: bool,
+) -> tuple[str | None, str | None, bool]:
+    """Read import TOML content from local path or uploaded file.
+
+    Args:
+        event: AstrMessageEvent
+        import_path: Local file path (admin only)
+        local_imports_dir: Allowed directory for local imports
+        is_admin: Whether the user is admin
+
+    Returns: (content, error, should_wait_upload)
+    """
+    if import_path.strip():
+        if not is_admin:
+            return (
+                None,
+                "出于安全考虑，仅管理员可使用本地路径导入，请改为上传 TOML 文件。",
+                False,
+            )
+
+        path = Path(import_path.strip()).expanduser().resolve()
+        allowed_dir = local_imports_dir.resolve()
+        allowed_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            path.relative_to(allowed_dir)
+        except ValueError:
+            return (
+                None,
+                f"仅允许从导入目录读取文件：{allowed_dir}",
+                False,
+            )
+
+        if not path.is_file():
+            return None, f"导入文件不存在：{path}", False
+        try:
+            if path.stat().st_size > IMPORT_MAX_FILE_SIZE_BYTES:
+                return (
+                    None,
+                    f"导入文件过大，请控制在 {IMPORT_MAX_FILE_SIZE_DISPLAY} 以内",
+                    False,
+                )
+            return path.read_text(encoding="utf-8-sig"), None, False
+        except OSError as ex:
+            return None, f"读取导入文件失败：{ex}", False
+
+    content, read_err, has_file_component = await read_uploaded_toml_content(
+        event,
+        max_file_size=IMPORT_MAX_FILE_SIZE_BYTES,
+    )
+    if content:
+        return content, None, False
+    if read_err:
+        return None, read_err, False
+    if has_file_component:
+        return None, "读取上传文件失败", False
+
+    return None, None, True

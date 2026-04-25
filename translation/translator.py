@@ -66,7 +66,9 @@ class TranslationManager:
     _instance: TranslationManager | None = None
     _initialized: bool = False
 
-    def __new__(cls, session: aiohttp.ClientSession | None = None) -> TranslationManager:
+    def __new__(
+        cls, session: aiohttp.ClientSession | None = None
+    ) -> TranslationManager:
         """创建或返回单例实例。"""
         if cls._instance is None:
             cls._instance = super().__new__(cls)

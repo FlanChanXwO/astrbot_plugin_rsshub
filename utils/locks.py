@@ -234,6 +234,7 @@ def locked(key: str) -> Callable[[F], F]:
 
 # 向后兼容 - 保留原有的便捷访问函数
 
+
 def feed_lock(feed_id: int) -> asyncio.Lock:
     """获取 Feed 更新锁（向后兼容）"""
     return _get_lock_manager().feed_lock(feed_id)

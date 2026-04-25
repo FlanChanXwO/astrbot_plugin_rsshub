@@ -56,14 +56,24 @@ class FieldDescriptionLoader:
         if self._descriptions is not None:
             return self._descriptions
 
-        config_path = Path(__file__).parent.parent / "config" / "field_descriptions.json"
+        config_path = (
+            Path(__file__).parent.parent / "config" / "field_descriptions.json"
+        )
         try:
             with open(config_path, encoding="utf-8") as f:
                 self._descriptions = json.load(f)
         except FileNotFoundError:
-            self._descriptions = {"sub_fields": {}, "user_fields": {}, "session_fields": {}}
+            self._descriptions = {
+                "sub_fields": {},
+                "user_fields": {},
+                "session_fields": {},
+            }
         except json.JSONDecodeError:
-            self._descriptions = {"sub_fields": {}, "user_fields": {}, "session_fields": {}}
+            self._descriptions = {
+                "sub_fields": {},
+                "user_fields": {},
+                "session_fields": {},
+            }
 
         return self._descriptions
 
@@ -94,7 +104,9 @@ class FieldDescriptionLoader:
         """Get all session field descriptions."""
         return self.load().get("session_fields", {})
 
-    def format_field_info(self, field_name: str, field_def: dict[str, Any], current_value: Any = None) -> str:
+    def format_field_info(
+        self, field_name: str, field_def: dict[str, Any], current_value: Any = None
+    ) -> str:
         """Format field information for display.
 
         Args:
@@ -105,7 +117,9 @@ class FieldDescriptionLoader:
         Returns:
             Formatted field information string
         """
-        lines = [f"{field_name} = {current_value if current_value is not None else field_def.get('default', 'null')}"]
+        lines = [
+            f"{field_name} = {current_value if current_value is not None else field_def.get('default', 'null')}"
+        ]
         lines.append(f"  描述: {field_def.get('description', '')}")
 
         if "type" in field_def:

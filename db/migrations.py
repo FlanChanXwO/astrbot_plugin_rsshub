@@ -444,8 +444,7 @@ async def _migrate_inherit_values_to_defaults(conn) -> None:
     try:
         # 检查是否需要迁移（通过检查是否存在 -100 的值）
         result = await conn.exec_driver_sql(
-            "SELECT COUNT(*) FROM rsshub_sub WHERE notify = ? LIMIT 1",
-            (INHERIT_VALUE,)
+            "SELECT COUNT(*) FROM rsshub_sub WHERE notify = ? LIMIT 1", (INHERIT_VALUE,)
         )
         count = result.scalar()
 
@@ -459,7 +458,7 @@ async def _migrate_inherit_values_to_defaults(conn) -> None:
         for column, default_value in SUB_DEFAULTS.items():
             await conn.exec_driver_sql(
                 f"UPDATE rsshub_sub SET {column} = ? WHERE {column} = ?",
-                (default_value, INHERIT_VALUE)
+                (default_value, INHERIT_VALUE),
             )
 
         logger.info("Sub 表默认值迁移完成")
@@ -468,7 +467,7 @@ async def _migrate_inherit_values_to_defaults(conn) -> None:
         for column, default_value in USER_DEFAULTS.items():
             await conn.exec_driver_sql(
                 f"UPDATE rsshub_user SET {column} = ? WHERE {column} = ?",
-                (default_value, INHERIT_VALUE)
+                (default_value, INHERIT_VALUE),
             )
 
         logger.info("User 表默认值迁移完成")

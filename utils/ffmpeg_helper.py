@@ -90,7 +90,10 @@ class FFmpegTool:
         Returns:
             Path to ffprobe executable, or None if not found
         """
-        if FFmpegTool._ffprobe_exe_cache and Path(FFmpegTool._ffprobe_exe_cache).exists():
+        if (
+            FFmpegTool._ffprobe_exe_cache
+            and Path(FFmpegTool._ffprobe_exe_cache).exists()
+        ):
             return FFmpegTool._ffprobe_exe_cache
 
         # Try to find ffprobe alongside ffmpeg
@@ -348,7 +351,9 @@ class FFmpegTool:
         """
         ffmpeg_exe = FFmpegTool.ensure_ffmpeg_ready(auto_install=auto_install_ffmpeg)
         if not ffmpeg_exe:
-            logger.warning("FFmpeg not available for GIF transcode: src=%s", source_path)
+            logger.warning(
+                "FFmpeg not available for GIF transcode: src=%s", source_path
+            )
             return None
 
         if not source_path.exists() or not source_path.is_file():
@@ -361,7 +366,10 @@ class FFmpegTool:
 
         # Cache directory for GIF files
         cache_root = (
-            Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_rsshub" / "cache" / "gif"
+            Path(get_astrbot_plugin_data_path())
+            / "astrbot_plugin_rsshub"
+            / "cache"
+            / "gif"
         )
         cache_root.mkdir(parents=True, exist_ok=True)
 
@@ -524,7 +532,9 @@ class FFmpegTool:
             output_path.unlink(missing_ok=True)
             return False
         except Exception as e:
-            logger.warning("FFmpeg m3u8 download process failed: url=%s, err=%s", m3u8_url, e)
+            logger.warning(
+                "FFmpeg m3u8 download process failed: url=%s, err=%s", m3u8_url, e
+            )
             if process is not None:
                 process.kill()
                 await process.wait()
@@ -532,7 +542,9 @@ class FFmpegTool:
             return False
 
         if process.returncode != 0:
-            stderr_tail = stderr.decode("utf-8", errors="ignore")[-500:] if stderr else ""
+            stderr_tail = (
+                stderr.decode("utf-8", errors="ignore")[-500:] if stderr else ""
+            )
             logger.warning(
                 "FFmpeg m3u8 download failed: url=%s, code=%s, stderr_tail=%s",
                 m3u8_url,

@@ -480,7 +480,9 @@ async def list_subscriptions(
                 ),
             }
 
-        lines.append(f"共 {total_count} 个订阅 | 启用: {active_count} | 禁用: {inactive_count}")
+        lines.append(
+            f"共 {total_count} 个订阅 | 启用: {active_count} | 禁用: {inactive_count}"
+        )
 
     for idx, sub in enumerate(subs, list_offset + 1):
         feed_title = sub.feed.title if sub.feed else "未知"
@@ -583,6 +585,7 @@ async def test_subscription(
 
     # 创建临时Feed对象
     from ..db import Feed
+
     feed = Feed(
         link=feed_link,
         title=wf.rss_d.feed.get("title", feed_title),
@@ -627,7 +630,10 @@ async def test_subscription(
         return {"success": False, "error": "起始条目编号必须大于等于1"}
 
     if start_index > total_entries:
-        return {"success": False, "error": f"起始条目编号超出范围（最大{total_entries}）"}
+        return {
+            "success": False,
+            "error": f"起始条目编号超出范围（最大{total_entries}）",
+        }
 
     # 确定结束编号
     actual_end = end_index if end_index is not None else start_index

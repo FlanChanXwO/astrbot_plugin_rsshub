@@ -409,7 +409,9 @@ async def _download_m3u8_to_cache(
     async with _cache_io_lock:
         cached = _read_cache(cache_url)
         if cached is not None:
-            logger.debug("Media cache return existing m3u8: url=%s, path=%s", cache_url, cached)
+            logger.debug(
+                "Media cache return existing m3u8: url=%s, path=%s", cache_url, cached
+            )
             return cached
 
     # Generate cache path for mp4 output

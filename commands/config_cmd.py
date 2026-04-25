@@ -30,8 +30,7 @@ async def set_user_option(
         return {
             "success": False,
             "error": (
-                "用法: /sub_set_user <选项名> <值>\n"
-                "使用 /sub_get_user 查看可用选项"
+                "用法: /sub_set_user <选项名> <值>\n使用 /sub_get_user 查看可用选项"
             ),
         }
 
@@ -106,7 +105,9 @@ async def get_user_option(
 
         for field_name, field_def in all_fields.items():
             current_value = getattr(user, field_name, None)
-            lines.append(f"{field_name} = {current_value if current_value is not None else field_def.get('default', 'null')}")
+            lines.append(
+                f"{field_name} = {current_value if current_value is not None else field_def.get('default', 'null')}"
+            )
             lines.append(f"  {field_def.get('description', '')}")
 
         lines.append("\n使用 /sub_get_user <选项名> 查看详细信息")

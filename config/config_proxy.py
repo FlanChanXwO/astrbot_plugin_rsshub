@@ -86,6 +86,7 @@ class ConfigProxy:
             except Exception as e:
                 # 钩子异常不应影响配置重载
                 import logging
+
                 logging.getLogger(__name__).warning(
                     f"Config reload hook failed: {e}", exc_info=True
                 )

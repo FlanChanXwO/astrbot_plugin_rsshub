@@ -30,9 +30,19 @@ class BasicConfig:
     hash_history_hard_limit: int = 5000
     tracking_query_params: list[str] = field(
         default_factory=lambda: [
-            "utm_source", "utm_medium", "utm_campaign", "utm_term",
-            "utm_content", "utm_id", "gclid", "fbclid", "mc_cid",
-            "mc_eid", "spm", "ref", "ref_src",
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+            "utm_id",
+            "gclid",
+            "fbclid",
+            "mc_cid",
+            "mc_eid",
+            "spm",
+            "ref",
+            "ref_src",
         ]
     )
 
@@ -62,11 +72,24 @@ class BasicConfig:
             hash_history_min=data.get("hash_history_min", 200),
             hash_history_multiplier=data.get("hash_history_multiplier", 2),
             hash_history_hard_limit=data.get("hash_history_hard_limit", 5000),
-            tracking_query_params=data.get("tracking_query_params", [
-                "utm_source", "utm_medium", "utm_campaign", "utm_term",
-                "utm_content", "utm_id", "gclid", "fbclid", "mc_cid",
-                "mc_eid", "spm", "ref", "ref_src",
-            ]),
+            tracking_query_params=data.get(
+                "tracking_query_params",
+                [
+                    "utm_source",
+                    "utm_medium",
+                    "utm_campaign",
+                    "utm_term",
+                    "utm_content",
+                    "utm_id",
+                    "gclid",
+                    "fbclid",
+                    "mc_cid",
+                    "mc_eid",
+                    "spm",
+                    "ref",
+                    "ref_src",
+                ],
+            ),
             failed_queue_capacity=data.get("failed_queue_capacity", 50),
             failed_queue_max_retries=data.get("failed_queue_max_retries", 3),
             deduplicate_multi_bot=data.get("deduplicate_multi_bot", True),
@@ -103,8 +126,6 @@ class GlobalConfig:
     # 翻译配置
     translate: bool = False
     translate_target_lang: str = "zh-CN"
-
-
 
     # === 值转换方法 ===
 
@@ -150,10 +171,16 @@ class GlobalConfig:
             notify=values.get("notify", 1) == 1,
             send_mode=cls._SEND_MODE_RMAP.get(values.get("send_mode", 0), "自动"),
             length_limit=values.get("length_limit", 0),
-            link_preview=cls._LINK_PREVIEW_RMAP.get(values.get("link_preview", 0), "自动"),
-            display_author=cls._DISPLAY_AUTHOR_RMAP.get(values.get("display_author", 0), "自动"),
+            link_preview=cls._LINK_PREVIEW_RMAP.get(
+                values.get("link_preview", 0), "自动"
+            ),
+            display_author=cls._DISPLAY_AUTHOR_RMAP.get(
+                values.get("display_author", 0), "自动"
+            ),
             display_via=cls._DISPLAY_VIA_RMAP.get(values.get("display_via", 0), "自动"),
-            display_title=cls._DISPLAY_TITLE_RMAP.get(values.get("display_title", 0), "自动"),
+            display_title=cls._DISPLAY_TITLE_RMAP.get(
+                values.get("display_title", 0), "自动"
+            ),
             display_entry_tags=values.get("display_entry_tags", -1) != -1,
             style=cls._STYLE_RMAP.get(values.get("style", 0), "RSStT"),
             display_media=values.get("display_media", 0) != -1,
@@ -351,10 +378,20 @@ class RsshubPluginConfig:
 
         # 处理旧格式配置迁移
         # 如果存在顶层旧配置名，将其移到 basic_config 并使用新名称
-        if "download_image_before_send" in astrbot_config and "basic_config" in astrbot_config:
-            astrbot_config["basic_config"]["download_media_before_send"] = astrbot_config.pop("download_image_before_send")
-        if "m3u8_download_timeout" in astrbot_config and "basic_config" in astrbot_config:
-            astrbot_config["basic_config"]["download_media_timeout"] = astrbot_config.pop("m3u8_download_timeout")
+        if (
+            "download_image_before_send" in astrbot_config
+            and "basic_config" in astrbot_config
+        ):
+            astrbot_config["basic_config"]["download_media_before_send"] = (
+                astrbot_config.pop("download_image_before_send")
+            )
+        if (
+            "m3u8_download_timeout" in astrbot_config
+            and "basic_config" in astrbot_config
+        ):
+            astrbot_config["basic_config"]["download_media_timeout"] = (
+                astrbot_config.pop("m3u8_download_timeout")
+            )
 
         # 提取各个配置项
         basic_cfg = astrbot_config.get("basic_config", {})

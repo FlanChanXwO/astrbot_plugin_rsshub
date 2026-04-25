@@ -60,17 +60,13 @@ class AsyncTool:
         """
         if AsyncTool._thread_pool is None:
             AsyncTool._thread_pool = ThreadPoolExecutor(
-                max_workers=4,
-                thread_name_prefix="rsshub_"
+                max_workers=4, thread_name_prefix="rsshub_"
             )
         return AsyncTool._thread_pool
 
     @staticmethod
     async def run(
-        func: Callable[..., T],
-        *args,
-        prefer_pool: str | None = None,
-        **kwargs
+        func: Callable[..., T], *args, prefer_pool: str | None = None, **kwargs
     ) -> T:
         """在线程池中运行同步函数
 
@@ -98,10 +94,7 @@ class AsyncTool:
 
     @staticmethod
     async def run_with_timeout(
-        func: Callable[..., T],
-        *args,
-        timeout: float = 30.0,
-        **kwargs
+        func: Callable[..., T], *args, timeout: float = 30.0, **kwargs
     ) -> T | None:
         """在线程池中运行同步函数，带超时
 
@@ -116,8 +109,7 @@ class AsyncTool:
         """
         try:
             return await asyncio.wait_for(
-                AsyncTool.run(func, *args, **kwargs),
-                timeout=timeout
+                AsyncTool.run(func, *args, **kwargs), timeout=timeout
             )
         except asyncio.TimeoutError:
             return None
@@ -197,6 +189,7 @@ class AsyncTool:
         Returns:
             同步包装函数
         """
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             try:
@@ -223,7 +216,7 @@ class AsyncTool:
 # =============================================================================
 
 
-def     _ensure_async(func: Callable, decorator_name: str) -> None:
+def _ensure_async(func: Callable, decorator_name: str) -> None:
     """确保函数是异步函数，否则抛出 TypeError"""
     if not asyncio.iscoroutinefunction(func):
         raise TypeError(
@@ -257,6 +250,7 @@ def retry(
         async def fetch_data():
             return await http_get(url)
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         _ensure_async(func, "retry")
 
@@ -279,6 +273,7 @@ def retry(
             raise last_exception
 
         return wrapper
+
     return decorator
 
 
@@ -300,17 +295,16 @@ def timeout(seconds: float):
         async def api_call():
             return await fetch_data()
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         _ensure_async(func, "timeout")
 
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> T:
-            return await asyncio.wait_for(
-                func(*args, **kwargs),
-                timeout=seconds
-            )
+            return await asyncio.wait_for(func(*args, **kwargs), timeout=seconds)
 
         return wrapper
+
     return decorator
 
 
@@ -342,4 +336,5 @@ def semaphore(limit: int = 10):
                 return await func(*args, **kwargs)
 
         return wrapper
+
     return decorator

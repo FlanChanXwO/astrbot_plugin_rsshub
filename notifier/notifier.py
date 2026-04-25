@@ -226,9 +226,7 @@ class Notifier:
         translate_enabled = effective.get("translate", -100)
         if translate_enabled == -100:
             # Inherit from global auto_translate setting
-            translate_enabled = (
-                1 if cfg.translation.auto_translate else 0
-            )
+            translate_enabled = 1 if cfg.translation.auto_translate else 0
 
         logger.debug(
             f"Notifier._send_to_subscriber: translate_enabled={translate_enabled}, "

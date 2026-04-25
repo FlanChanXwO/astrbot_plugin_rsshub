@@ -392,9 +392,7 @@ class RSSHubPlugin(Star):
             yield notice
 
         # 过滤有效的 RSS URL（以 http 或 https 开头）
-        valid_urls = [
-            u for u in urls if u.startswith(("http://", "https://"))
-        ]
+        valid_urls = [u for u in urls if u.startswith(("http://", "https://"))]
 
         if not valid_urls:
             yield event.plain_result(
@@ -413,7 +411,9 @@ class RSSHubPlugin(Star):
                 timeout=cfg.timeout if cfg else 30,
                 proxy=cfg.proxy if cfg else "",
                 is_platform_shared=self._is_platform_shared(event.platform_meta.name),
-                session_defaults=await self._get_session_defaults(event.unified_msg_origin),
+                session_defaults=await self._get_session_defaults(
+                    event.unified_msg_origin
+                ),
                 parse_target_fn=lambda t: self._parse_target_session(event, t),
             )
             if result["success"]:
@@ -430,7 +430,9 @@ class RSSHubPlugin(Star):
                 timeout=cfg.timeout if cfg else 30,
                 proxy=cfg.proxy if cfg else "",
                 is_platform_shared=self._is_platform_shared(event.platform_meta.name),
-                session_defaults=await self._get_session_defaults(event.unified_msg_origin),
+                session_defaults=await self._get_session_defaults(
+                    event.unified_msg_origin
+                ),
                 parse_target_fn=lambda t: self._parse_target_session(event, t),
             )
 
@@ -439,19 +441,24 @@ class RSSHubPlugin(Star):
             if result.get("successful"):
                 messages.append(f"✅ 成功订阅 {len(result['successful'])} 个源：")
                 for item in result["successful"]:
-                    messages.append(f"  • {item.get('title', '未知')} (ID: {item.get('sub_id', 0)})")
+                    messages.append(
+                        f"  • {item.get('title', '未知')} (ID: {item.get('sub_id', 0)})"
+                    )
 
             if result.get("failed"):
                 messages.append(f"\n❌ 失败 {len(result['failed'])} 个：")
                 for item in result["failed"]:
-                    messages.append(f"  • {item.get('url', '未知')} - {item.get('reason', '未知错误')}")
+                    messages.append(
+                        f"  • {item.get('url', '未知')} - {item.get('reason', '未知错误')}"
+                    )
 
             if messages:
                 yield event.plain_result("\n".join(messages))
 
-
     @cmd_sub.command("state")
-    async def cmd_sub_state(self, event: AstrMessageEvent, sub_id: str = "", state: str = ""):
+    async def cmd_sub_state(
+        self, event: AstrMessageEvent, sub_id: str = "", state: str = ""
+    ):
         """快速启停订阅推送
 
         Usage:
@@ -487,8 +494,7 @@ class RSSHubPlugin(Star):
 
         async with get_session() as session:
             stmt = select(Sub).where(
-                Sub.id == sub_id_int,
-                Sub.user_id == event.get_sender_id()
+                Sub.id == sub_id_int, Sub.user_id == event.get_sender_id()
             )
             result = await session.execute(stmt)
             sub = result.scalar_one_or_none()
@@ -535,7 +541,9 @@ class RSSHubPlugin(Star):
                     current_session=event.unified_msg_origin,
                     is_admin=event.is_admin(),
                     platform_name=event.platform_meta.name,
-                    is_platform_shared=self._is_platform_shared(event.platform_meta.name),
+                    is_platform_shared=self._is_platform_shared(
+                        event.platform_meta.name
+                    ),
                 )
             else:
                 # 按 URL 取消
@@ -545,7 +553,9 @@ class RSSHubPlugin(Star):
                     current_session=event.unified_msg_origin,
                     is_admin=event.is_admin(),
                     platform_name=event.platform_meta.name,
-                    is_platform_shared=self._is_platform_shared(event.platform_meta.name),
+                    is_platform_shared=self._is_platform_shared(
+                        event.platform_meta.name
+                    ),
                 )
 
             if result["success"]:
@@ -571,7 +581,9 @@ class RSSHubPlugin(Star):
             if result.get("failed"):
                 messages.append(f"\n❌ 失败 {len(result['failed'])} 个：")
                 for item in result["failed"]:
-                    messages.append(f"  • {item.get('target', '未知')} - {item.get('reason', '未知错误')}")
+                    messages.append(
+                        f"  • {item.get('target', '未知')} - {item.get('reason', '未知错误')}"
+                    )
 
             if messages:
                 yield event.plain_result("\n".join(messages))

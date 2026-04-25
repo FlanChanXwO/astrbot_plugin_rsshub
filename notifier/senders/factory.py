@@ -32,7 +32,9 @@ def get_sender_for_platform_name(
     else:
         telegram_enabled = strategies.telegram
         aiocqhttp_enabled = strategies.aiocqhttp
-        qq_official_enabled = strategies.qq_official if hasattr(strategies, "qq_official") else True
+        qq_official_enabled = (
+            strategies.qq_official if hasattr(strategies, "qq_official") else True
+        )
         weixin_oc_enabled = strategies.weixin_oc
 
     # Telegram strategy

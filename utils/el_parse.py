@@ -41,11 +41,7 @@ class ExpressionParser:
 
     @classmethod
     def parse(
-        cls,
-        expr: str,
-        args: tuple,
-        kwargs: dict,
-        param_names: list[str] | None = None
+        cls, expr: str, args: tuple, kwargs: dict, param_names: list[str] | None = None
     ) -> Any:
         """解析表达式并返回结果
 
@@ -101,20 +97,14 @@ class ExpressionParser:
         # 链式属性访问
         for attr in chain_attrs:
             if value is None:
-                raise AttributeError(
-                    f"Cannot access attribute '{attr}' on None value"
-                )
+                raise AttributeError(f"Cannot access attribute '{attr}' on None value")
             value = getattr(value, attr)
 
         return value
 
     @classmethod
     def _find_param_by_name(
-        cls,
-        name: str,
-        args: tuple,
-        kwargs: dict,
-        param_names: list[str] | None = None
+        cls, name: str, args: tuple, kwargs: dict, param_names: list[str] | None = None
     ) -> Any:
         """尝试从 args/kwargs 中查找参数
 

@@ -44,6 +44,7 @@ def _get_cfg():
     global _cfg
     if _cfg is None:
         from ..config import cfg
+
         _cfg = cfg
     return _cfg
 
@@ -325,9 +326,7 @@ class RSSMonitor:
         notifier_to_run: Notifier | None = None
 
         headers = {
-            "If-Modified-Since": format_datetime(
-                feed.last_modified or feed.updated_at
-            )
+            "If-Modified-Since": format_datetime(feed.last_modified or feed.updated_at)
         }
         if feed.etag:
             headers["If-None-Match"] = feed.etag

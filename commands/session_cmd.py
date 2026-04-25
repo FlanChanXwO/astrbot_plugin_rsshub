@@ -97,7 +97,11 @@ async def get_session(
 
         for field_name, field_def in all_fields.items():
             current_value = defaults.get(field_name)
-            default_label = current_value if current_value is not None else field_def.get("default", "null")
+            default_label = (
+                current_value
+                if current_value is not None
+                else field_def.get("default", "null")
+            )
             lines.append(f"{field_name} = {default_label}")
             lines.append(f"  {field_def.get('description', '')}")
 

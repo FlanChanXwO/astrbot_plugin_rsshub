@@ -23,7 +23,9 @@ def get_help_text(is_admin: bool) -> str:
     ]
 
     if is_admin:
-        command_lines.append("管理员测试推送: /sub_test <订阅ID或URL> [起始编号] [结束编号]")
+        command_lines.append(
+            "管理员测试推送: /sub_test <订阅ID或URL> [起始编号] [结束编号]"
+        )
         command_lines.append("  示例: /sub_test 5 1 3    # 测试订阅ID=5，推送条目1-3")
         command_lines.append("  示例: /sub_test https://xxx 1  # 测试URL，推送条目1")
 

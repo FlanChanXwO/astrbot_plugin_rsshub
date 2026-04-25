@@ -25,7 +25,12 @@ class WebResponse:
 
     @property
     def etag(self) -> str | None:
-        return self.headers.get("ETag")
+        # HTTP headers are case-insensitive
+        # Try to find etag header case-insensitively
+        for key, value in self.headers.items():
+            if key.lower() == "etag":
+                return value
+        return None
 
     @property
     def last_modified(self) -> datetime | None:
@@ -44,6 +49,15 @@ class WebFeed(WebResponse):
 
     rss_d: feedparser.FeedParserDict | None = None
     error: Optional["WebError"] = None
+
+    @property
+    def raw_xml(self) -> str:
+        """获取原始 XML 内容（字符串形式）"""
+        if self.content is None:
+            return ""
+        if isinstance(self.content, bytes):
+            return self.content.decode("utf-8", errors="replace")
+        return str(self.content)
 
     @property
     def feed_title(self) -> str | None:

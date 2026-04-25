@@ -52,7 +52,7 @@ class BasicConfig:
     deduplicate_multi_bot: bool = True
     bootstrap_skip_history: bool = True
     debug_payload: bool = False
-    history_entry_limit: int = 10
+    history_entry_limit: int = 0  # 默认不限制，避免漏推
 
     # 媒体配置
     download_media_before_send: bool = False
@@ -95,7 +95,7 @@ class BasicConfig:
             deduplicate_multi_bot=data.get("deduplicate_multi_bot", True),
             bootstrap_skip_history=data.get("bootstrap_skip_history", True),
             debug_payload=data.get("debug_payload", False),
-            history_entry_limit=data.get("history_entry_limit", 10),
+            history_entry_limit=data.get("history_entry_limit", 0),  # 默认0不限制，避免漏推
             download_media_before_send=data.get("download_media_before_send", False),
             download_media_timeout=data.get("download_media_timeout", 30),
         )
@@ -316,21 +316,6 @@ class SenderStrategiesConfig:
 
 
 @dataclass
-class PlatformSharedDataConfig:
-    """平台共享数据配置"""
-
-    aiocqhttp: bool = False
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> PlatformSharedDataConfig:
-        """从字典创建配置"""
-        if not data:
-            return cls()
-
-        return cls(aiocqhttp=data.get("aiocqhttp", False))
-
-
-@dataclass
 class RsshubPluginConfig:
     """RSSHub 插件统一配置类
 
@@ -351,9 +336,6 @@ class RsshubPluginConfig:
     ffmpeg: FFmpegConfig = field(default_factory=FFmpegConfig)
     sender_strategies: SenderStrategiesConfig = field(
         default_factory=SenderStrategiesConfig
-    )
-    platform_shared_data: PlatformSharedDataConfig = field(
-        default_factory=PlatformSharedDataConfig
     )
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     webui: WebUIConfig = field(default_factory=WebUIConfig)
@@ -398,7 +380,6 @@ class RsshubPluginConfig:
         global_cfg = astrbot_config.get("global_config", {})
         ffmpeg_cfg = astrbot_config.get("ffmpeg", {})
         sender_strategies_cfg = astrbot_config.get("sender_strategies", {})
-        platform_shared_data_cfg = astrbot_config.get("platform_shared_data", {})
         translation_cfg = astrbot_config.get("translation", {})
         webui_cfg = astrbot_config.get("webui", {})
 
@@ -407,9 +388,6 @@ class RsshubPluginConfig:
             global_config=GlobalConfig.from_dict(global_cfg),
             ffmpeg=FFmpegConfig.from_dict(ffmpeg_cfg),
             sender_strategies=SenderStrategiesConfig.from_dict(sender_strategies_cfg),
-            platform_shared_data=PlatformSharedDataConfig.from_dict(
-                platform_shared_data_cfg
-            ),
             translation=TranslationConfig.from_dict(translation_cfg),
             webui=WebUIConfig.from_dict(webui_cfg),
             db_file=astrbot_config.get("db_file", "rsshub.db"),
@@ -461,9 +439,6 @@ class RsshubPluginConfig:
                 "telegram": self.sender_strategies.telegram,
                 "aiocqhttp": self.sender_strategies.aiocqhttp,
                 "weixin_oc": self.sender_strategies.weixin_oc,
-            },
-            "platform_shared_data": {
-                "aiocqhttp": self.platform_shared_data.aiocqhttp,
             },
             "translation": {
                 "provider": self.translation.provider,

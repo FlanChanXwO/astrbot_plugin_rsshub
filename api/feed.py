@@ -18,21 +18,31 @@ FEED_ACCEPT: Final = (
 )
 
 _shared_session: aiohttp.ClientSession | None = None
+_session_lock: asyncio.Lock | None = None
 
 
 async def _get_shared_session() -> aiohttp.ClientSession:
-    global _shared_session
-    if _shared_session is None or _shared_session.closed:
-        _shared_session = aiohttp.ClientSession()
+    global _shared_session, _session_lock
+    if _session_lock is None:
+        _session_lock = asyncio.Lock()
+    async with _session_lock:
+        if _shared_session is None or _shared_session.closed:
+            _shared_session = aiohttp.ClientSession()
     return _shared_session
 
 
 async def close_shared_session() -> None:
     """Close module-level shared session if it exists."""
-    global _shared_session
-    if _shared_session is not None and not _shared_session.closed:
-        await _shared_session.close()
-    _shared_session = None
+    global _shared_session, _session_lock
+    if _session_lock is not None:
+        async with _session_lock:
+            if _shared_session is not None and not _shared_session.closed:
+                await _shared_session.close()
+            _shared_session = None
+    else:
+        if _shared_session is not None and not _shared_session.closed:
+            await _shared_session.close()
+        _shared_session = None
 
 
 async def feed_get(
@@ -77,9 +87,17 @@ async def feed_get(
             rss_content = await resp.read()
             ret.content = rss_content
             ret.url = str(resp.url)
-            ret.headers = dict(resp.headers)
+            # Preserve case-insensitive headers by converting to dict
+            # CIMultiDictProxy preserves original case when converted to dict
+            ret.headers = dict(resp.headers.items())
             ret.status = resp.status
             ret.reason = resp.reason
+
+            # Debug: log ETag header if present
+            etag_header = ret.headers.get("ETag") or ret.headers.get("etag")
+            if etag_header:
+                from ..utils.log_utils import logger
+                logger.debug(f"feed_get: Received ETag '{etag_header}' for {url}")
 
             if resp.status == 200 and int(resp.headers.get("Content-Length", "1")) == 0:
                 ret.status = 304

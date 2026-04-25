@@ -5,7 +5,6 @@ RSSHub 插件命令模块，提供纯逻辑函数供 main.py 调用。
 """
 
 from .config_cmd import get_user_option, set_user_option
-from .failed_queue_cmd import get_failed_queue_status
 from .help_cmd import get_help_text
 from .session_cmd import get_session, set_session
 from .subscription_cmd import (
@@ -32,7 +31,6 @@ from .types import (
     BatchUnsubscribeResult,
     CommandResult,
     ExportSubscriptionsResult,
-    GetFailedQueueStatusResult,
     ImportSubscriptionsResult,
     ListSubscriptionsResult,
     SetSubscriptionOptionResult,
@@ -63,8 +61,6 @@ __all__ = [
     # 配置相关
     "set_user_option",
     "get_user_option",
-    # 失败队列
-    "get_failed_queue_status",
     # 会话默认
     "set_session",
     "get_session",
@@ -73,7 +69,6 @@ __all__ = [
     # 类型
     "CommandResult",
     "ExportSubscriptionsResult",
-    "GetFailedQueueStatusResult",
     "ImportSubscriptionsResult",
     "ListSubscriptionsResult",
     "SetSubscriptionOptionResult",

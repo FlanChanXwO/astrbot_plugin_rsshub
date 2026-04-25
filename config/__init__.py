@@ -15,7 +15,6 @@ from .plugin_config import (
     BasicConfig,
     FFmpegConfig,
     GlobalConfig,
-    PlatformSharedDataConfig,
     RsshubPluginConfig,
     SenderStrategiesConfig,
     TranslationConfig,
@@ -39,7 +38,6 @@ __all__ = [
     "FFmpegConfig",
     "WebUIConfig",
     "SenderStrategiesConfig",
-    "PlatformSharedDataConfig",
     # 常量
     "SUB_OPTION_CASTERS",
     "USER_DEFAULT_OPTION_KEYS",

@@ -1,61 +1,74 @@
 """帮助命令逻辑"""
 
 
+HELP_TEXT = """\
+RSS 订阅插件帮助
+
+━━━━━━━━━━━━━━━━━━━━━━
+📋 订阅管理
+━━━━━━━━━━━━━━━━━━━━━━
+/sub <RSS链接>              订阅 RSS 源
+/unsub <订阅ID>             取消订阅
+/unsub_all [global]         取消全部订阅（global=所有会话，仅管理员）
+/sub_list [all [page] [size]]  查看订阅列表
+
+━━━━━━━━━━━━━━━━━━━━━━
+⚙️ 订阅设置
+━━━━━━━━━━━━━━━━━━━━━━
+/sub_set <ID> <选项> <值>   设置指定订阅选项
+/sub_state <ID> <on|off>    快速启停订阅推送
+
+━━━━━━━━━━━━━━━━━━━━━━
+💾 导入导出
+━━━━━━━━━━━━━━━━━━━━━━
+/sub_export [all]            导出订阅
+/sub_import [文件路径]      导入订阅
+
+━━━━━━━━━━━━━━━━━━━━━━
+🛠️ 用户与会话
+━━━━━━━━━━━━━━━━━━━━━━
+/sub_set_user <选项> <值>    设置当前用户配置
+/sub_get_user [选项]         查看用户配置
+/sub_set_session <key> <val> 设置当前会话默认配置
+/sub_get_session [key]       查看会话配置
+
+━━━━━━━━━━━━━━━━━━━━━━
+🧪 管理员命令
+━━━━━━━━━━━━━━━━━━━━━━
+/sub_test <ID或URL> [start] [end]  测试推送指定订阅
+
+━━━━━━━━━━━━━━━━━━━━━━
+💡 常用选项说明
+━━━━━━━━━━━━━━━━━━━━━━
+• notify           是否推送通知 (0/1)
+• send_mode        发送模式：-1=仅链接, 0=自动, 2=直接消息
+• length_limit     正文长度限制 (0=不限制)
+• display_title    是否显示标题 (-1=不显示, 0=自动, 1=显示)
+• display_media    是否显示媒体 (-1=不显示, 0=按配置)
+• interval         检查间隔（秒）
+• translate        是否开启翻译 (true/false)
+• translate_target_lang  翻译目标语言 (zh-CN/zh-TW/en/ja)
+
+━━━━━━━━━━━━━━━━━━━━━━
+❓ 其他帮助
+━━━━━━━━━━━━━━━━━━━━━━
+/rsshelp                    显示此帮助信息
+"""
+
+
 def get_help_text(is_admin: bool) -> str:
     """获取帮助文本
+
+    Args:
+        is_admin: 是否为管理员
 
     Returns:
         帮助文本字符串
     """
-    command_lines = [
-        "订阅: /sub <RSS 链接>",
-        "取消订阅: /unsub <订阅 ID>",
-        "取消全部订阅: /unsub_all [global]  # 默认当前会话，global=所有会话 (管理员)",
-        "订阅列表: /sub_list [all [page] [page_size]]",
-        "导出订阅: /sub_export [all]  # 默认当前会话，all=所有订阅 (管理员)",
-        "导入订阅: /sub_import [本地文件路径]",
-        "设置订阅选项: /sub_set <订阅 ID> <选项> <值>",
-        "设置默认选项: /sub_set_default <选项> <值>",
-        "会话默认配置: /sub_session_default_set <key> <value>",
-        "查看会话默认配置: /sub_session_default_get",
-        "插件配置: /rss_conf [key] [value]",
-        "失败队列: /sub_failed_queue  # 查看当前失败队列状态",
-    ]
+    text = HELP_TEXT
 
     if is_admin:
-        command_lines.append(
-            "管理员测试推送: /sub_test <订阅ID或URL> [起始编号] [结束编号]"
-        )
-        command_lines.append("  示例: /sub_test 5 1 3    # 测试订阅ID=5，推送条目1-3")
-        command_lines.append("  示例: /sub_test https://xxx 1  # 测试URL，推送条目1")
+        admin_tip = "\n\n👑 管理员提示：你可以使用所有命令，包括测试推送和跨会话操作。"
+        text += admin_tip
 
-    command_lines.append("帮助: /rsshelp")
-
-    return (
-        "RSS 订阅插件帮助:\n\n"
-        + "\n".join(command_lines)
-        + "\n\n"
-        + "常用选项:\n"
-        + "- notify: 0/1\n"
-        + "- send_mode: -1(仅链接)/0(自动)/2(直接消息)\n"
-        + "- length_limit: 正整数，0 表示不限制\n"
-        + "- display_title/display_via/display_author: -1~1\n"
-        + "- display_media: -1/0\n"
-        + "插件配置项:\n"
-        + "- proxy/rsshub_base_url/default_interval/minimal_interval/timeout/"
-        + "download_media_before_send/download_media_timeout/"
-        + "bootstrap_skip_history/ffmpeg_video_transcode/"
-        + "failed_queue_capacity/failed_queue_max_retries\n"
-        + "- sender_strategy_telegram/sender_strategy_aiocqhttp/"
-        + "sender_strategy_weixin_oc: 平台发送策略开关\n"
-        + "- deduplicate_multi_bot: 单会话多 BOT 去重（默认 true）\n"
-        + "- platform_shared_data_aiocqhttp: aiocqhttp 平台共享数据源"
-        + "（默认 false）\n\n"
-        + "会话级默认配置项:\n"
-        + "- notify/send_mode/length_limit/link_preview/\n"
-        + "display_author/display_via/display_title/display_entry_tags/\n"
-        + "style/display_media/interval/title/tags\n\n"
-        + "目标绑定:\n"
-        + "- /sub <RSS 链接>  # 自动推送到当前会话\n\n"
-        + "支持的平台：QQ、Telegram、微信、钉钉、Slack、Discord 等"
-    )
+    return text

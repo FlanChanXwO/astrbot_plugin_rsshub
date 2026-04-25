@@ -54,12 +54,25 @@ async def set_user_option(
         except ValueError as ex:
             return {"success": False, "error": str(ex)}
 
+    # 获取当前用户以显示旧值
+    user = await User.get_or_create(user_id)
+    old_value = getattr(user, option_key, None)
+
     # 更新用户配置
     await User.update_defaults(user_id, **{option_key: parsed_value})
 
+    # 格式化显示值（布尔值显示为中文）
+    def fmt(val):
+        if val is None:
+            return "未设置"
+        if isinstance(val, bool) or val in (0, 1, -100):
+            val_map = {0: "禁用", 1: "启用", True: "启用", False: "禁用", -100: "继承"}
+            return val_map.get(val, str(val))
+        return str(val)
+
     return {
         "success": True,
-        "message": f"用户配置已更新: {option_key} = {parsed_value}",
+        "message": f"用户配置已更新:\n{option_key}: {fmt(old_value)} → {fmt(parsed_value)}",
     }
 
 

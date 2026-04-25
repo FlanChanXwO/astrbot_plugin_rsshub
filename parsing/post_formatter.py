@@ -207,8 +207,13 @@ class PostFormatter:
                     f"content_translated={content != original_content}"
                 )
 
-            except Exception:
+            except Exception as trans_err:
                 # Translation failed, mark but use original
+                logger.warning(
+                    "PostFormatter: Translation failed for entry '%s': %s",
+                    original_title[:50] if original_title else "(untitled)",
+                    trans_err,
+                )
                 if translation_manager.translate_title and original_title:
                     self.title = translation_manager.format_translated_text(
                         original_title,

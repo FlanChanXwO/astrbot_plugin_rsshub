@@ -3,10 +3,9 @@
 
 from .migrations import ensure_schema_compat
 from .models import (
-    FailedNotification,
     Feed,
-    MonitorSchedule,
-    Option,
+    MigrationRecord,
+    PushHistory,
     Sub,
     TranslationCache,
     User,
@@ -19,9 +18,8 @@ __all__ = [
     "Feed",
     "Sub",
     "User",
-    "Option",
-    "MonitorSchedule",
-    "FailedNotification",
+    "PushHistory",
+    "MigrationRecord",
     "TranslationCache",
     "ensure_schema_compat",
     "init_db",

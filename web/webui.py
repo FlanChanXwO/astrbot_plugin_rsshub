@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import time
@@ -24,12 +25,17 @@ class RSSHubWebUI:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._sessions: dict[str, float] = {}
+        self._login_attempts: dict[str, list[float]] = {}
+        self._cleanup_task: asyncio.Task | None = None
 
         self._auth_enabled = config.auth_enabled
         self._password = config.password
         if self._auth_enabled and not self._password:
-            self._password = f"{secrets.randbelow(900000) + 100000}"
-            logger.warning(f"RSSHub WebUI generated password: {self._password}")
+            self._password = secrets.token_urlsafe(24)
+            logger.warning(
+                "RSSHub WebUI: auto-generated password is active. "
+                "Set 'password' in config to use a known value."
+            )
 
         self._session_timeout = max(60, config.session_timeout)
 
@@ -58,9 +64,13 @@ class RSSHubWebUI:
 
         self._site = web.TCPSite(self._runner, host=host, port=port)
         await self._site.start()
+        self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
         logger.info(f"RSSHub WebUI started at http://{host}:{port}")
 
     async def stop(self) -> None:
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
         if self._site is not None:
             await self._site.stop()
             self._site = None
@@ -93,6 +103,34 @@ class RSSHubWebUI:
             return None
         return self._json_response({"ok": False, "error": "unauthorized"}, status=401)
 
+    _RATE_LIMIT_MAX = 5
+    _RATE_LIMIT_WINDOW = 60.0
+
+    def _check_rate_limit(self, ip: str) -> bool:
+        now = time.time()
+        attempts = self._login_attempts.get(ip, [])
+        attempts = [t for t in attempts if now - t < self._RATE_LIMIT_WINDOW]
+        self._login_attempts[ip] = attempts
+        return len(attempts) < self._RATE_LIMIT_MAX
+
+    async def _session_cleanup_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(300)
+                now = time.time()
+                expired = [k for k, v in self._sessions.items() if now > v]
+                for k in expired:
+                    del self._sessions[k]
+                stale_ips = [
+                    ip
+                    for ip, attempts in self._login_attempts.items()
+                    if not attempts or now - attempts[-1] > self._RATE_LIMIT_WINDOW
+                ]
+                for ip in stale_ips:
+                    del self._login_attempts[ip]
+        except asyncio.CancelledError:
+            pass
+
     async def _handle_index(self, request: web.Request) -> web.Response:
         html = self._template_path.read_text(encoding="utf-8")
         return web.Response(text=html, content_type="text/html")
@@ -100,6 +138,12 @@ class RSSHubWebUI:
     async def _handle_login(self, request: web.Request) -> web.Response:
         if not self._auth_enabled:
             return self._json_response({"ok": True, "token": "no-auth"})
+
+        ip = request.remote or "unknown"
+        if not self._check_rate_limit(ip):
+            return self._json_response(
+                {"ok": False, "error": "rate_limited"}, status=429
+            )
 
         try:
             data = await request.json()
@@ -109,6 +153,7 @@ class RSSHubWebUI:
             )
         password = str(data.get("password", ""))
         if not secrets.compare_digest(password, self._password):
+            self._login_attempts.setdefault(ip, []).append(time.time())
             return self._json_response(
                 {"ok": False, "error": "invalid_password"},
                 status=401,

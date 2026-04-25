@@ -93,14 +93,6 @@ async def download_media_to_temp(
         connector=build_tls_connector(),
     ) as session:
         for candidate_url in _expand_download_candidates(url):
-            logger.debug(
-                "Media download attempt: origin=%s, candidate=%s, "
-                "timeout_seconds=%s, proxy_enabled=%s",
-                url,
-                candidate_url,
-                timeout_seconds,
-                bool(proxy),
-            )
             try:
                 async with session.get(
                     candidate_url,
@@ -108,15 +100,6 @@ async def download_media_to_temp(
                     allow_redirects=True,
                     max_redirects=10,
                 ) as resp:
-                    if resp.history:
-                        logger.debug(
-                            "Media redirect followed: origin=%s, candidate=%s, "
-                            "final=%s, hops=%s",
-                            url,
-                            candidate_url,
-                            str(resp.url),
-                            len(resp.history),
-                        )
                     if resp.status >= 400:
                         raise RuntimeError(
                             f"download failed: status={resp.status}, "
@@ -138,13 +121,6 @@ async def download_media_to_temp(
                 except Exception:
                     Path(tmp_name).unlink(missing_ok=True)
                     raise
-                logger.debug(
-                    "Media download success: origin=%s, candidate=%s, bytes=%s, tmp=%s",
-                    url,
-                    candidate_url,
-                    len(data),
-                    tmp_name,
-                )
                 return Path(tmp_name)
             except Exception as ex:
                 last_err = ex

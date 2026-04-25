@@ -242,13 +242,6 @@ class MessageSender:
                     )
                     continue
                 file_size = local_path.stat().st_size if local_path else 0
-                logger.info(
-                    "Adding image component: url=%s, file=%s, size=%s",
-                    media_url,
-                    media_file_value,
-                    file_size,
-                )
-                # Warn if GIF file is too large (may fail on some platforms)
                 if (
                     local_path
                     and local_path.suffix.lower() == ".gif"
@@ -447,7 +440,7 @@ class MessageSender:
             sent = await StarTools.send_message(session_id, message_chain)
             elapsed = time.time() - start_time
             if sent:
-                logger.info(
+                logger.debug(
                     "Message send success: session=%s, chain_length=%s, elapsed=%.2fs",
                     session_id,
                     len(normalized_chain),

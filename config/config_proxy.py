@@ -40,14 +40,15 @@ class ConfigProxy:
 
     _instance: ConfigProxy | None = None
     _config: RuntimeConfig | None = None
-    _write_lock: asyncio.Lock | None = None
+    _write_lock: asyncio.Lock = None  # type: ignore[assignment]
     _reload_hooks: list[Callable[[], Any]] = []
     _initialized: bool = False
 
     def __new__(cls) -> ConfigProxy:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._write_lock = asyncio.Lock()
+            if cls._write_lock is None:
+                cls._write_lock = asyncio.Lock()
         return cls._instance
 
     @classmethod

@@ -5,7 +5,7 @@ TypedDict definitions for command return values to provide type-safe access.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict, TypeVar
+from typing import TypedDict, TypeVar
 
 
 class CommandResult(TypedDict, total=False):
@@ -76,12 +76,6 @@ class SetUserDefaultOptionResult(CommandResult):
 
 class SetSubscriptionOptionResult(CommandResult):
     """Set subscription option command result."""
-
-
-class GetFailedQueueStatusResult(CommandResult):
-    """Get failed queue status command result."""
-
-    status: dict[str, Any]
 
 
 class TestSubscriptionResult(CommandResult):

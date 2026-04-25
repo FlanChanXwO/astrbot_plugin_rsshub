@@ -98,6 +98,10 @@ class ExpressionParser:
         for attr in chain_attrs:
             if value is None:
                 raise AttributeError(f"Cannot access attribute '{attr}' on None value")
+            if attr.startswith("_"):
+                raise AttributeError(
+                    f"Cannot access private attribute '{attr}' in expression"
+                )
             value = getattr(value, attr)
 
         return value

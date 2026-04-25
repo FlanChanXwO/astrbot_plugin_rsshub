@@ -21,6 +21,7 @@ class SendResult:
     needs_rebind: bool = False
     transient: bool = False
     detail: str = ""
+    http_status: int | None = None  # HTTP 状态码，用于推送历史记录
 
 
 @dataclass

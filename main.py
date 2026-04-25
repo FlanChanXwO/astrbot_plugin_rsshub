@@ -1,13 +1,3 @@
-#  RSS to AstrBot Plugin
-#  基于 RSS-to-Telegram-Bot 项目移植
-#  Original: Copyright (C) 2020-2025 Rongrong <i@rong.moe>
-#  Ported to AstrBot by AstrBot Team
-#
-#  This program is free software: you can redistribute it and/or modify
-#  it under the terms of the GNU Affero General Public License as
-#  published by the Free Software Foundation, either version 3 of the
-#  License, or (at your option) any later version.
-
 """
 AstrBot RSS订阅插件
 基于 RSS-to-Telegram-Bot 项目移植，适配 AstrBot 多平台消息推送
@@ -81,17 +71,6 @@ class RSSHubPlugin(Star):
         self._unsub_export_retention_seconds = 24 * 60 * 60
 
     @staticmethod
-    def _is_platform_shared(platform_name: str) -> bool:
-        """Check if platform shared data is enabled for the given platform."""
-        if cfg and cfg.platform_shared_data:
-            return bool(
-                cfg.platform_shared_data.aiocqhttp
-                if platform_name == "aiocqhttp"
-                else False
-            )
-        return False
-
-    @staticmethod
     def _parse_llm_params_input(params: str) -> dict[str, str]:
         """Parse LLM params input from JSON object or query-string form."""
         raw = (params or "").strip()
@@ -157,15 +136,24 @@ class RSSHubPlugin(Star):
     @staticmethod
     def _parse_option_value(key: str, value: str):
         """解析命令中的选项值并做基础校验"""
+        from .utils.config_parsers import parse_bool_value
+
         caster = SUB_OPTION_CASTERS.get(key)
         if caster is None:
             raise ValueError(f"不支持的选项: {key}")
         if caster is str:
             return value.strip()
+
+        # 尝试解析为布尔值（支持 true/false/yes/no/1/0 等）
+        try:
+            return parse_bool_value(value)
+        except ValueError:
+            pass  # 不是布尔值，继续尝试数字
+
         try:
             parsed = caster(value)
         except ValueError as ex:
-            raise ValueError(f"选项 {key} 需要数字值") from ex
+            raise ValueError(f"选项 {key} 需要数字值或布尔值") from ex
         if key == "interval" and cfg is not None:
             minimal = cfg.minimal_interval
             if parsed < minimal:
@@ -211,7 +199,7 @@ class RSSHubPlugin(Star):
         if await User.consume_binding_notice(user_id):
             yield event.plain_result(
                 "检测到最近一次 RSS 推送失败，可能是订阅目标会话已失效。\n"
-                "请使用 /sub_bind <private|group|session> 重新绑定默认推送目标。"
+                "请检查订阅配置或重新订阅。"
             )
 
     async def _cleanup_unsub_export_backups(self, temp_dir: Path) -> None:
@@ -380,110 +368,45 @@ class RSSHubPlugin(Star):
 
     # ===== 命令方法 =====
 
-    @filter.command_group("sub", alias={"订阅"})
-    async def cmd_sub(self, event: AstrMessageEvent, *urls: str, target: str = ""):
-        """订阅 RSS 源
+    @filter.command("sub_state", alias={"订阅状态"})
+    async def cmd_sub_state(self, event: AstrMessageEvent, sub_id: str = ""):
+        """订阅状态管理命令
 
         Usage:
-            /sub https://example.com/rss.xml
-            /sub https://rss1.xml https://rss2.xml https://rss3.xml
+            /sub_state <订阅ID> on      # 启用推送
+            /sub_state <订阅ID> off     # 禁用推送
         """
-        async for notice in self._emit_binding_notice_if_needed(event):
-            yield notice
-
-        # 过滤有效的 RSS URL（以 http 或 https 开头）
-        valid_urls = [u for u in urls if u.startswith(("http://", "https://"))]
-
-        if not valid_urls:
+        if not sub_id:
             yield event.plain_result(
-                "请提供至少一个有效的 RSS 链接（需以 http 或 https 开头）\n"
-                "使用 /sub state <id> on/off 控制订阅推送启停"
+                "用法: /sub_state <订阅ID> on/off\n"
+                "支持: on/off, true/false, yes/no, y/n, 1/0, 开启/关闭"
             )
             return
-
-        # 单个链接使用原有方式
-        if len(valid_urls) == 1:
-            result = await subscribe_feed(
-                url=valid_urls[0],
-                target=target,
-                user_id=event.get_sender_id(),
-                platform_name=event.platform_meta.name,
-                timeout=cfg.timeout if cfg else 30,
-                proxy=cfg.proxy if cfg else "",
-                is_platform_shared=self._is_platform_shared(event.platform_meta.name),
-                session_defaults=await self._get_session_defaults(
-                    event.unified_msg_origin
-                ),
-                parse_target_fn=lambda t: self._parse_target_session(event, t),
-            )
-            if result["success"]:
-                yield event.plain_result(result["message"])
-            else:
-                yield event.plain_result(result["error"])
+        # 解析 sub_id 和 state
+        parts = sub_id.split()
+        if len(parts) >= 2:
+            actual_sub_id = parts[0]
+            state = parts[1].lower()
         else:
-            # 多个链接使用批量订阅
-            result = await batch_subscribe_feeds(
-                urls=valid_urls,
-                target=target,
-                user_id=event.get_sender_id(),
-                platform_name=event.platform_meta.name,
-                timeout=cfg.timeout if cfg else 30,
-                proxy=cfg.proxy if cfg else "",
-                is_platform_shared=self._is_platform_shared(event.platform_meta.name),
-                session_defaults=await self._get_session_defaults(
-                    event.unified_msg_origin
-                ),
-                parse_target_fn=lambda t: self._parse_target_session(event, t),
-            )
-
-            # 构建批量结果消息
-            messages = []
-            if result.get("successful"):
-                messages.append(f"✅ 成功订阅 {len(result['successful'])} 个源：")
-                for item in result["successful"]:
-                    messages.append(
-                        f"  • {item.get('title', '未知')} (ID: {item.get('sub_id', 0)})"
-                    )
-
-            if result.get("failed"):
-                messages.append(f"\n❌ 失败 {len(result['failed'])} 个：")
-                for item in result["failed"]:
-                    messages.append(
-                        f"  • {item.get('url', '未知')} - {item.get('reason', '未知错误')}"
-                    )
-
-            if messages:
-                yield event.plain_result("\n".join(messages))
-
-    @cmd_sub.command("state")
-    async def cmd_sub_state(
-        self, event: AstrMessageEvent, sub_id: str = "", state: str = ""
-    ):
-        """快速启停订阅推送
-
-        Usage:
-            /sub state <订阅ID> on      # 启用推送
-            /sub state <订阅ID> off     # 禁用推送
-            /sub state <订阅ID> true    # 同 on
-            /sub state <订阅ID> false   # 同 off
-        """
-        if not sub_id or not state:
             yield event.plain_result(
-                "用法: /sub state <订阅ID> on/off\n"
-                "支持: on/off, true/false, yes/no, y/n, 1/0"
+                "用法: /sub_state <订阅ID> on/off\n"
+                "示例: /sub_state 123 on"
             )
             return
 
-        from .utils.config_parsers import parse_bool_value
-
-        try:
-            enable = parse_bool_value(state)
-        except ValueError as ex:
-            yield event.plain_result(str(ex))
+        if state in ("on", "true", "yes", "y", "1", "开启"):
+            enable = True
+        elif state in ("off", "false", "no", "n", "0", "关闭"):
+            enable = False
+        else:
+            yield event.plain_result(
+                f"不支持的状态值: {state}\n"
+                "请使用: on/off, true/false, yes/no, y/n, 1/0, 开启/关闭"
+            )
             return
 
         try:
-            sub_id_int = int(sub_id)
+            sub_id_int = int(actual_sub_id)
         except ValueError:
             yield event.plain_result("订阅 ID 必须是数字")
             return
@@ -509,6 +432,82 @@ class RSSHubPlugin(Star):
 
             action = "启用" if enable else "禁用"
             yield event.plain_result(f"已{action}订阅 (ID: {sub_id_int}) 的推送")
+
+    @filter.command("sub", alias={"订阅"})
+    async def cmd_sub(self, event: AstrMessageEvent, urls: str = "", target: str = ""):
+        """订阅 RSS 源
+
+        Usage:
+            /sub https://example.com/rss.xml
+            /sub https://rss1.xml https://rss2.xml https://rss3.xml
+        """
+        async for notice in self._emit_binding_notice_if_needed(event):
+            yield notice
+
+        # 解析URL（支持空格分隔的多个URL）
+        url_list = [u.strip() for u in urls.split() if u.strip()]
+
+        # 过滤有效的 RSS URL（以 http 或 https 开头）
+        valid_urls = [u for u in url_list if u.startswith(("http://", "https://"))]
+
+        if not valid_urls:
+            yield event.plain_result(
+                "请提供至少一个有效的 RSS 链接（需以 http 或 https 开头）\n"
+                "使用 /sub_state \u003cID\u003e on/off 控制订阅推送启停"
+            )
+            return
+
+        # 单个链接使用原有方式
+        if len(valid_urls) == 1:
+            result = await subscribe_feed(
+                url=valid_urls[0],
+                target=target,
+                user_id=event.get_sender_id(),
+                platform_name=event.platform_meta.name,
+                timeout=cfg.timeout if cfg else 30,
+                proxy=cfg.proxy if cfg else "",
+                session_defaults=await self._get_session_defaults(
+                    event.unified_msg_origin
+                ),
+                parse_target_fn=lambda t: self._parse_target_session(event, t),
+            )
+            if result["success"]:
+                yield event.plain_result(result["message"])
+            else:
+                yield event.plain_result(result["error"])
+        else:
+            # 多个链接使用批量订阅
+            result = await batch_subscribe_feeds(
+                urls=valid_urls,
+                target=target,
+                user_id=event.get_sender_id(),
+                platform_name=event.platform_meta.name,
+                timeout=cfg.timeout if cfg else 30,
+                proxy=cfg.proxy if cfg else "",
+                session_defaults=await self._get_session_defaults(
+                    event.unified_msg_origin
+                ),
+                parse_target_fn=lambda t: self._parse_target_session(event, t),
+            )
+
+            # 构建批量结果消息
+            messages = []
+            if result.get("successful"):
+                messages.append(f"✅ 成功订阅 {len(result['successful'])} 个源：")
+                for item in result["successful"]:
+                    messages.append(
+                        f"  • {item.get('title', '未知')} (ID: {item.get('sub_id', 0)})"
+                    )
+
+            if result.get("failed"):
+                messages.append(f"\n❌ 失败 {len(result['failed'])} 个：")
+                for item in result["failed"]:
+                    messages.append(
+                        f"  • {item.get('url', '未知')} - {item.get('reason', '未知错误')}"
+                    )
+
+            if messages:
+                yield event.plain_result("\n".join(messages))
 
     @filter.command("unsub", alias={"取消订阅"})
     async def cmd_unsub(self, event: AstrMessageEvent, targets: str = ""):
@@ -541,9 +540,6 @@ class RSSHubPlugin(Star):
                     current_session=event.unified_msg_origin,
                     is_admin=event.is_admin(),
                     platform_name=event.platform_meta.name,
-                    is_platform_shared=self._is_platform_shared(
-                        event.platform_meta.name
-                    ),
                 )
             else:
                 # 按 URL 取消
@@ -553,9 +549,6 @@ class RSSHubPlugin(Star):
                     current_session=event.unified_msg_origin,
                     is_admin=event.is_admin(),
                     platform_name=event.platform_meta.name,
-                    is_platform_shared=self._is_platform_shared(
-                        event.platform_meta.name
-                    ),
                 )
 
             if result["success"]:
@@ -570,7 +563,6 @@ class RSSHubPlugin(Star):
                 current_session=event.unified_msg_origin,
                 is_admin=event.is_admin(),
                 platform_name=event.platform_meta.name,
-                is_platform_shared=self._is_platform_shared(event.platform_meta.name),
             )
 
             # 构建批量结果消息
@@ -610,7 +602,6 @@ class RSSHubPlugin(Star):
             user_id=event.get_sender_id(),
             current_session=event.unified_msg_origin,
             platform_name=event.platform_meta.name,
-            is_platform_shared=self._is_platform_shared(event.platform_meta.name),
             is_admin=event.is_admin(),
             scope=scope,
             page=page,
@@ -676,6 +667,7 @@ class RSSHubPlugin(Star):
             end_index=end_index,
             target_session=event.unified_msg_origin,
             platform_name=event.platform_meta.name,
+            user_id=event.get_sender_id(),
             timeout=cfg.timeout if cfg else 30,
             proxy=cfg.proxy if cfg else "",
             download_media_before_send=(
@@ -988,7 +980,7 @@ class RSSHubPlugin(Star):
         )
         yield event.plain_result(result["message"])
 
-    @filter.command("activate_subs", alias={"enable_subs", "启用订阅"})
+    @filter.command("activate_subs", alias={"enable_subs", "启用全部订阅"})
     async def cmd_activate_subs(self, event: AstrMessageEvent):
         """启用当前会话中的所有订阅
 
@@ -1000,7 +992,7 @@ class RSSHubPlugin(Star):
         )
         yield event.plain_result(result["message"])
 
-    @filter.command("deactivate_subs", alias={"disable_subs", "禁用订阅"})
+    @filter.command("deactivate_subs", alias={"disable_subs", "禁用全部订阅"})
     async def cmd_deactivate_subs(self, event: AstrMessageEvent):
         """禁用当前会话中的所有订阅
 

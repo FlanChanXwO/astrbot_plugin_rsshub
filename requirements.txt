@@ -8,7 +8,7 @@ emoji>=2.14.1
 minify-html>=0.16.4
 minify-html-onepass>=0.16.4
 
-# 表格转图片功能（可选）
+# 表格转图片功能
 matplotlib>=3.9.4
 
 # 网络代理支持
@@ -27,6 +27,3 @@ asyncstdlib>=3.13.1
 cachetools>=6.1.0
 CJKwrap>=2.2
 imageio-ffmpeg>=0.6.0
-
-# Telegraph API
-aiographfix>=0.2.2

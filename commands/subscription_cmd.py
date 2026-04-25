@@ -47,7 +47,6 @@ async def subscribe_feed(
     platform_name: str,
     timeout: int,
     proxy: str,
-    is_platform_shared: bool,
     session_defaults: dict[str, int | str],
     parse_target_fn: Callable[[str], tuple[str | None, str | None]],
 ) -> SubscribeResult:
@@ -77,22 +76,12 @@ async def subscribe_feed(
         return {"success": False, "error": target_err}
 
     # 检查重复订阅
-    if is_platform_shared:
-        existing_sub = await Sub.get_by_platform_and_link(
-            platform_name, url, target_session
-        )
-        if existing_sub:
-            return {
-                "success": False,
-                "error": f"该源已在平台共享订阅中存在：{existing_sub.feed.title}",
-            }
-    else:
-        existing_sub = await Sub.get_by_user_and_link(user_id, url, target_session)
-        if existing_sub:
-            return {
-                "success": False,
-                "error": f"您已经订阅了此源：{existing_sub.feed.title}",
-            }
+    existing_sub = await Sub.get_by_user_and_link(user_id, url, target_session)
+    if existing_sub:
+        return {
+            "success": False,
+            "error": f"您已经订阅了此源：{existing_sub.feed.title}",
+        }
 
     feed = await Feed.get_or_create(link=url, title=title)
 
@@ -163,7 +152,6 @@ async def unsubscribe_feed(
     current_session: str,
     is_admin: bool,
     platform_name: str,
-    is_platform_shared: bool,
 ) -> SubscribeResult:
     """取消订阅"""
     if not sub_id:
@@ -183,9 +171,8 @@ async def unsubscribe_feed(
         is_current_session = bool(sub.target_session) and (
             sub.target_session == current_session
         )
-        is_same_platform = is_platform_shared and sub.platform_name == platform_name
 
-        if not (is_owner or is_current_session or is_same_platform):
+        if not (is_owner or is_current_session):
             return {"success": False, "error": "无权限删除该订阅"}
 
     # 构建取消订阅的详细信息（简约列表格式）
@@ -213,18 +200,14 @@ async def unsubscribe_feed_by_url(
     current_session: str,
     is_admin: bool,
     platform_name: str,
-    is_platform_shared: bool,
 ) -> CommandResult:
     """根据 URL 取消当前会话的订阅（精确匹配）"""
     # 验证 URL 格式
     if not re.match(r"^https?://", url):
         return {"success": False, "error": f"无效的 URL: {url}"}
 
-    # 根据模式查找订阅
-    if is_platform_shared:
-        sub = await Sub.get_by_platform_and_link(platform_name, url, current_session)
-    else:
-        sub = await Sub.get_by_user_and_link(user_id, url, current_session)
+    # 查找订阅
+    sub = await Sub.get_by_user_and_link(user_id, url, current_session)
 
     if not sub:
         return {
@@ -238,9 +221,8 @@ async def unsubscribe_feed_by_url(
         is_current_session = bool(sub.target_session) and (
             sub.target_session == current_session
         )
-        is_same_platform = is_platform_shared and sub.platform_name == platform_name
 
-        if not (is_owner or is_current_session or is_same_platform):
+        if not (is_owner or is_current_session):
             return {"success": False, "error": f"无权限取消订阅: {url}"}
 
     # 构建取消订阅的详细信息（简约列表格式）
@@ -270,7 +252,6 @@ async def batch_subscribe_feeds(
     platform_name: str,
     timeout: int,
     proxy: str,
-    is_platform_shared: bool,
     session_defaults: dict[str, int | str],
     parse_target_fn: Callable[[str], tuple[str | None, str | None]],
 ) -> BatchSubscribeResult:
@@ -294,7 +275,6 @@ async def batch_subscribe_feeds(
             platform_name=platform_name,
             timeout=timeout,
             proxy=proxy,
-            is_platform_shared=is_platform_shared,
             session_defaults=session_defaults,
             parse_target_fn=parse_target_fn,
         )
@@ -336,7 +316,6 @@ async def batch_unsubscribe_feeds(
     current_session: str,
     is_admin: bool,
     platform_name: str,
-    is_platform_shared: bool,
 ) -> BatchUnsubscribeResult:
     """批量取消订阅（支持 ID 列表或 URL 列表）"""
     if not targets:
@@ -366,7 +345,6 @@ async def batch_unsubscribe_feeds(
                 current_session=current_session,
                 is_admin=is_admin,
                 platform_name=platform_name,
-                is_platform_shared=is_platform_shared,
             )
         else:
             # 按 URL 取消
@@ -376,7 +354,6 @@ async def batch_unsubscribe_feeds(
                 current_session=current_session,
                 is_admin=is_admin,
                 platform_name=platform_name,
-                is_platform_shared=is_platform_shared,
             )
 
         if result["success"]:
@@ -408,7 +385,6 @@ async def list_subscriptions(
     user_id: str,
     current_session: str,
     platform_name: str,
-    is_platform_shared: bool,
     is_admin: bool,
     scope: str,
     page: str,
@@ -423,7 +399,7 @@ async def list_subscriptions(
     page_int = 1
     page_size_int = 5
 
-    if show_all_sessions or is_platform_shared:
+    if show_all_sessions:
         try:
             page_int = max(1, int(page.strip() or "1"))
             page_size_int = int(page_size.strip() or "5")
@@ -442,15 +418,6 @@ async def list_subscriptions(
             "订阅列表（全局，所有平台/会话）:",
             f"页码: {page_int}/{total_pages}  每页: {page_size_int}  总数: {total_count}",
         ]
-    elif is_platform_shared:
-        subs, total_count = await Sub.get_by_platform_paged(
-            platform_name, page=page_int, page_size=page_size_int
-        )
-        total_pages = max(1, (total_count + page_size_int - 1) // page_size_int)
-        lines = [
-            f"订阅列表（平台共享模式 - {platform_name}）:",
-            f"页码: {page_int}/{total_pages}  每页: {page_size_int}  总数: {total_count}",
-        ]
     else:
         subs = await Sub.get_by_user(user_id)
         lines = ["您的订阅列表（当前会话）:"]
@@ -460,7 +427,7 @@ async def list_subscriptions(
             return {"success": True, "message": "当前没有任何订阅"}
         return {"success": True, "message": "您还没有任何订阅"}
 
-    if not show_all_sessions and not is_platform_shared:
+    if not show_all_sessions:
         subs = [
             sub
             for sub in subs
@@ -490,7 +457,7 @@ async def list_subscriptions(
         custom_title = f" ({sub.title})" if sub.title else ""
         state_icon = "✓" if sub.state == 1 else "✗"
         lines.append(f"{idx}. [{sub.id}] {state_icon} {feed_title}{custom_title}")
-        if show_all_sessions or is_platform_shared:
+        if show_all_sessions:
             lines.append(f"    user: {sub.user_id}")
             lines.append(f"    platform: {sub.platform_name or '(unknown)'}'")
             lines.append(f"    target: {sub.target_session or '(未绑定)'}'")
@@ -499,7 +466,7 @@ async def list_subscriptions(
             lines.append(f"    {feed_link}")
 
     has_more = False
-    if (show_all_sessions or is_platform_shared) and page_int < total_pages:
+    if show_all_sessions and page_int < total_pages:
         has_more = True
 
     return {"success": True, "message": "\n".join(lines), "has_more": has_more}
@@ -512,6 +479,7 @@ async def test_subscription(
     end_index: int | None,
     target_session: str,
     platform_name: str,
+    user_id: str,
     timeout: int,
     proxy: str,
     download_media_before_send: bool,
@@ -528,6 +496,7 @@ async def test_subscription(
         end_index: 结束条目编号（可选，None表示只推送起始条目）
         target_session: 推送目标会话
         platform_name: 平台类型名（如 aiocqhttp, telegram 等）
+        user_id: 用户ID
         timeout: 请求超时时间
         proxy: 代理设置
         download_media_before_send: 是否在发送前下载媒体
@@ -602,7 +571,7 @@ async def test_subscription(
         sub = Sub(
             id=0,  # 临时ID
             state=1,
-            user_id="test",
+            user_id=user_id,
             feed_id=0,
             target_session=target_session,
             platform_name=platform_name,
@@ -921,15 +890,33 @@ async def set_subscription_option(
         except ValueError as ex:
             return {"success": False, "error": str(ex)}
 
+    # 获取订阅信息（旧值和 feed 标题）
+    sub_info = await Sub.get_by_id(sub_id_int)
+    if not sub_info:
+        return {"success": False, "error": "未找到该订阅，或无权限修改"}
+
+    old_value = getattr(sub_info, option_key, None)
+    feed_title = sub_info.feed.title if sub_info.feed else "未知"
+
+    # 更新订阅
     updated = await Sub.update_options(
         sub_id_int, user_id, **{option_key: parsed_value}
     )
     if not updated:
-        return {"success": False, "error": "未找到该订阅，或无权限修改"}
+        return {"success": False, "error": "更新失败"}
+
+    # 格式化显示值（布尔值显示为中文）
+    def fmt(val):
+        if val is None:
+            return "未设置"
+        if isinstance(val, bool) or val in (0, 1, -100):
+            val_map = {0: "禁用", 1: "启用", True: "启用", False: "禁用", -100: "继承"}
+            return val_map.get(val, str(val))
+        return str(val)
 
     return {
         "success": True,
-        "message": f"订阅 [{sub_id_int}] 已更新: {option_key} = {parsed_value}",
+        "message": f"订阅 [{sub_id_int}] {feed_title}\n{option_key}: {fmt(old_value)} → {fmt(parsed_value)}",
     }
 
 
@@ -948,11 +935,9 @@ async def batch_activate_subs(
         命令结果
     """
     from sqlalchemy.orm import selectinload
-    from sqlmodel import select
+    from sqlmodel import or_, select
 
     from ..db import Sub, get_session
-
-    from sqlmodel import or_
 
     async with get_session() as session:
         # 查询当前会话中该用户的所有订阅（当前禁用的），预加载 feed

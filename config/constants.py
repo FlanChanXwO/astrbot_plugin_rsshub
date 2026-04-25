@@ -64,7 +64,6 @@ PLUGIN_CONFIG_KEYS: set[str] = {
     "deduplicate_multi_bot",
     "bootstrap_skip_history",
     "debug_payload",
-    "platform_shared_data_aiocqhttp",
 }
 
 # 会话默认前缀

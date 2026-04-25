@@ -64,7 +64,6 @@ class TranslationManager:
 
     # 单例实例
     _instance: TranslationManager | None = None
-    _initialized: bool = False
 
     def __new__(
         cls, session: aiohttp.ClientSession | None = None
@@ -76,11 +75,12 @@ class TranslationManager:
 
     def __init__(self, session: aiohttp.ClientSession | None = None):
         """初始化（仅第一次创建时执行）。"""
-        # 避免重复初始化
-        if TranslationManager._initialized:
+        # 避免重复初始化 - 使用类级别的已创建标志
+        if hasattr(TranslationManager, "_instance_created"):
+            logger.debug("TranslationManager: 单例已存在，跳过初始化")
             return
 
-        TranslationManager._initialized = True
+        TranslationManager._instance_created = True
         self._session = session
         self._provider: BaseTranslator | None = None
         self._load_config()

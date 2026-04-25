@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from astrbot.api.message_components import Image, Plain, Video
@@ -197,8 +198,6 @@ class QQOfficialMessageSender(MessageSender):
                         )
                         return video_result
                     # Small delay after video
-                    import asyncio
-
                     await asyncio.sleep(0.5)
 
             # 2. Send images based on count
@@ -245,8 +244,6 @@ class QQOfficialMessageSender(MessageSender):
                         )
                         return img_result
                     # Small delay between images
-                    import asyncio
-
                     await asyncio.sleep(0.3)
 
                 # Then send text separately

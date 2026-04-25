@@ -67,7 +67,106 @@ def should_translate(
     if target_lang in ("zh-CN", "zh-TW") and detected in ("zh-CN", "zh-TW"):
         return False
 
+    # 混合语言检测：计算目标语言在文本中的比例
+    # 即使主要检测语言是目标语言，但如果目标语言字符比例不够高，仍然需要翻译
+    target_ratio = calculate_target_language_ratio(text_sample, target_lang)
+
+    # 如果目标语言比例超过 85%，认为不需要翻译
+    if target_ratio >= 0.85:
+        return False
+
+    # 如果目标语言比例在 50%-85% 之间，需要更仔细判断
+    if target_ratio >= 0.50:
+        # 检查是否包含明显的外语单词（拉丁字母连续出现）
+        foreign_word_ratio = detect_foreign_words(text_sample, target_lang)
+        if foreign_word_ratio < 0.10:  # 外语单词少于 10%
+            return False
+
     return True
+
+
+def calculate_target_language_ratio(text: str, target_lang: str) -> float:
+    """计算文本中目标语言字符的比例。
+
+    Args:
+        text: 要分析的文本
+        target_lang: 目标语言代码
+
+    Returns:
+        目标语言字符比例 (0.0 - 1.0)
+    """
+    if not text:
+        return 0.0
+
+    # 移除空白字符进行计算
+    clean_text = text.replace(" ", "").replace("\n", "").replace("\t", "")
+    total_chars = len(clean_text)
+
+    if total_chars == 0:
+        return 0.0
+
+    target_count = 0
+
+    if target_lang in ("zh-CN", "zh-TW", "zh"):
+        # 中文目标：中文字符 + 常见中文标点
+        target_count = len(CJK_CHARS.findall(clean_text))
+        # 也计算常见中文标点
+        chinese_punct = re.findall(r'[。，、；：""''（）《》【】？！]', clean_text)
+        target_count += len(chinese_punct)
+    elif target_lang in ("ja", "jp"):
+        # 日文目标：平假名 + 片假名 + 汉字（CJK）
+        target_count = (
+            len(HIRAGANA.findall(clean_text)) +
+            len(KATAKANA.findall(clean_text)) +
+            len(CJK_CHARS.findall(clean_text))
+        )
+    elif target_lang in ("ko", "kr"):
+        # 韩文目标：韩文字符
+        target_count = len(HANGUL.findall(clean_text))
+    elif target_lang == "en":
+        # 英文目标：拉丁字母
+        target_count = len(LATIN_CHARS.findall(clean_text))
+
+    return target_count / total_chars
+
+
+def detect_foreign_words(text: str, target_lang: str) -> float:
+    """检测文本中外语单词的比例。
+
+    主要用于检测拉丁字母单词（英文等）在非拉丁目标语言文本中的比例。
+
+    Args:
+        text: 要分析的文本
+        target_lang: 目标语言代码
+
+    Returns:
+        外语单词比例 (0.0 - 1.0)
+    """
+    if not text:
+        return 0.0
+
+    # 对于英文目标语言，不需要检测外语单词
+    if target_lang == "en":
+        return 0.0
+
+    # 查找所有拉丁字母单词（2个字母以上）
+    words = re.findall(r'[a-zA-Z]{2,}', text)
+    total_words = len(words)
+
+    if total_words == 0:
+        return 0.0
+
+    # 获取所有字符数（排除空白）
+    clean_text = text.replace(" ", "").replace("\n", "").replace("\t", "")
+    total_chars = len(clean_text)
+
+    if total_chars == 0:
+        return 0.0
+
+    # 计算拉丁字母字符数
+    latin_chars = len(LATIN_CHARS.findall(clean_text))
+
+    return latin_chars / total_chars
 
 
 def detect_language_simple(text: str) -> str | None:

@@ -32,7 +32,7 @@
         "type": "int",
         "description": "去重历史最小保留数量",
         "hint": "每个 Feed 至少保留多少条去重哈希记录，值越大越能避免历史回流重复推送，但会增加存储与比对开销",
-        "default": 200
+        "default": 500
       },
       "hash_history_multiplier": {
         "type": "int",
@@ -99,8 +99,8 @@
       "history_entry_limit": {
         "type": "int",
         "description": "历史条目推送限制",
-        "hint": "限制每次推送时最多发送多少条历史条目，按发布时间降序取最新N条。0=不限制，建议10-50",
-        "default": 10
+        "hint": "限制每次推送时最多发送多少条历史条目，按发布时间降序取最新N条。0=不限制，建议保持0以避免漏推",
+        "default": 0
       },
       "download_media_before_send": {
         "type": "bool",
@@ -125,7 +125,7 @@
         "type": "int",
         "description": "默认监控间隔（分钟）",
         "hint": "订阅未设置监控间隔时使用的默认值",
-        "default": 10
+        "default": 5
       },
       "notify": {
         "type": "bool",
@@ -229,26 +229,13 @@
         "type": "bool",
         "description": "无声视频自动转GIF",
         "hint": "开启后，检测到无音频流的视频时会自动转换为高质量GIF。适合Bilibili等平台的动图/无声短视频。注意：转换可能耗时较长",
-        "default": false
+        "default": true
       },
       "gif_transcode_timeout": {
         "type": "int",
         "description": "GIF转换超时（秒）",
         "hint": "视频转GIF的最大允许时间。转换耗时取决于视频长度和分辨率，建议60-120秒",
         "default": 60
-      }
-    }
-  },
-  "platform_shared_data": {
-    "type": "object",
-    "description": "平台共享数据源配置",
-    "hint": "配置特定平台是否开启共享数据源。开启后，该平台下不同 BOT 的订阅操作被视为共享数据",
-    "items": {
-      "aiocqhttp": {
-        "type": "bool",
-        "description": "aiocqhttp 平台共享数据源",
-        "hint": "开启后，aiocqhttp 平台下所有 BOT 的订阅数据共享，任意 BOT 掉线时其他 BOT 可继续推送",
-        "default": false
       }
     }
   },

@@ -2,143 +2,50 @@
 
 ## [1.1.0] - 2026-04-23
 
-### Breaking Changes
-
-- **命令更名**:
-  - `/sub_set_default` → `/sub_set_user` (设置用户配置)
-  - `/sub_session_default_set` → `/sub_set_session` (设置会话默认)
-  - `/sub_session_default_get` → `/sub_get_session` (获取会话默认)
-  - `/sub_bind` → **已删除** (功能已整合)
-
-- **`/sub_test` 命令重构**（破坏性变更）：
-  - 参数格式完全改变：从粒度模式 (`latest`/`all`/`<数量>`) 改为条目编号范围
-  - 新格式：`/sub_test <目标> [起始编号] [结束编号]`
-  - 支持通过 URL 直接测试（无需先订阅）
-  - 条目编号从 1 开始（1 = 最新发布的条目）
-  - 示例：`/sub_test 5 1 3`（推送订阅ID=5的条目1-3）
-  - URL测试示例：`/sub_test https://example.com/rss.xml 1 5`
-  - URL测试时使用全局配置
-
-- **配置管理架构重构**：
-  - 引入 ConfigProxy 单例模式，全局配置通过 `cfg` 对象统一管理
-  - 所有模块通过 `from ..config import cfg` 访问配置，无需层层传递
-  - 支持配置热重载 (`cfg.reload()`) 和重载钩子机制 (`register_reload_hook`)
-  - 细粒度写锁保护，单配置项修改 (`cfg.set_value()`) 线程安全
-
-- **命令调整**：
-  - 移除 `/rss_conf` 命令，全局配置请前往 AstrBot 管理面板 设置
-
 ### Added
 
-- **三层配置继承架构**:
-  - Sub 表新增 `use_sub_config` 字段：控制是否使用订阅自身配置
-  - User 表新增 `use_user_config` 字段：控制是否使用用户自身配置
-  - 默认行为：订阅 → 继承用户 → 继承全局（开箱即用）
-  - 新增命令：
-    - `/sub_set_user` / `/sub_get_user` - 用户配置管理
-    - `/sub_set_session` / `/sub_get_session` - 会话默认管理
-  - 布尔值支持多种格式：true/false, yes/no, y/n, 1/0, on/off, enable/disable
+- **三层配置继承架构**：订阅级 → 用户级 → 全局级，开箱即用
+  - 新增 `/sub_set_user` / `/sub_get_user` - 用户配置管理
+  - 新增 `/sub_set_session` / `/sub_get_session` - 会话默认管理
+- **批量操作命令**：支持批量订阅、批量取消订阅、启用/禁用全部订阅
+- **RSS 内容自动翻译**：支持 Google（免费）和百度翻译
+- **订阅状态管理**：`/sub_state <ID> on/off` 快速启停单个订阅推送
 
-- **批量操作命令**:
-  - `/sub <url1> [url2...]` - 批量订阅多个 RSS 源
-  - `/unsub <id1> [id2...]` - 批量取消订阅（支持 ID 或 URL）
-  - `/activate_subs` (别名 `/enable_subs`) - 启用当前会话所有订阅
-  - `/deactivate_subs` (别名 `/disable_subs`) - 禁用当前会话所有订阅
+### Break Changed
 
-- **订阅状态管理**:
-  - `/sub state <id> on/off` - 快速启停单个订阅推送
-  - 支持多种布尔值格式
-
-- **RSS 内容自动翻译功能** (Translation Support):
-  - 新增 Google 翻译支持（免费，开箱即用）
-  - 新增百度翻译支持（需申请 AppID 和密钥）
-  - 支持目标语言：`zh-CN`(简体中文)、`zh-TW`(繁体中文)、`en`(英文)、`ja`(日文)
-  - 支持标题和正文分别控制是否翻译
-  - 支持显示原文与译文（格式：`原文 +
---【译文】--
- + 译文`）
-  - 智能语言检测，避免无意义翻译（可强制翻译跳过检测）
-  - 翻译结果缓存，减少重复 API 调用，缓存跟随条目淘汰策略
-  - 按订阅级翻译控制，可通过 `/sub_set` 为特定订阅单独配置
-
-- **翻译提供商扩展架构**:
-  - 新增 `BaseTranslator` 抽象基类，便于后续添加更多翻译提供商
-  - 提供 `register_provider()` 函数支持动态注册新提供商
-  - 完整的提供商开发文档 (`translation/providers/README.md`)
-
-- **数据库迁移管理优化**:
-  - 将数据库迁移逻辑抽取到独立的 `db/migrations.py` 文件
-  - 新增 `TranslationCache` 表用于存储翻译缓存
-  - 新增 `translate` 和 `translate_target_lang` 字段到 User 和 Sub 表
-  - 新增 `use_sub_config` 和 `use_user_config` 字段
-  - v1.1.0 迁移：将 INHERIT_VALUE (-100) 替换为实际默认值
-  - 完善数据库迁移逻辑，支持旧版本平滑升级
-
-### Added
-
-- **RSS 内容自动翻译功能** (Translation Support):
-  - 新增 Google 翻译支持（免费，开箱即用）
-  - 新增百度翻译支持（需申请 AppID 和密钥）
-  - 支持目标语言：`zh-CN`(简体中文)、`zh-TW`(繁体中文)、`en`(英文)、`ja`(日文)
-  - 支持标题和正文分别控制是否翻译
-  - 支持显示原文与译文（格式：`原文 + \n--【译文】--\n + 译文`）
-  - 智能语言检测，避免无意义翻译（可强制翻译跳过检测）
-  - 翻译结果缓存，减少重复 API 调用，缓存跟随条目淘汰策略
-  - 按订阅级翻译控制，可通过 `/sub_set` 为特定订阅单独配置
-
-- **翻译提供商扩展架构**:
-  - 新增 `BaseTranslator` 抽象基类，便于后续添加更多翻译提供商
-  - 提供 `register_provider()` 函数支持动态注册新提供商
-  - 完整的提供商开发文档 (`translation/providers/README.md`)
-
-- **数据库迁移管理优化**:
-  - 将数据库迁移逻辑抽取到独立的 `db/migrations.py` 文件
-  - 新增 `TranslationCache` 表用于存储翻译缓存
-  - 新增 `translate` 和 `translate_target_lang` 字段到 User 和 Sub 表
-  - 完善数据库迁移逻辑，支持旧版本平滑升级
+- **命令更名**：
+  - `/sub_set_default` → `/sub_set_user`
+  - `/sub_session_default_set` → `/sub_set_session`
+  - `/sub_session_default_get` → `/sub_get_session`
+  - `/sub_bind` → **已删除**
+- **`/sub_test` 命令重构**：参数从粒度模式改为条目编号范围，支持 URL 直接测试
+- **移除 `/rss_conf` 命令**：全局配置请前往 AstrBot 管理面板设置
+- **移除平台共享数据功能**：订阅数据不再支持跨 BOT 平台共享
 
 ### Changed
 
-- 为大部分模块增加类型注解使其获得更好的类型安全
-- 重构配置加载方式，更好的类型安全
-- 重构命令函数结构，便于后续维护
-- 重构数据库初始化流程，迁移逻辑更加清晰可维护
-- `post_formatter.py` 集成翻译逻辑，在格式化阶段处理翻译
-- 更新配置架构 `_conf_schema.json`，添加翻译相关配置项
-- 简化 `/sub` 命令目标参数：移除冗余的 `private` 和 `group` 参数
-
-### Refactored
-
-- **工具模块重构为 OOP 风格**：
-  - `utils/ffmpeg_helper.py` → `FFmpegTool` 类（静态方法）
-    - 删除无效的 `imageio_ffmpeg` try-except 导入
-    - 修复 `process` 变量未赋值警告（提前初始化为 `None`）
-    - 细化异常捕获：`except Exception` → `except (OSError, asyncio.TimeoutError, ValueError)`
-    - 删除 `process.kill()/wait()` 的冗余异常捕获
-    - 函数名变更：`transcode_video_to_mp4_for_qq()` → `transcode_to_mp4()`
-  - `utils/aio_helper.py` → `utils/concurrent.py`
-    - 删除旧文件，功能合并到 `concurrent.py`
-    - 提供 `AsyncTool` 静态方法类和装饰器
-  - `utils/locks.py` → 新增 `locked()` 装饰器（基于 SpEL 表达式）
-    - 支持 `@locked("#feed.id")`、`@locked("#user_id")` 等语法
-    - 保留向后兼容的便捷函数
+- **数据库表结构简化**：用 `rsshub_sub.next_check_time` 替代独立的 monitor_schedule 表
+- **监控调度优化**：按 (feed_id, interval) 分组以减少 HTTP 请求
 
 ### Fixed
 
-- **修复批量操作 SQLAlchemy Greenlet 错误**：
-  - `batch_activate_subs` / `batch_deactivate_subs` 使用 `selectinload(Sub.feed)` 预加载 feed
-  - 避免访问 `sub.feed.title` 时触发懒加载导致的 greenlet 错误
-- **TranslationManager 单例化**：
-  - 避免每次通知都创建新的 TranslationManager 和 aiohttp.ClientSession
-  - 减少资源开销，提高性能
-- **修复 `sub_list` 显示问题**：
-  - `Sub.get_by_user()` 现在返回所有订阅（包括禁用状态）
-  - 添加会话状态统计：显示总订阅数、启用数、禁用数
-  - 每个订阅前添加状态图标（✓ 启用 / ✗ 禁用）
-- **修复 `sub_test` URL 模式推送目标缺失**：
-  - 创建临时 Sub 对象时添加 `target_session` 字段
-- **修复命令组语法**：
-  - `@filter.command(cmd_sub, sub_command="state")` → `@cmd_sub.command("state")`
+- **修复 RSS 监控可能漏推的问题**：
+  - `history_entry_limit` 默认值从 `10` 改为 `0`（不限制）
+  - 修复时间解析失败导致的排序异常
+  - 修复数据库与推送非原子性问题（先推送成功后才更新数据库）
+- **修复批量操作 SQLAlchemy Greenlet 错误**
+- **修复媒体缓存 GC 与缓存写入并发竞争**
+- **修复 Telegram 媒体发送 `Wrong http url specified` 问题**
+- **修复 QQ Official Docker 场景下图片媒体路径被错误解析**
+- **修复同一 RSS 源在多平台/多会话并发订阅时的推送抢占**
+- **修复 `sub_list` 显示问题**：现在返回所有订阅（包括禁用状态）
+- **修复 `sub_test` URL 模式推送目标缺失**
+- **修复 aiocqhttp 合并转发失败时退化为直发文本消息的问题**
+
+---
+
+<details>
+<summary>历史更新记录</summary>
 
 ## [1.0.20] - 2026-04-20
 
@@ -157,7 +64,7 @@
 
 - 新增 QQ 官方视频转码能力：
   - 在插件层发送链路中，QQ 官方视频发送前可自动转码为 H264/AAC MP4
-  - 目标为优先保持“视频卡片”发送体验，而非直接降级为文本链接
+  - 目标为优先保持"视频卡片"发送体验，而非直接降级为文本链接
 - 新增配置项：
   - `qq_official_video_transcode`（默认 `true`）：控制 QQ 官方视频自动转码
   - `qq_official_auto_install_ffmpeg`（默认 `true`）：自动使用插件依赖提供的 FFmpeg 可执行文件
@@ -201,7 +108,7 @@
 
 ### Changed
 
-- 调整监控并发模型为“订阅级调度、feed 级更新串行化”：
+- 调整监控并发模型为"订阅级调度、feed 级更新串行化"：
   - 不同订阅仍按各自 `interval` / `next_check_time` 判断是否到期
   - 但同一个 RSS Feed 在任意时刻只允许一个协程进入更新流程，避免多个订阅同时处理同一 Feed
 
@@ -209,7 +116,7 @@
 
 - 修复同一 Feed 被多个订阅几乎同时轮询时可能出现的重复推送问题：
   - 为 `Feed` 更新流程增加 feed 级互斥保护，串行化抓取、去重、推送与 `entry_hashes` 持久化
-  - 避免多个协程同时读取同一份旧的 `feed.entry_hashes`，将同一条内容重复判定为“新条目”
+  - 避免多个协程同时读取同一份旧的 `feed.entry_hashes`，将同一条内容重复判定为"新条目"
 
 ## [1.0.16] - 2026-04-19
 
@@ -235,7 +142,7 @@
 
 ### Added
 
-- 新增微信个人号（`weixin_oc`）平台专用发送器策略，适配“每条消息只能包含一个消息组件”的平台约束：
+- 新增微信个人号（`weixin_oc`）平台专用发送器策略，适配"每条消息只能包含一个消息组件"的平台约束：
   - 图片、视频、音频、文件按单组件顺序发送
   - 文本内容单独发送，避免将多组件消息链直接交给平台
   - 媒体下载失败时，会在文本中附带原始链接作为兜底
@@ -244,9 +151,9 @@
 ### Changed
 
 - 去重与监控链路优化：
-  - 调整监控侧判重为“稳定身份优先 + 兼容指纹回退”，降低仅时间戳抖动导致的重复推送
+  - 调整监控侧判重为"稳定身份优先 + 兼容指纹回退"，降低仅时间戳抖动导致的重复推送
   - 新增/完善监控轮次结构化统计日志，包含抓取条数、去重新增/跳过、扇出订阅数及失败队列处理计数
-  - 首轮行为支持配置 `bootstrap_skip_history`（默认 `true`）：可选“仅建历史不推送”或“首轮补推历史”
+  - 首轮行为支持配置 `bootstrap_skip_history`（默认 `true`）：可选"仅建历史不推送"或"首轮补推历史"
 - 配置与命令入口同步：
   - 新增配置项 `bootstrap_skip_history`，并接入配置加载/保存、`/rss_conf` 解析与展示
   - `/rsshelp` 与配置项说明补充 `failed_queue_max_retries` 与 `bootstrap_skip_history`
@@ -259,49 +166,13 @@
   - `file:///` 本地 URI 在发送前统一归一化为绝对本地路径，避免核心链路旧版切片逻辑（如 `i.file[8:]`）将路径误变为相对路径
 
 - 修复失败队列观测盲区：
-  - `Notifier` 增加失败入队、丢弃、处理成功、重试中、重试耗尽等统计计数，便于定位“漏推”来源
+  - `Notifier` 增加失败入队、丢弃、处理成功、重试中、重试耗尽等统计计数，便于定位"漏推"来源
 
 ### Docs
 
 - 文档同步更新：
   - `README.md` 新增 `bootstrap_skip_history` 说明
-  - 明确“监控主循环无固定每周期条目上限”，实际受源更新量、失败队列容量、最大重试次数与平台限流影响
-
-## [1.0.14] - 2026-04-14
-
-### Added
-
-- 新增微信个人号（`weixin_oc`）平台专用发送器策略，适配“每条消息只能包含一个消息组件”的平台约束：
-  - 图片、视频、音频、文件按单组件顺序发送
-  - 文本内容单独发送，避免将多组件消息链直接交给平台
-  - 媒体下载失败时，会在文本中附带原始链接作为兜底
-  - 新增配置项 `sender_strategy_weixin_oc`，可通过 `/rss_conf sender_strategy_weixin_oc <true/false>` 开启或关闭该策略
-
-### Changed
-
-- 去重与监控链路优化：
-  - 调整监控侧判重为“稳定身份优先 + 兼容指纹回退”，降低仅时间戳抖动导致的重复推送
-  - 新增/完善监控轮次结构化统计日志，包含抓取条数、去重新增/跳过、扇出订阅数及失败队列处理计数
-  - 首轮行为支持配置 `bootstrap_skip_history`（默认 `true`）：可选“仅建历史不推送”或“首轮补推历史”
-- 配置与命令入口同步：
-  - 新增配置项 `bootstrap_skip_history`，并接入配置加载/保存、`/rss_conf` 解析与展示
-  - `/rsshelp` 与配置项说明补充 `failed_queue_max_retries` 与 `bootstrap_skip_history`
-- 失败队列容量判定边界修正：
-  - `FailedNotification.is_at_capacity` 从 `>` 调整为 `>=`，达到容量即判满
-
-### Fixed
-
-- 修复 QQ Official 在 Docker 场景下图片媒体路径被错误解析导致的 `FileNotFoundError`：
-  - `file:///` 本地 URI 在发送前统一归一化为绝对本地路径，避免核心链路旧版切片逻辑（如 `i.file[8:]`）将路径误变为相对路径
-
-- 修复失败队列观测盲区：
-  - `Notifier` 增加失败入队、丢弃、处理成功、重试中、重试耗尽等统计计数，便于定位“漏推”来源
-
-### Docs
-
-- 文档同步更新：
-  - `README.md` 新增 `bootstrap_skip_history` 说明
-  - 明确“监控主循环无固定每周期条目上限”，实际受源更新量、失败队列容量、最大重试次数与平台限流影响
+  - 明确"监控主循环无固定每周期条目上限"，实际受源更新量、失败队列容量、最大重试次数与平台限流影响
 
 ## [1.0.14] - 2026-04-14
 
@@ -428,7 +299,7 @@
 ### Fixed
 
 - 修复媒体缓存 GC 与缓存写入并发下的误删问题：删除阶段增加过期状态二次校验，避免删除刚刷新的缓存文件
-- 优化缓存 GC 锁粒度：采用“扫描无锁 + 删除加锁”两阶段流程，降低高并发下载场景下的锁竞争
+- 优化缓存 GC 锁粒度：采用"扫描无锁 + 删除加锁"两阶段流程，降低高并发下载场景下的锁竞争
 - 清理 `/sub_list` 历史分片残留逻辑与无用常量，避免后续维护歧义
 
 ## [1.0.5] - 2026-04-07
@@ -441,7 +312,7 @@
 ### Fixed
 
 - 修复同一 RSS 源在多平台/多会话并发订阅时的推送抢占：单次更新统一扇出到该源全部活跃订阅，避免条目被不同会话分走
-- 修复开启“先下载图片再发送”后，aiocqhttp 合并转发路径偶发 `ENOENT`（媒体缓存文件提前删除）的问题
+- 修复开启"先下载图片再发送"后，aiocqhttp 合并转发路径偶发 `ENOENT`（媒体缓存文件提前删除）的问题
 - 修复媒体缓存 GC 与缓存写入并发竞争导致的 `ENOENT`：为缓存 GC/读写引入 I/O 互斥并添加下载后双重检查
 - 修复 `rsshelp` 文案中的乱码问题
 
@@ -449,8 +320,8 @@
 
 ### Changed
 
-- 调整 `AiocqhttpMessageSender` 回退策略为“仅合并转发”：合并转发失败后不再尝试非合并消息链
-- 新增 aiocqhttp 合并失败兜底链路：改为发送“纯文本合并节点”，保持推送形态一致
+- 调整 `AiocqhttpMessageSender` 回退策略为"仅合并转发"：合并转发失败后不再尝试非合并消息链
+- 新增 aiocqhttp 合并失败兜底链路：改为发送"纯文本合并节点"，保持推送形态一致
 
 ### Fixed
 
@@ -469,7 +340,7 @@
 - 调整 Telegram 发送策略为媒体优先（media-first）：图片/视频/音频优先于文本进入消息链，并在分片回退路径中保持同样顺序
 - `RSSHubRadarAPI` 规则缓存改为带容量限制的 `LRU + TTL`（按 `base_url` 键），避免长期运行时缓存无界增长
 - `RSSHubRadarAPI` 网络请求/JSON 解析错误信息增强：增加 `base_url`、`url` 与异常类型上下文，提升故障定位效率
-- `/unsub_all` 行为明确为“默认当前会话，`global` 全局删除（管理员）”，并移除历史 `yes` 参数语义
+- `/unsub_all` 行为明确为"默认当前会话，`global` 全局删除（管理员）"，并移除历史 `yes` 参数语义
 
 ### Fixed
 
@@ -521,3 +392,5 @@
 - 移除 `get_session_id` 工具函数（改用 `event.unified_msg_origin`）
 - 移除 `get_sender_for_session` 函数（改用 `get_sender_for_platform_name`）
 - 移除 `bot_self_id` 数据库字段（改为通过 provider 动态解析）
+
+</details>

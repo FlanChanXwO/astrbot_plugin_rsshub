@@ -229,6 +229,7 @@ async def _migrate_user_id_to_text(conn) -> None:
                 display_media INTEGER NOT NULL DEFAULT 0,
                 translate INTEGER NOT NULL DEFAULT -100,
                 translate_target_lang TEXT,
+                use_user_config INTEGER NOT NULL DEFAULT 0,
                 default_target_session TEXT,
                 needs_binding_notice INTEGER NOT NULL DEFAULT 0,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -244,6 +245,7 @@ async def _migrate_user_id_to_text(conn) -> None:
                    length_limit, link_preview, display_author,
                    display_via, display_title,
                    display_entry_tags, style, display_media, -100, NULL,
+                   0,
                    default_target_session,
                    needs_binding_notice, created_at, updated_at
             FROM rsshub_user
@@ -296,6 +298,7 @@ async def _migrate_user_id_to_text(conn) -> None:
                 display_media INTEGER NOT NULL DEFAULT -100,
                 translate INTEGER NOT NULL DEFAULT -100,
                 translate_target_lang TEXT,
+                use_sub_config INTEGER NOT NULL DEFAULT 0,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES rsshub_user (id),
@@ -311,7 +314,7 @@ async def _migrate_user_id_to_text(conn) -> None:
                    platform_name, interval, notify, send_mode,
                    length_limit, link_preview,
                    display_author, display_via, display_title, display_entry_tags, style,
-                   display_media, -100, NULL, created_at, updated_at
+                   display_media, -100, NULL, 0, created_at, updated_at
             FROM rsshub_sub
         """)
 

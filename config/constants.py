@@ -18,6 +18,9 @@ SUB_OPTION_CASTERS: dict[str, type] = {
     "interval": int,
     "title": str,
     "tags": str,
+    "use_sub_config": int,
+    "translate": int,
+    "translate_target_lang": str,
 }
 
 # 用户默认选项键集合

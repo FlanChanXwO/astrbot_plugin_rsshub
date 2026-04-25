@@ -952,14 +952,20 @@ async def batch_activate_subs(
 
     from ..db import Sub, get_session
 
+    from sqlmodel import or_
+
     async with get_session() as session:
         # 查询当前会话中该用户的所有订阅（当前禁用的），预加载 feed
+        # 处理 target_session 为 NULL 的情况（NULL 视为当前会话）
         stmt = (
             select(Sub)
             .options(selectinload(Sub.feed))
             .where(
                 Sub.user_id == user_id,
-                Sub.target_session == current_session,
+                or_(
+                    Sub.target_session == current_session,
+                    Sub.target_session.is_(None),
+                ),
                 Sub.state == 0,
             )
         )
@@ -1011,18 +1017,22 @@ async def batch_deactivate_subs(
         命令结果
     """
     from sqlalchemy.orm import selectinload
-    from sqlmodel import select
+    from sqlmodel import or_, select
 
     from ..db import Sub, get_session
 
     async with get_session() as session:
         # 查询当前会话中该用户的所有订阅（当前启用的），预加载 feed
+        # 处理 target_session 为 NULL 的情况（NULL 视为当前会话）
         stmt = (
             select(Sub)
             .options(selectinload(Sub.feed))
             .where(
                 Sub.user_id == user_id,
-                Sub.target_session == current_session,
+                or_(
+                    Sub.target_session == current_session,
+                    Sub.target_session.is_(None),
+                ),
                 Sub.state == 1,
             )
         )

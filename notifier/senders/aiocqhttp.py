@@ -96,10 +96,14 @@ class AiocqhttpMessageSender(MessageSender):
                 image_file = file_path or file_url
 
                 if item.media_type == "image":
-                    media_nodes.append(cls._build_node(nickname, [Image(file=image_file)]))
+                    media_nodes.append(
+                        cls._build_node(nickname, [Image(file=image_file)])
+                    )
                 elif item.media_type == "video":
                     # 视频也使用 Image 组件展示缩略图或链接
-                    media_nodes.append(cls._build_node(nickname, [Image(file=image_file)]))
+                    media_nodes.append(
+                        cls._build_node(nickname, [Image(file=image_file)])
+                    )
 
             # 添加所有媒体节点（在上面）
             nodes.extend(media_nodes)

@@ -389,8 +389,7 @@ class RSSHubPlugin(Star):
             state = parts[1].lower()
         else:
             yield event.plain_result(
-                "用法: /sub_state <订阅ID> on/off\n"
-                "示例: /sub_state 123 on"
+                "用法: /sub_state <订阅ID> on/off\n示例: /sub_state 123 on"
             )
             return
 

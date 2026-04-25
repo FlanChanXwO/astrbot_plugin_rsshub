@@ -97,6 +97,7 @@ async def feed_get(
             etag_header = ret.headers.get("ETag") or ret.headers.get("etag")
             if etag_header:
                 from ..utils.log_utils import logger
+
                 logger.debug(f"feed_get: Received ETag '{etag_header}' for {url}")
 
             if resp.status == 200 and int(resp.headers.get("Content-Length", "1")) == 0:

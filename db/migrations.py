@@ -87,7 +87,11 @@ async def ensure_schema_compat(conn) -> None:
             )
             logger.info("迁移: 添加 rsshub_sub.platform_name 列")
 
-        await record_migration(conn, "v1.0.0", "基础迁移：添加 target_session、default_target_session、needs_binding_notice、platform_name 列")
+        await record_migration(
+            conn,
+            "v1.0.0",
+            "基础迁移：添加 target_session、default_target_session、needs_binding_notice、platform_name 列",
+        )
 
     # v1.1.0 翻译和配置迁移
     if not await is_migration_applied(conn, "v1.1.0"):
@@ -426,6 +430,7 @@ async def _migrate_user_id_to_text(conn) -> None:
 
 # ========== MigrationRecord 版本管理 ==========
 
+
 async def _table_exists(conn, table: str) -> bool:
     """检查表是否存在。"""
     result = await conn.exec_driver_sql(
@@ -444,8 +449,7 @@ async def is_migration_applied(conn, version: str) -> bool:
         return False
 
     result = await conn.exec_driver_sql(
-        "SELECT 1 FROM rsshub_migration_record WHERE version = ?",
-        (version,)
+        "SELECT 1 FROM rsshub_migration_record WHERE version = ?", (version,)
     )
     return result.fetchone() is not None
 
@@ -471,7 +475,7 @@ async def record_migration(conn, version: str, description: str = "") -> None:
         INSERT OR REPLACE INTO rsshub_migration_record (version, applied_at, description)
         VALUES (?, datetime('now'), ?)
         """,
-        (version, description)
+        (version, description),
     )
     logger.info(f"迁移版本已记录: {version}")
 
@@ -623,7 +627,9 @@ async def _migrate_v2_schema_changes(conn) -> None:
         """)
         await conn.exec_driver_sql("DROP TABLE rsshub_feed")
         await conn.exec_driver_sql("ALTER TABLE rsshub_feed_new RENAME TO rsshub_feed")
-        logger.info("迁移: 重建 rsshub_feed 表，删除 interval/error_count/next_check_time 列")
+        logger.info(
+            "迁移: 重建 rsshub_feed 表，删除 interval/error_count/next_check_time 列"
+        )
 
     # 5. 重建 rsshub_user 表（删除 lang 和 sub_limit 列）
     if await _has_column("rsshub_user", "lang"):
@@ -716,6 +722,7 @@ async def _migrate_v2_schema_changes(conn) -> None:
 
     # 10. 设置 rsshub_sub 表的 next_check_time 初始值
     from datetime import datetime
+
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     await conn.exec_driver_sql(f"""
         UPDATE rsshub_sub SET next_check_time = '{now_str}'

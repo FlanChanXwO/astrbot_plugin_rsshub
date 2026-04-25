@@ -220,19 +220,29 @@ class PushHistory(RSSHubModel, table=True):
     feed_link: str = Field(default="", max_length=4096, description="Feed链接")
 
     # 推送目标
-    platform_name: str | None = Field(default=None, max_length=64, description="平台名称")
-    target_session: str | None = Field(default=None, max_length=255, description="目标会话")
+    platform_name: str | None = Field(
+        default=None, max_length=64, description="平台名称"
+    )
+    target_session: str | None = Field(
+        default=None, max_length=255, description="目标会话"
+    )
 
     # 推送状态
-    status: str | None = Field(default=None, max_length=16, description="状态: pending/success/failed")
+    status: str | None = Field(
+        default=None, max_length=16, description="状态: pending/success/failed"
+    )
 
     # 重试机制
     retry_count: int = Field(default=0, description="重试次数")
     max_retries: int = Field(default=3, description="最大重试次数")
-    fail_reason: str | None = Field(default=None, max_length=512, description="失败原因")
+    fail_reason: str | None = Field(
+        default=None, max_length=512, description="失败原因"
+    )
 
     # 时间戳
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="创建时间"
+    )
     updated_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column_kwargs={"onupdate": datetime.utcnow},
@@ -246,7 +256,9 @@ class MigrationRecord(RSSHubModel, table=True):
 
     __tablename__ = "rsshub_migration_record"
     version: str = Field(primary_key=True, max_length=32, description="迁移版本号")
-    applied_at: datetime = Field(default_factory=datetime.utcnow, description="应用时间")
+    applied_at: datetime = Field(
+        default_factory=datetime.utcnow, description="应用时间"
+    )
     description: str = Field(default="", max_length=256, description="迁移描述")
 
 
@@ -851,7 +863,7 @@ class PushHistoryMethods:
     @staticmethod
     async def delete_old_records(days: int = 30) -> int:
         """删除指定天数前的历史记录。"""
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         from sqlalchemy import delete
 
@@ -1064,7 +1076,9 @@ Sub.delete_for_webui = staticmethod(WebUIMethods.delete_subscription)
 PushHistory.create = staticmethod(PushHistoryMethods.create)
 PushHistory.update_status = staticmethod(PushHistoryMethods.update_status)
 PushHistory.increment_retry = staticmethod(PushHistoryMethods.increment_retry)
-PushHistory.get_pending_for_retry = staticmethod(PushHistoryMethods.get_pending_for_retry)
+PushHistory.get_pending_for_retry = staticmethod(
+    PushHistoryMethods.get_pending_for_retry
+)
 PushHistory.get_by_sub = staticmethod(PushHistoryMethods.get_by_sub)
 PushHistory.delete_old_records = staticmethod(PushHistoryMethods.delete_old_records)
 PushHistory.get_stats = staticmethod(PushHistoryMethods.get_stats)

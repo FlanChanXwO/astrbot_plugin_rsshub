@@ -111,14 +111,14 @@ def calculate_target_language_ratio(text: str, target_lang: str) -> float:
         # 中文目标：中文字符 + 常见中文标点
         target_count = len(CJK_CHARS.findall(clean_text))
         # 也计算常见中文标点
-        chinese_punct = re.findall(r'[。，、；：""''（）《》【】？！]', clean_text)
+        chinese_punct = re.findall(r'[。，、；：""' "（）《》【】？！]", clean_text)
         target_count += len(chinese_punct)
     elif target_lang in ("ja", "jp"):
         # 日文目标：平假名 + 片假名 + 汉字（CJK）
         target_count = (
-            len(HIRAGANA.findall(clean_text)) +
-            len(KATAKANA.findall(clean_text)) +
-            len(CJK_CHARS.findall(clean_text))
+            len(HIRAGANA.findall(clean_text))
+            + len(KATAKANA.findall(clean_text))
+            + len(CJK_CHARS.findall(clean_text))
         )
     elif target_lang in ("ko", "kr"):
         # 韩文目标：韩文字符
@@ -150,7 +150,7 @@ def detect_foreign_words(text: str, target_lang: str) -> float:
         return 0.0
 
     # 查找所有拉丁字母单词（2个字母以上）
-    words = re.findall(r'[a-zA-Z]{2,}', text)
+    words = re.findall(r"[a-zA-Z]{2,}", text)
     total_words = len(words)
 
     if total_words == 0:

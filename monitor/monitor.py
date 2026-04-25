@@ -88,7 +88,9 @@ class RSSMonitor:
     def __init__(self):
         self._stat = MonitorStat()
         self._bg_task: asyncio.Task | None = None
-        self._subtask_defer_map: Final[defaultdict[int, TaskState]] = defaultdict(lambda: TaskState.EMPTY)
+        self._subtask_defer_map: Final[defaultdict[int, TaskState]] = defaultdict(
+            lambda: TaskState.EMPTY
+        )
         self._lock_up_period: int = 0
         self._running = False
         self._cached_tracking_query_params: set[str] | None = None
@@ -185,7 +187,9 @@ class RSSMonitor:
         except Exception as ex:
             logger.error(f"执行定时监控任务失败: {ex}", exc_info=True)
 
-    async def _monitor_feed_with_subs(self, session, feed: Feed, subs: list[Sub], interval: int):
+    async def _monitor_feed_with_subs(
+        self, session, feed: Feed, subs: list[Sub], interval: int
+    ):
         """抓取一次 feed 并按订阅粒度更新调度与通知（加锁版本）。"""
         if feed.id is None:
             logger.warning(
@@ -199,7 +203,9 @@ class RSSMonitor:
         return await self._do_monitor_feed(session, feed, subs, interval)
 
     @locked("#feed.id")
-    async def _do_monitor_feed(self, session, feed: Feed, subs: list[Sub], interval: int):
+    async def _do_monitor_feed(
+        self, session, feed: Feed, subs: list[Sub], interval: int
+    ):
         """实际抓取 feed 的逻辑（已加锁）。"""
         # 调度操作延迟到 session commit 之后执行，避免嵌套 session
         notifier_to_run: Notifier | None = None
@@ -287,13 +293,19 @@ class RSSMonitor:
                         )
                     elif self._config_value("bootstrap_skip_history", True):
                         # bootstrap_skip_history=true: 只推送 history_entry_limit 个条目
-                        history_limit = _get_cfg().history_entry_limit if _get_cfg() else 0
+                        history_limit = (
+                            _get_cfg().history_entry_limit if _get_cfg() else 0
+                        )
                         if history_limit > 0 and len(updated_entries) > history_limit:
                             # 按时间排序，取最新的 history_limit 个
                             sorted_entries = sorted(
                                 updated_entries,
-                                key=lambda e: e.get("published_parsed") or e.get("updated_parsed") or (),
-                                reverse=True
+                                key=lambda e: (
+                                    e.get("published_parsed")
+                                    or e.get("updated_parsed")
+                                    or ()
+                                ),
+                                reverse=True,
                             )
                             limited_entries = sorted_entries[:history_limit]
                             skipped = len(updated_entries) - history_limit
@@ -337,12 +349,15 @@ class RSSMonitor:
                         if push_success:
                             feed.last_modified = wf.last_modified
                             feed.entry_hashes = merged
-                            feed_updated_fields.update({"last_modified", "entry_hashes"})
+                            feed_updated_fields.update(
+                                {"last_modified", "entry_hashes"}
+                            )
                             self._log_feed_polling_stats(
                                 feed=feed,
                                 fetched_entries=fetched_entries,
                                 dedup_new_count=len(limited_entries),
-                                dedup_skipped_count=len(updated_entries) - len(limited_entries),
+                                dedup_skipped_count=len(updated_entries)
+                                - len(limited_entries),
                                 notifier=notifier_to_run,
                             )
                             self._stat.updated()
@@ -377,7 +392,9 @@ class RSSMonitor:
                         if push_success:
                             feed.last_modified = wf.last_modified
                             feed.entry_hashes = merged
-                            feed_updated_fields.update({"last_modified", "entry_hashes"})
+                            feed_updated_fields.update(
+                                {"last_modified", "entry_hashes"}
+                            )
                             self._log_feed_polling_stats(
                                 feed=feed,
                                 fetched_entries=fetched_entries,
@@ -506,7 +523,9 @@ class RSSMonitor:
         if history_limit > 0:
             # Sort by published_parsed (newest first) and limit
             # Use index as tie-breaker to maintain stable order when time parsing fails
-            failed_time_parse_count = [0]  # Use list to allow mutation in nested function
+            failed_time_parse_count = [
+                0
+            ]  # Use list to allow mutation in nested function
 
             def _entry_sort_key(entry_index_pair):
                 original_index, entry = entry_index_pair
@@ -516,7 +535,11 @@ class RSSMonitor:
                     try:
                         # Convert to timestamp for comparison
                         from calendar import timegm
-                        return (timegm(parsed), -original_index)  # Negative for stable reverse
+
+                        return (
+                            timegm(parsed),
+                            -original_index,
+                        )  # Negative for stable reverse
                     except (TypeError, ValueError):
                         pass
 
@@ -618,7 +641,9 @@ class RSSMonitor:
                     session.add(db_sub)
             await session.commit()
 
-    async def _schedule_after_error(self, subs: list[Sub], interval: int, reason: str) -> None:
+    async def _schedule_after_error(
+        self, subs: list[Sub], interval: int, reason: str
+    ) -> None:
         """失败后使用指数退避策略，只有连续多次失败才禁用订阅。"""
         MAX_ERROR_COUNT = 5  # 最大允许连续错误次数
         BASE_BACKOFF_MINUTES = 5  # 基础退避时间（分钟）
@@ -639,18 +664,22 @@ class RSSMonitor:
                     db_sub.state = 0
                     db_sub.error_count = 0  # 重置错误计数
                     logger.warning(
-                        "订阅 %d 连续失败 %d 次，已自动禁用",
-                        sub.id, MAX_ERROR_COUNT
+                        "订阅 %d 连续失败 %d 次，已自动禁用", sub.id, MAX_ERROR_COUNT
                     )
                 else:
                     # 指数退避：下次检查时间 = 当前时间 + (2^error_count * base_interval)
                     backoff_multiplier = 2 ** min(db_sub.error_count, 6)  # 限制最大指数
                     backoff_minutes = BASE_BACKOFF_MINUTES * backoff_multiplier
                     from datetime import timezone
-                    db_sub.next_check_time = datetime.now(timezone.utc) + timedelta(minutes=backoff_minutes)
+
+                    db_sub.next_check_time = datetime.now(timezone.utc) + timedelta(
+                        minutes=backoff_minutes
+                    )
                     logger.info(
                         "订阅 %d 第 %d 次失败，%d 分钟后重试",
-                        sub.id, db_sub.error_count, backoff_minutes
+                        sub.id,
+                        db_sub.error_count,
+                        backoff_minutes,
                     )
 
                 session.add(db_sub)

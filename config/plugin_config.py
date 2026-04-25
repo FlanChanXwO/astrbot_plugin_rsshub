@@ -95,7 +95,9 @@ class BasicConfig:
             deduplicate_multi_bot=data.get("deduplicate_multi_bot", True),
             bootstrap_skip_history=data.get("bootstrap_skip_history", True),
             debug_payload=data.get("debug_payload", False),
-            history_entry_limit=data.get("history_entry_limit", 0),  # 默认0不限制，避免漏推
+            history_entry_limit=data.get(
+                "history_entry_limit", 0
+            ),  # 默认0不限制，避免漏推
             download_media_before_send=data.get("download_media_before_send", False),
             download_media_timeout=data.get("download_media_timeout", 30),
         )

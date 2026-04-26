@@ -230,7 +230,6 @@ class MessageSender:
                     local_file_path,
                     local_path.exists(),
                 )
-            # Use file URI for standard compatibility
             media_file_value = local_file_uri if local_path else media_url
 
             if media_type == "image":
@@ -241,27 +240,12 @@ class MessageSender:
                         image_count,
                     )
                     continue
-                file_size = local_path.stat().st_size if local_path else 0
-                if (
-                    local_path
-                    and local_path.suffix.lower() == ".gif"
-                    and file_size > 5 * 1024 * 1024
-                ):
-                    logger.warning(
-                        "Large GIF file may fail to send: url=%s, size=%.1fMB",
-                        media_url,
-                        file_size / 1024 / 1024,
-                    )
-                # Prefer local file for adapters that call Image.convert_to_base64(),
-                # because that method prioritizes url over file when both are set.
                 image_url_value = "" if local_path else media_url
                 image_components.append(
                     Image(file=media_file_value, url=image_url_value)
                 )
                 image_count += 1
             elif media_type == "video":
-                # 视频放在消息上方（与图片一致）
-                # Apply global video transcode if enabled
                 if cls._is_video_transcode_enabled() and local_path:
                     try:
                         logger.info(
@@ -311,7 +295,6 @@ class MessageSender:
                         name=filename, file=local_file_path or media_url, url=media_url
                     )
                 )
-
         return image_components, tail_components, failed_media_urls
 
     @staticmethod

@@ -80,7 +80,7 @@ class Notifier:
         if self._translation_manager is None and cfg:
             # Get translation config from cfg
             trans_config = cfg.translation
-            logger.info(
+            logger.debug(
                 f"Notifier.translation_manager: 创建翻译管理器，"
                 f"provider={trans_config.provider}, auto_translate={trans_config.auto_translate}, "
                 f"proxy={'configured' if self.proxy else '无'}"
@@ -88,10 +88,8 @@ class Notifier:
             # Create aiohttp session with proxy if configured
             if self.proxy:
                 self._translation_session = aiohttp.ClientSession(proxy=self.proxy)
-                logger.debug("Notifier: 创建带代理的翻译 session")
             else:
                 self._translation_session = aiohttp.ClientSession()
-                logger.debug("Notifier: 创建不带代理的翻译 session")
 
             self._translation_manager = TranslationManager(self._translation_session)
             logger.debug(

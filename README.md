@@ -18,6 +18,8 @@
 </div>
 
 > 新开发者请先阅读贡献指南：[`CONTRIBUTE.md`](./CONTRIBUTE.md)
+>
+> **⚠️ 本项目正在升级到 v2.0.0，项目结构与数据库 schema 可能发生重大变化，请留意版本更新日志。**
 
 ---
 
@@ -116,51 +118,56 @@
 
 ## 🛠️ 配置项
 
-> **注意**：v1.1.0 版本起，全局配置请前往 AstrBot 管理面板的「配置」页面或 WebUI 进行设置，不再支持通过 `/rss_conf` 命令修改。
+> **注意**：v2.0.0 版本起，全局配置请前往 AstrBot 管理面板的「配置」页面或 WebUI 进行设置。
 
 在 AstrBot 管理面板的「配置」页面，找到 `RSSHub` 插件配置：
 
-### 网络配置
+### 基础设施配置 (`basic_config`)
 
 | 配置项 | 类型 | 说明 | 默认值 |
 |--------|------|------|--------|
 | `proxy` | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890` | `""` |
 | `rsshub_base_url` | 字符串 | 默认 RSSHub 域名，用于路由检索与订阅链接拼接 | `https://rsshub.app` |
 | `timeout` | 整数 | 请求超时（秒），获取 RSS 源时的 HTTP 请求超时时间 | `30` |
-
-### 监控配置
-
-| 配置项 | 类型 | 说明 | 默认值 |
-|--------|------|------|--------|
-| `default_interval` | 整数 | 默认监控间隔（分钟），订阅未设置 interval 时使用 | `10` |
 | `minimal_interval` | 整数 | 最小监控间隔（分钟），限制命令/WebUI 设置的最小值 | `1` |
-| `bootstrap_skip_history` | 布尔值 | 首轮是否跳过历史条目，开启后首次仅建立去重历史不推送旧消息 | `true` |
-
-### 去重配置
-
-| 配置项 | 类型 | 说明 | 默认值 |
-|--------|------|------|--------|
-| `hash_history_min` | 整数 | 去重历史最小保留数量，避免历史回流重复推送 | `200` |
+| `hash_history_min` | 整数 | 去重历史最小保留数量，避免历史回流重复推送 | `500` |
 | `hash_history_multiplier` | 整数 | 去重历史增长倍数，动态扩展历史窗口 | `2` |
 | `hash_history_hard_limit` | 整数 | 去重历史硬上限，限制数据库体积与监控开销 | `5000` |
 | `tracking_query_params` | 列表 | 链接去重时忽略的查询参数（如 utm_source） | 见配置说明 |
+| `failed_queue_capacity` | 整数 | 失败队列容量，0=禁用失败队列 | `50` |
+| `failed_queue_max_retries` | 整数 | 失败队列最大重试次数 | `3` |
+| `deduplicate_multi_bot` | 布尔值 | 单会话多 BOT 去重，避免重复推送 | `true` |
+| `bootstrap_skip_history` | 布尔值 | 首轮是否跳过历史条目，开启后首次仅建立去重历史不推送旧消息 | `true` |
+| `debug_payload` | 布尔值 | 调试模式，在消息末尾显示条目详细信息 | `false` |
+| `history_entry_limit` | 整数 | 历史条目推送限制，0=不限制 | `0` |
+| `download_media_before_send` | 布尔值 | 先下载媒体后发送，Docker 环境下需共享数据卷 | `false` |
+| `download_media_timeout` | 整数 | 媒体下载超时（秒），m3u8/HLS 建议 60-180 秒 | `30` |
 
-### 发送配置
+### 订阅全局默认配置 (`global_config`)
 
 | 配置项 | 类型 | 说明 | 默认值 |
 |--------|------|------|--------|
-| `download_image_before_send` | 布尔值 | 先下载图片再发送，Docker 环境下需共享数据卷 | `true` |
-| `failed_queue_capacity` | 整数 | 失败队列容量，0=禁用失败队列 | `50` |
-| `failed_queue_max_retries` | 整数 | 失败队列最大重试次数 | `3` |
-| `debug_payload` | 布尔值 | 调试模式，在消息末尾显示条目详细信息 | `false` |
+| `interval` | 整数 | 默认监控间隔（分钟），订阅未设置 interval 时使用 | `5` |
+| `notify` | 布尔值 | 是否发送 RSS 更新通知 | `true` |
+| `send_mode` | 字符串 | 发送模式：仅链接/自动/直接消息 | `自动` |
+| `length_limit` | 整数 | 内容长度限制，0=不限制 | `0` |
+| `link_preview` | 字符串 | 链接预览：自动/强制启用 | `自动` |
+| `display_author` | 字符串 | 显示作者：禁用/自动/强制 | `自动` |
+| `display_via` | 字符串 | 显示来源：完全禁用/仅链接/自动/强制 | `自动` |
+| `display_title` | 字符串 | 显示标题：禁用/自动/强制 | `自动` |
+| `display_entry_tags` | 布尔值 | 是否在推送中显示 RSS 条目标签 | `false` |
+| `style` | 字符串 | 推送样式：RSStT/flowerss | `RSStT` |
+| `display_media` | 布尔值 | 是否在推送中显示图片、视频等媒体 | `true` |
+| `translate` | 布尔值 | 是否自动翻译 RSS 内容 | `false` |
+| `translate_target_lang` | 字符串 | 翻译目标语言：zh-CN/zh-TW/en/ja | `zh-CN` |
 
 ### FFmpeg 配置 (`ffmpeg`)
 
 | 配置项 | 类型 | 说明 | 默认值 |
 |--------|------|------|--------|
-| `ffmpeg.video_transcode` | 布尔值 | 视频发送前自动转码为兼容 MP4，优先保证视频卡片 | `false` |
+| `ffmpeg.video_transcode` | 布尔值 | 视频发送前自动转码为兼容 H264/AAC MP4 | `false` |
 | `ffmpeg.video_transcode_timeout` | 整数 | 视频转码超时时间（秒） | `120` |
-| `ffmpeg.gif_transcode` | 布尔值 | GIF 发送前自动转码优化 | `false` |
+| `ffmpeg.gif_transcode` | 布尔值 | 无声视频自动转 GIF | `true` |
 | `ffmpeg.gif_transcode_timeout` | 整数 | GIF 转码超时时间（秒） | `60` |
 
 ### 发送策略配置 (`sender_strategies`)
@@ -169,7 +176,7 @@
 |--------|------|------|--------|
 | `sender_strategies.telegram` | 布尔值 | 启用 Telegram 专用策略（媒体优先、大小限制处理） | `true` |
 | `sender_strategies.aiocqhttp` | 布尔值 | 启用 OneBot 专用策略（合并转发节点） | `true` |
-| `sender_strategies.weixin_oc` | 布尔值 | 启用企业微信专用策略 | `true` |
+| `sender_strategies.weixin_oc` | 布尔值 | 启用微信个人号专用策略 | `true` |
 
 > **命名说明：**
 > - 配置文件中使用 `sender_strategies.<platform>` 形式（点号分隔），例如：`sender_strategies.telegram`、`sender_strategies.aiocqhttp`
@@ -186,7 +193,7 @@
 | `translation.force_translate` | 布尔值 | 是否跳过语言检测强制翻译 | `false` |
 | `translation.translate_title` | 布尔值 | 是否翻译标题 | `true` |
 | `translation.translate_content` | 布尔值 | 是否翻译正文 | `true` |
-| `translation.display_orignal_content` | 布尔值 | 是否显示原文（格式：原文 + `--【译文】--` + 译文） | `false` |
+| `translation.display_orignal_content` | 布尔值 | 是否显示原文（格式：原文 + 换行 + 分隔线 + 译文） | `false` |
 | `translation.cache_translations` | 布尔值 | 是否缓存翻译结果以减少 API 调用 | `true` |
 
 **百度翻译认证配置** (`translation_template`)：
@@ -201,17 +208,6 @@
 - 百度翻译需要申请 AppID 和密钥
 - 翻译功能可全局开启或按订阅单独控制
 - 按订阅控制：`/sub_set <订阅 ID> translate=1` 开启、`translate=0` 关闭
-
-### 多 BOT 配置
-
-| 配置项 | 类型 | 说明 | 默认值 |
-|--------|------|------|--------|
-| `deduplicate_multi_bot` | 布尔值 | 单会话多 BOT 去重，避免重复推送 | `true` |
-| `platform_shared_data.aiocqhttp` | 布尔值 | aiocqhttp 平台共享数据源 | `false` |
-
-**说明：**
-- **单会话多 BOT 去重**：开启后，当同一会话中有多个 BOT 订阅了相同的 RSS 源，只有最早订阅的 BOT 会推送消息
-- **平台共享数据源**：开启后，该平台下所有 BOT 的订阅数据共享，任意 BOT 掉线时其他 BOT 可继续推送
 
 ### WebUI 配置 (`webui`)
 

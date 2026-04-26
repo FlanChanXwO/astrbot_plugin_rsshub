@@ -88,9 +88,7 @@ class RSSMonitor:
     def __init__(self):
         self._stat = MonitorStat()
         self._bg_task: asyncio.Task | None = None
-        self._subtask_defer_map: Final[defaultdict[int, TaskState]] = defaultdict(
-            lambda: TaskState.EMPTY
-        )
+        self._subtask_defer_map: Final[defaultdict[int, TaskState]] = defaultdict(lambda: TaskState.EMPTY)
         self._lock_up_period: int = 0
         self._running = False
         self._cached_tracking_query_params: set[str] | None = None
@@ -187,9 +185,7 @@ class RSSMonitor:
         except Exception as ex:
             logger.error(f"执行定时监控任务失败: {ex}", exc_info=True)
 
-    async def _monitor_feed_with_subs(
-        self, session, feed: Feed, subs: list[Sub], interval: int
-    ):
+    async def _monitor_feed_with_subs(self, session, feed: Feed, subs: list[Sub], interval: int):
         """抓取一次 feed 并按订阅粒度更新调度与通知（加锁版本）。"""
         if feed.id is None:
             logger.warning(
@@ -203,9 +199,7 @@ class RSSMonitor:
         return await self._do_monitor_feed(session, feed, subs, interval)
 
     @locked("#feed.id")
-    async def _do_monitor_feed(
-        self, session, feed: Feed, subs: list[Sub], interval: int
-    ):
+    async def _do_monitor_feed(self, session, feed: Feed, subs: list[Sub], interval: int):
         """实际抓取 feed 的逻辑（已加锁）。"""
         # 调度操作延迟到 session commit 之后执行，避免嵌套 session
         notifier_to_run: Notifier | None = None
@@ -283,7 +277,6 @@ class RSSMonitor:
                     feed_updated_fields.update({"last_modified", "entry_hashes"})
                     schedule_action = ("success", None)
 
-                    # 判断是否有新条目需要推送
                     if not updated_entries:
                         self._stat.not_updated()
                         logger.info(
@@ -292,39 +285,39 @@ class RSSMonitor:
                             fetched_entries,
                         )
                     elif self._config_value("bootstrap_skip_history", True):
-                        # bootstrap_skip_history=true: 只推送 history_entry_limit 个条目
-                        history_limit = (
-                            _get_cfg().history_entry_limit if _get_cfg() else 0
+                        # bootstrap_skip_history=true: 仅保存哈希，不推送历史条目
+                        logger.info(
+                            "Feed 首次初始化跳过历史: %s, entries=%s",
+                            feed.link,
+                            len(updated_entries),
                         )
-                        if history_limit > 0 and len(updated_entries) > history_limit:
-                            # 按时间排序，取最新的 history_limit 个
-                            sorted_entries = sorted(
-                                updated_entries,
-                                key=lambda e: (
-                                    e.get("published_parsed")
-                                    or e.get("updated_parsed")
-                                    or ()
-                                ),
-                                reverse=True,
-                            )
+                        self._stat.not_updated()
+                    else:
+                        # bootstrap_skip_history=false: 按最新到最老推送历史条目，受 history_entry_limit 限制
+                        history_limit = _get_cfg().history_entry_limit if _get_cfg() else 0
+                        sorted_entries = sorted(
+                            updated_entries,
+                            key=lambda e: e.get("published_parsed") or e.get("updated_parsed") or (),
+                            reverse=True,
+                        )
+                        if history_limit > 0 and len(sorted_entries) > history_limit:
                             limited_entries = sorted_entries[:history_limit]
-                            skipped = len(updated_entries) - history_limit
+                            skipped = len(sorted_entries) - history_limit
                             logger.info(
-                                "Feed 首次初始化（跳过历史）: %s, 推送=%s, 跳过=%s (history_entry_limit=%s)",
+                                "Feed 首次初始化推送历史: %s, 推送=%s, 跳过=%s (history_entry_limit=%s)",
                                 feed.link,
                                 len(limited_entries),
                                 skipped,
                                 history_limit,
                             )
                         else:
-                            limited_entries = updated_entries
+                            limited_entries = sorted_entries
                             logger.info(
-                                "Feed 首次初始化推送（条目数在限制内）: %s, entries=%s",
+                                "Feed 首次初始化推送全部历史: %s, entries=%s",
                                 feed.link,
                                 len(limited_entries),
                             )
 
-                        # 推送限制后的条目
                         notifier_to_run = await self._build_feed_notifier(
                             feed=feed,
                             subs=subs,
@@ -349,57 +342,12 @@ class RSSMonitor:
                         if push_success:
                             feed.last_modified = wf.last_modified
                             feed.entry_hashes = merged
-                            feed_updated_fields.update(
-                                {"last_modified", "entry_hashes"}
-                            )
+                            feed_updated_fields.update({"last_modified", "entry_hashes"})
                             self._log_feed_polling_stats(
                                 feed=feed,
                                 fetched_entries=fetched_entries,
                                 dedup_new_count=len(limited_entries),
-                                dedup_skipped_count=len(updated_entries)
-                                - len(limited_entries),
-                                notifier=notifier_to_run,
-                            )
-                            self._stat.updated()
-                    else:
-                        # bootstrap_skip_history=false: 推送所有条目
-                        logger.info(
-                            "Feed 首次初始化推送全部内容: %s, entries=%s",
-                            feed.link,
-                            len(updated_entries),
-                        )
-                        notifier_to_run = await self._build_feed_notifier(
-                            feed=feed,
-                            subs=subs,
-                            entries=updated_entries,
-                        )
-                        push_success = False
-                        try:
-                            await notifier_to_run.notify_all()
-                            push_success = True
-                        except Exception as push_err:
-                            logger.error(
-                                "首次初始化推送失败: feed=%s, error=%s",
-                                feed.link,
-                                push_err,
-                                exc_info=True,
-                            )
-                            feed_updated_fields.clear()
-                            raise
-                        finally:
-                            await notifier_to_run.close()
-
-                        if push_success:
-                            feed.last_modified = wf.last_modified
-                            feed.entry_hashes = merged
-                            feed_updated_fields.update(
-                                {"last_modified", "entry_hashes"}
-                            )
-                            self._log_feed_polling_stats(
-                                feed=feed,
-                                fetched_entries=fetched_entries,
-                                dedup_new_count=dedup_new_count,
-                                dedup_skipped_count=dedup_skipped_count,
+                                dedup_skipped_count=len(updated_entries) - len(limited_entries),
                                 notifier=notifier_to_run,
                             )
                             self._stat.updated()
@@ -523,9 +471,7 @@ class RSSMonitor:
         if history_limit > 0:
             # Sort by published_parsed (newest first) and limit
             # Use index as tie-breaker to maintain stable order when time parsing fails
-            failed_time_parse_count = [
-                0
-            ]  # Use list to allow mutation in nested function
+            failed_time_parse_count = [0]  # Use list to allow mutation in nested function
 
             def _entry_sort_key(entry_index_pair):
                 original_index, entry = entry_index_pair
@@ -535,11 +481,7 @@ class RSSMonitor:
                     try:
                         # Convert to timestamp for comparison
                         from calendar import timegm
-
-                        return (
-                            timegm(parsed),
-                            -original_index,
-                        )  # Negative for stable reverse
+                        return (timegm(parsed), -original_index)  # Negative for stable reverse
                     except (TypeError, ValueError):
                         pass
 
@@ -625,7 +567,7 @@ class RSSMonitor:
         )
 
     async def _schedule_after_success(self, subs: list[Sub], interval: int) -> None:
-        """成功后刷新订阅的 next_check_time，并重置错误计数。"""
+        """成功后刷新订阅的 next_check_time。"""
         now = datetime.now(timezone.utc)
 
         async with get_session() as session:
@@ -635,19 +577,11 @@ class RSSMonitor:
                 db_sub = await session.get(Sub, sub.id)
                 if db_sub:
                     db_sub.next_check_time = now + timedelta(minutes=interval)
-                    # 重置错误计数
-                    if db_sub.error_count != 0:
-                        db_sub.error_count = 0
                     session.add(db_sub)
             await session.commit()
 
-    async def _schedule_after_error(
-        self, subs: list[Sub], interval: int, reason: str
-    ) -> None:
-        """失败后使用指数退避策略，只有连续多次失败才禁用订阅。"""
-        MAX_ERROR_COUNT = 5  # 最大允许连续错误次数
-        BASE_BACKOFF_MINUTES = 5  # 基础退避时间（分钟）
-
+    async def _schedule_after_error(self, subs: list[Sub], interval: int, reason: str) -> None:
+        """失败后刷新订阅的 next_check_time。"""
         async with get_session() as session:
             for sub in subs:
                 if sub.id is None:
@@ -655,53 +589,9 @@ class RSSMonitor:
                 db_sub = await session.get(Sub, sub.id)
                 if not db_sub:
                     continue
-
-                # 增加错误计数
-                db_sub.error_count = (db_sub.error_count or 0) + 1
-
-                if db_sub.error_count >= MAX_ERROR_COUNT:
-                    # 超过最大错误次数，禁用订阅
-                    db_sub.state = 0
-                    db_sub.error_count = 0  # 重置错误计数
-                    logger.warning(
-                        "订阅 %d 连续失败 %d 次，已自动禁用", sub.id, MAX_ERROR_COUNT
-                    )
-                else:
-                    # 指数退避：下次检查时间 = 当前时间 + (2^error_count * base_interval)
-                    backoff_multiplier = 2 ** min(db_sub.error_count, 6)  # 限制最大指数
-                    backoff_minutes = BASE_BACKOFF_MINUTES * backoff_multiplier
-                    from datetime import timezone
-
-                    db_sub.next_check_time = datetime.now(timezone.utc) + timedelta(
-                        minutes=backoff_minutes
-                    )
-                    logger.info(
-                        "订阅 %d 第 %d 次失败，%d 分钟后重试",
-                        sub.id,
-                        db_sub.error_count,
-                        backoff_minutes,
-                    )
-
+                db_sub.next_check_time = datetime.now(timezone.utc) + timedelta(minutes=interval)
                 session.add(db_sub)
             await session.commit()
-
-        # 只有在订阅被禁用时才发送通知
-        disabled_subs = [s for s in subs if s.state == 0]
-        if disabled_subs:
-            notifier = Notifier(
-                feed=disabled_subs[0].feed,
-                subs=disabled_subs,
-                reason=reason,
-                timeout_seconds=_get_cfg().timeout if _get_cfg() else 30,
-                proxy=_get_cfg().proxy if _get_cfg() else "",
-                download_media_before_send=(
-                    _get_cfg().download_media_before_send if _get_cfg() else True
-                ),
-            )
-            try:
-                await notifier.notify_all()
-            finally:
-                await notifier.close()
 
     async def _resolve_sub_interval(self, sub: Sub) -> int:
         """解析单个订阅生效 interval，优先级 Sub > User > Plugin default。"""

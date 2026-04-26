@@ -85,29 +85,6 @@ async def subscribe_feed(
 
     feed = await Feed.get_or_create(link=url, title=title)
 
-    # 预填充 entry_hashes
-    if not feed.entry_hashes and wf.rss_d and wf.rss_d.entries:
-        try:
-            new_groups = []
-            for entry in wf.rss_d.entries:
-                # 简化处理：使用 entry id 或 link 作为 hash
-                entry_id = entry.get("id") or entry.get("link") or str(entry)
-                new_groups.append([entry_id])
-            if new_groups:
-                feed.entry_hashes = [
-                    item for sublist in new_groups for item in sublist
-                ][:100]
-                from ..db import get_session
-
-                async with get_session() as session:
-                    db_feed = await session.get(Feed, feed.id)
-                    if db_feed:
-                        db_feed.entry_hashes = feed.entry_hashes
-                        session.add(db_feed)
-                        await session.commit()
-        except Exception:
-            pass  # 预填充失败不影响订阅
-
     sub = await Sub.create(
         user_id=user.id,
         feed_id=feed.id,

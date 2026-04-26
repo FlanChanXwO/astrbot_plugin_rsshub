@@ -739,9 +739,3 @@ async def _migrate_v2_schema_changes(conn) -> None:
     """)
     logger.info("迁移: 更新 rsshub_sub 表的 title 和 tags 列")
 
-    # 12. v1.1.1+ 新增 rsshub_sub.error_count 列
-    if not await _has_column("rsshub_sub", "error_count"):
-        await conn.exec_driver_sql(
-            "ALTER TABLE rsshub_sub ADD COLUMN error_count INTEGER NOT NULL DEFAULT 0"
-        )
-        logger.info("迁移: 添加 rsshub_sub.error_count 列")

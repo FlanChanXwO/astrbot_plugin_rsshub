@@ -524,7 +524,7 @@ async def get_or_download_media_to_cache(
                 )
                 if gif_path and gif_path.exists():
                     converted_path = gif_path
-                    logger.info(
+                    logger.debug(
                         "GIF conversion successful: url=%s, gif_path=%s, size=%s",
                         url,
                         gif_path,

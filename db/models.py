@@ -31,7 +31,6 @@ class RSSHubModel(SQLModel, registry=_plugin_registry):
 
 INHERIT_VALUE = -100
 EFFECTIVE_OPTION_KEYS = (
-    "notify",
     "send_mode",
     "length_limit",
     "link_preview",
@@ -151,7 +150,6 @@ class Sub(RSSHubModel, table=True):
 
     interval: int | None = Field(default=None, description="监控间隔")
     next_check_time: datetime | None = Field(default=None, description="下次检查时间")
-    error_count: int = Field(default=0, description="连续错误次数")
     notify: int = Field(default=INHERIT_VALUE, description="是否通知")
     send_mode: int = Field(default=INHERIT_VALUE, description="发送模式")
     length_limit: int = Field(default=INHERIT_VALUE, description="长度限制")
@@ -327,6 +325,17 @@ def resolve_effective_options(
         cfg = global_cfg
 
     options: dict[str, int | str | None] = {}
+
+    # notify 不受 use_sub_config 影响，始终从下到上级联继承
+    if sub.notify != INHERIT_VALUE:
+        options["notify"] = sub.notify
+    elif user.use_user_config:
+        options["notify"] = user.notify
+    elif cfg and hasattr(cfg, "notify"):
+        options["notify"] = cfg.notify
+    else:
+        options["notify"] = user.notify
+
     for key in EFFECTIVE_OPTION_KEYS:
         if sub.use_sub_config:
             # 使用订阅自身配置

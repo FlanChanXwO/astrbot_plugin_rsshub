@@ -77,47 +77,17 @@ class AiocqhttpMessageSender(MessageSender):
                 nickname = "RSSHub"
             nodes = []
 
-            # QQ 合并转发消息渲染顺序是反的：后添加的节点显示在最上面
-            # 所以要让媒体在上面、文字在下面，需要先添加文本，后添加媒体
-
-            # 1. 先添加文字内容（会显示在最下面）
             header_chain = [Plain(message)] if message else [Plain("RSS update")]
             nodes.append(cls._build_node(nickname, header_chain))
 
-            # 2. 后添加媒体组件（会显示在最上面）
-            media_nodes = []
-            # 使用 _build_node 方法构建媒体节点
-            for item in effective_prepared:
-                # 确保 file 参数是字符串类型（Image 组件要求 str，不是 Path）
-                file_path = item.local_path
-                if file_path is not None:
-                    file_path = str(file_path)
-                file_url = item.original_url or ""
-                image_file = file_path or file_url
+            for component in image_components:
+                nodes.append(cls._build_node(nickname, [component]))
 
-                if item.media_type == "image":
-                    media_nodes.append(
-                        cls._build_node(nickname, [Image(file=image_file)])
-                    )
-                elif item.media_type == "video":
-                    # 视频也使用 Image 组件展示缩略图或链接
-                    media_nodes.append(
-                        cls._build_node(nickname, [Image(file=image_file)])
-                    )
-
-            # 添加所有媒体节点（在上面）
-            nodes.extend(media_nodes)
+            for component in tail_components:
+                nodes.append(cls._build_node(nickname, [component]))
 
             if not nodes:
                 return SendResult(ok=False, detail="empty_message")
-
-            logger.debug(
-                "Aiocqhttp sender node summary: session=%s, text=1, media=%s, "
-                "total_nodes=%s (QQ renders last node on top)",
-                session_id,
-                len(media_nodes),
-                len(nodes),
-            )
             return await cls._send_chain(session_id, [Nodes(nodes)])
         except Exception as err:
             err_text = str(err)

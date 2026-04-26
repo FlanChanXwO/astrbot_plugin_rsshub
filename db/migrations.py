@@ -738,4 +738,3 @@ async def _migrate_v2_schema_changes(conn) -> None:
         UPDATE rsshub_sub SET tags = '' WHERE tags IS NULL
     """)
     logger.info("迁移: 更新 rsshub_sub 表的 title 和 tags 列")
-

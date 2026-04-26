@@ -66,7 +66,7 @@ async def set_user_option(
         if val is None:
             return "未设置"
         if isinstance(val, bool) or val in (0, 1, -100):
-            val_map = {0: "禁用", 1: "启用", True: "启用", False: "禁用", -100: "继承"}
+            val_map = {0: "禁用", 1: "启用", -100: "继承"}
             return val_map.get(val, str(val))
         return str(val)
 

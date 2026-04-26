@@ -916,8 +916,6 @@ async def batch_activate_subs(
 
     from ..db import Sub, get_session
 
-    from sqlmodel import or_
-
     async with get_session() as session:
         # 查询当前会话中该用户的所有订阅（当前禁用的），预加载 feed
         # 处理 target_session 为 NULL 的情况（NULL 视为当前会话）

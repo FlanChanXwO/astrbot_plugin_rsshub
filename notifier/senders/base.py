@@ -233,13 +233,6 @@ class MessageSender:
             media_file_value = local_file_uri if local_path else media_url
 
             if media_type == "image":
-                if image_count >= 9:
-                    logger.warning(
-                        "Image skipped due to limit: url=%s, count=%s",
-                        media_url,
-                        image_count,
-                    )
-                    continue
                 image_url_value = "" if local_path else media_url
                 image_components.append(
                     Image(file=media_file_value, url=image_url_value)

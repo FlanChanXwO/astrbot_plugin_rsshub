@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.2] - 2026-04-26
+
+### Fixed
+
+- **移除推送时图片上限**：
+  - 解决 RSS 源包含大量图片时只推送 9-14 张的问题
+
+<details>
+<summary>历史更新记录</summary>
+
 ## [1.1.1] - 2026-04-26
 
 ### Fixed
@@ -122,8 +132,6 @@
 
 ---
 
-<details>
-<summary>历史更新记录</summary>
 
 ### Refactored
 

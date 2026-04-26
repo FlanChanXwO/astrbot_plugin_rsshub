@@ -540,8 +540,6 @@ class RSSMonitor:
         fanout_subs = subs
         fanout_feed_id = feed.id
         if fanout_feed_id is not None:
-            # Fan out once to all active subscribers of this feed,
-            # avoiding chunk-based preemption between sessions/platforms.
             fanout_subs = await Sub.get_active_by_feed_id(fanout_feed_id)
 
         dedup_before_sub_count = len(fanout_subs)
@@ -672,7 +670,10 @@ class RSSMonitor:
                 updated_entries.append(entry)
 
             new_entry_groups.append(entry_hashes)
-            known_hashes.update(entry_hashes)
+            # Only add identity hash to known_hashes to avoid false positives
+            # from content hash collisions within the same batch
+            if stable_hash:
+                known_hashes.add(stable_hash)
 
         return new_entry_groups, updated_entries
 

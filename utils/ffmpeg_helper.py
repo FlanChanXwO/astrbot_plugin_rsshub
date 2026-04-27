@@ -47,12 +47,12 @@ class FFmpegTool:
     @staticmethod
     def ensure_ffmpeg_ready(*, auto_install: bool = True) -> str | None:
         """Resolve an FFmpeg executable path for plugin runtime use.
-        
+
         Priority:
         1. Cached path if still valid
         2. System PATH ffmpeg (most stable for HLS/m3u8)
         3. imageio-ffmpeg bundled binary (fallback)
-        
+
         Args:
             auto_install: Whether to auto-install ffmpeg if not found
 
@@ -76,7 +76,9 @@ class FFmpegTool:
                 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
                 if ffmpeg_exe and Path(ffmpeg_exe).exists():
                     FFmpegTool._ffmpeg_exe_cache = str(Path(ffmpeg_exe).resolve())
-                    logger.debug("Using imageio-ffmpeg bundled: %s", FFmpegTool._ffmpeg_exe_cache)
+                    logger.debug(
+                        "Using imageio-ffmpeg bundled: %s", FFmpegTool._ffmpeg_exe_cache
+                    )
                     return FFmpegTool._ffmpeg_exe_cache
             except Exception as ex:
                 logger.warning("FFmpeg resolve via imageio-ffmpeg failed: %s", ex)

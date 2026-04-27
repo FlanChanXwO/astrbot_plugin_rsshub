@@ -47,7 +47,12 @@ class FFmpegTool:
     @staticmethod
     def ensure_ffmpeg_ready(*, auto_install: bool = True) -> str | None:
         """Resolve an FFmpeg executable path for plugin runtime use.
-
+        
+        Priority:
+        1. Cached path if still valid
+        2. System PATH ffmpeg (most stable for HLS/m3u8)
+        3. imageio-ffmpeg bundled binary (fallback)
+        
         Args:
             auto_install: Whether to auto-install ffmpeg if not found
 
@@ -57,20 +62,24 @@ class FFmpegTool:
         if FFmpegTool._ffmpeg_exe_cache and Path(FFmpegTool._ffmpeg_exe_cache).exists():
             return FFmpegTool._ffmpeg_exe_cache
 
+        # 使用字符串而非 PathLike（兼容 Python < 3.12 on Windows）
+        # 优先使用系统 ffmpeg，因为对 HLS/m3u8 兼容性更好
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            FFmpegTool._ffmpeg_exe_cache = str(Path(system_ffmpeg).resolve())
+            logger.debug("Using system ffmpeg: %s", FFmpegTool._ffmpeg_exe_cache)
+            return FFmpegTool._ffmpeg_exe_cache
+
+        # 回退到 imageio-ffmpeg 内置版本
         if auto_install and imageio_ffmpeg is not None:
             try:
                 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
                 if ffmpeg_exe and Path(ffmpeg_exe).exists():
                     FFmpegTool._ffmpeg_exe_cache = str(Path(ffmpeg_exe).resolve())
+                    logger.debug("Using imageio-ffmpeg bundled: %s", FFmpegTool._ffmpeg_exe_cache)
                     return FFmpegTool._ffmpeg_exe_cache
             except Exception as ex:
                 logger.warning("FFmpeg resolve via imageio-ffmpeg failed: %s", ex)
-
-        # 使用字符串而非 PathLike（兼容 Python < 3.12 on Windows）
-        system_ffmpeg = shutil.which("ffmpeg")
-        if system_ffmpeg:
-            FFmpegTool._ffmpeg_exe_cache = str(Path(system_ffmpeg).resolve())
-            return FFmpegTool._ffmpeg_exe_cache
 
         return None
 

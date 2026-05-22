@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ....shared.constants import INHERIT_VALUE, STATE_ENABLED, USER_STATE_USER
 from ...utils import get_logger
 
 logger = get_logger()
@@ -348,6 +349,19 @@ async def ensure_profile_schema(conn) -> list[str]:
         result = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
         return {str(row[1]) for row in result.fetchall()}
 
+    async def _fill_nulls(table: str, columns: set[str], defaults: dict[str, Any]) -> list[str]:
+        fixed: list[str] = []
+        for column, default in defaults.items():
+            if column not in columns:
+                continue
+            result = await conn.exec_driver_sql(
+                f"UPDATE {table} SET {column} = ? WHERE {column} IS NULL",
+                (default,),
+            )
+            if result.rowcount and result.rowcount > 0:
+                fixed.append(f"{table}.{column}.nulls")
+        return fixed
+
     applied: list[str] = []
 
     if await _table_exists("rsshub_user"):
@@ -358,6 +372,36 @@ async def ensure_profile_schema(conn) -> list[str]:
             )
             applied.append("rsshub_user.handlers")
             logger.info("数据库 schema 自愈: 为 rsshub_user 添加 handlers 字段")
+            user_columns.add("handlers")
+        fixed = await _fill_nulls(
+            "rsshub_user",
+            user_columns,
+            {
+                "state": USER_STATE_USER,
+                "interval": INHERIT_VALUE,
+                "notify": INHERIT_VALUE,
+                "send_mode": INHERIT_VALUE,
+                "handlers": "[]",
+                "length_limit": INHERIT_VALUE,
+                "display_author": INHERIT_VALUE,
+                "display_via": INHERIT_VALUE,
+                "display_title": INHERIT_VALUE,
+                "display_entry_tags": INHERIT_VALUE,
+                "style": INHERIT_VALUE,
+                "display_media": INHERIT_VALUE,
+                "needs_binding_notice": 0,
+            },
+        )
+        if fixed:
+            applied.extend(fixed)
+            logger.info("数据库 schema 自愈: 修正 rsshub_user 的 NULL 配置字段")
+        if {"created_at", "updated_at"}.issubset(user_columns):
+            await conn.exec_driver_sql(
+                "UPDATE rsshub_user SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+            )
+            await conn.exec_driver_sql(
+                "UPDATE rsshub_user SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+            )
 
     if await _table_exists("rsshub_sub"):
         sub_columns = await _column_names("rsshub_sub")
@@ -397,6 +441,38 @@ async def ensure_profile_schema(conn) -> list[str]:
             )
             applied.append("rsshub_sub.handlers_mode")
             logger.info("数据库 schema 自愈: 为 rsshub_sub 添加 handlers_mode 字段")
+            sub_columns.add("handlers_mode")
+        fixed = await _fill_nulls(
+            "rsshub_sub",
+            sub_columns,
+            {
+                "state": STATE_ENABLED,
+                "title": "",
+                "tags": "",
+                "interval": INHERIT_VALUE,
+                "notify": INHERIT_VALUE,
+                "send_mode": INHERIT_VALUE,
+                "handlers": "[]",
+                "handlers_mode": "inherit",
+                "length_limit": INHERIT_VALUE,
+                "display_author": INHERIT_VALUE,
+                "display_via": INHERIT_VALUE,
+                "display_title": INHERIT_VALUE,
+                "display_entry_tags": INHERIT_VALUE,
+                "style": INHERIT_VALUE,
+                "display_media": INHERIT_VALUE,
+            },
+        )
+        if fixed:
+            applied.extend(fixed)
+            logger.info("数据库 schema 自愈: 修正 rsshub_sub 的 NULL 配置字段")
+        if {"created_at", "updated_at"}.issubset(sub_columns):
+            await conn.exec_driver_sql(
+                "UPDATE rsshub_sub SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+            )
+            await conn.exec_driver_sql(
+                "UPDATE rsshub_sub SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+            )
 
     return applied
 

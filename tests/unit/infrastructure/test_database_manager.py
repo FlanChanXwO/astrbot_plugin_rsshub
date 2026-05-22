@@ -11,6 +11,9 @@ from astrbot_plugin_rsshub.src.infrastructure.persistence.migrations import (
     ensure_push_history_schema,
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.models import SubORM
+from astrbot_plugin_rsshub.src.infrastructure.persistence.subscription_repository_impl import (
+    SubscriptionRepositoryImpl,
+)
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -191,25 +194,25 @@ async def test_ensure_profile_schema_allows_current_sub_orm_reads():
             """
             CREATE TABLE rsshub_sub (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                state INTEGER NOT NULL DEFAULT 1,
+                state INTEGER,
                 user_id VARCHAR NOT NULL,
                 feed_id INTEGER NOT NULL,
-                title VARCHAR NOT NULL DEFAULT '',
-                tags VARCHAR NOT NULL DEFAULT '',
+                title VARCHAR,
+                tags VARCHAR,
                 target_session VARCHAR,
                 platform_name VARCHAR,
-                interval INTEGER NOT NULL DEFAULT -100,
+                interval INTEGER,
                 next_check_time DATETIME,
-                notify INTEGER NOT NULL DEFAULT -100,
-                send_mode INTEGER NOT NULL DEFAULT -100,
-                length_limit INTEGER NOT NULL DEFAULT -100,
-                display_author INTEGER NOT NULL DEFAULT -100,
-                display_via INTEGER NOT NULL DEFAULT -100,
-                display_title INTEGER NOT NULL DEFAULT -100,
-                display_entry_tags INTEGER NOT NULL DEFAULT -100,
-                style INTEGER NOT NULL DEFAULT -100,
-                display_media INTEGER NOT NULL DEFAULT -100,
-                handlers TEXT NOT NULL DEFAULT '[]',
+                notify INTEGER,
+                send_mode INTEGER,
+                length_limit INTEGER,
+                display_author INTEGER,
+                display_via INTEGER,
+                display_title INTEGER,
+                display_entry_tags INTEGER,
+                style INTEGER,
+                display_media INTEGER,
+                handlers TEXT,
                 created_at DATETIME,
                 updated_at DATETIME
             )
@@ -222,7 +225,7 @@ async def test_ensure_profile_schema_allows_current_sub_orm_reads():
         await conn.exec_driver_sql(
             """
             INSERT INTO rsshub_sub (id, user_id, feed_id, title, handlers)
-            VALUES (1, 'u1', 1, 'Sub', '[]')
+            VALUES (1, 'u1', 1, NULL, NULL)
             """
         )
 
@@ -233,7 +236,11 @@ async def test_ensure_profile_schema_allows_current_sub_orm_reads():
         sub = await session.get(SubORM, 1)
 
     assert sub is not None
+    assert SubscriptionRepositoryImpl._to_entity(sub).interval == -100
     assert sub.handlers_mode == "inherit"
+    assert sub.interval == -100
+    assert sub.title == ""
+    assert sub.handlers == "[]"
     await engine.dispose()
 
 

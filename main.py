@@ -31,7 +31,9 @@ logger = get_logger()
 _HELP_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "help" / "rsshelp.png"
 _IMPORT_WAIT_SECONDS = 5 * 60
 _event_message_type = getattr(filter, "event_message_type", None)
-_event_message_type_all = getattr(getattr(filter, "EventMessageType", None), "ALL", None)
+_event_message_type_all = getattr(
+    getattr(filter, "EventMessageType", None), "ALL", None
+)
 
 
 def _noop_event_message_type(*_args, **_kwargs):

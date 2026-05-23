@@ -215,9 +215,7 @@ class MediaDownloader:
         if not fail_path.exists():
             return None
         try:
-            raw_expire_ts, detail = fail_path.read_text(encoding="utf-8").split(
-                "\n", 1
-            )
+            raw_expire_ts, detail = fail_path.read_text(encoding="utf-8").split("\n", 1)
             expire_ts = float(raw_expire_ts)
         except Exception:
             self.safe_unlink(fail_path)

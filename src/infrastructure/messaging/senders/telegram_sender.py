@@ -146,15 +146,11 @@ class TelegramMessageSender(DefaultMessageSender):
             else self._get_timeout_seconds(),
         )
         page_title = (
-            str(getattr(context, "entry_title", "") or "").strip()
-            if context
-            else ""
+            str(getattr(context, "entry_title", "") or "").strip() if context else ""
         )
         if not page_title:
             page_title = (
-                context.channel.title
-                if context and context.channel.title
-                else "RSSHub"
+                context.channel.title if context and context.channel.title else "RSSHub"
             )
         page_url = await client.create_media_page(
             title=page_title,

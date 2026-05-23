@@ -10,9 +10,7 @@ def test_telegraph_page_uses_images_instead_of_media_link_list():
     nodes = TelegraphClient._build_html(
         title="Entry title",
         content=(
-            "Entry title\n\n"
-            "Body text\n\n"
-            "via https://example.com/post | Feed title"
+            "Entry title\n\nBody text\n\nvia https://example.com/post | Feed title"
         ),
         media_urls=[
             "https://proxy.example/image/1.webp",

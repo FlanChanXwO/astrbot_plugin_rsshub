@@ -242,9 +242,7 @@ class PushHistoryRepositoryImpl:
         """删除全部推送历史记录。"""
         db = get_database()
         async with db.get_session() as session:
-            stmt = delete(PushHistoryORM).execution_options(
-                synchronize_session=False
-            )
+            stmt = delete(PushHistoryORM).execution_options(synchronize_session=False)
             result = await session.execute(stmt)
             await session.commit()
             return int(result.rowcount or 0)

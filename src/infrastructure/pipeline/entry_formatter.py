@@ -52,7 +52,8 @@ class EntryTextFormatter:
         feed_link = str(entry.feed_link or "").strip()
         link = str(entry.link or "").strip()
 
-        body = self._remove_repeated_title(body, title)
+        if options.display_title != -1:
+            body = self._remove_repeated_title(body, title)
         if options.length_limit > 0 and body:
             body = self._truncate(body, options.length_limit)
 

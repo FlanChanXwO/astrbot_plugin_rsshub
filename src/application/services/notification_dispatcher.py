@@ -544,7 +544,8 @@ class NotificationDispatcher:
         include_inactive_subscription_ids: bool = False,
         bypass_success_dedup: bool = False,
         event: AstrMessageEvent | Any | None = None,
-    ) -> dict[str, int]:
+        include_error_detail: bool = False,
+    ) -> dict[str, Any]:
         """
         将条目分发给 Feed 的所有订阅者
 
@@ -563,7 +564,14 @@ class NotificationDispatcher:
         Returns:
             统计信息字典 {success: x, failed: y, pending: y, skipped: z}
         """
-        stats = {"success": 0, "failed": 0, "pending": 0, "skipped": 0}
+        stats: dict[str, Any] = {"success": 0, "failed": 0, "pending": 0, "skipped": 0}
+
+        def record_error_detail(error: object) -> None:
+            if not include_error_detail:
+                return
+            text = str(error or "").strip()
+            if text and not stats.get("last_error"):
+                stats["last_error"] = text
 
         # 1. 获取 Feed 的所有启用订阅
         subscriptions = await self._subscription_repo.get_active_by_feed_id(feed_id)
@@ -751,6 +759,7 @@ class NotificationDispatcher:
                     exc_info=True,
                 )
                 stats["failed"] += 1
+                record_error_detail(e)
 
         if self._basic_settings.deduplicate_multi_bot and prepared_dispatches:
             grouped: dict[
@@ -845,6 +854,8 @@ class NotificationDispatcher:
                     job_description=f"feed={feed_id}, sub={sub.id}",
                     channel_title=feed_title,
                     channel_link=feed_link,
+                    entry_title=prepared.effective_title,
+                    entry_link=prepared.effective_link,
                     feed_id=feed_id,
                     sub_id=sub.id,
                     send_mode=prepared.effective_send_mode,
@@ -860,6 +871,7 @@ class NotificationDispatcher:
                     history.max_retries = 0
                     stats["success"] += 1
                 else:
+                    record_error_detail(result.get("error"))
                     history.max_retries = (
                         await self._resolve_initial_failure_max_retries()
                     )
@@ -880,6 +892,7 @@ class NotificationDispatcher:
             except Exception as e:
                 logger.error("发送订阅 %s 失败: %s", sub.id, e, exc_info=True)
                 stats["failed"] += 1
+                record_error_detail(e)
 
         logger.info(
             "分发完成: success=%s, failed=%s, pending=%s, skipped=%s",
@@ -961,6 +974,8 @@ class NotificationDispatcher:
             job_description=f"agent={source_key}, history={history.id}",
             channel_title=feed_title,
             channel_link=feed_link,
+            entry_title=entry_title,
+            entry_link=entry_link,
             feed_id=None,
             sub_id=None,
             send_mode=SEND_MODE_AUTO,
@@ -1002,6 +1017,8 @@ class NotificationDispatcher:
         job_description: str = "",
         channel_title: str = "",
         channel_link: str = "",
+        entry_title: str = "",
+        entry_link: str = "",
         feed_id: int | None = None,
         sub_id: int | None = None,
         send_mode: int | None = None,
@@ -1017,6 +1034,8 @@ class NotificationDispatcher:
             job_description=job_description,
             channel_title=channel_title,
             channel_link=channel_link,
+            entry_title=entry_title,
+            entry_link=entry_link,
             feed_id=feed_id,
             sub_id=sub_id,
             send_mode=send_mode,
@@ -1035,6 +1054,8 @@ class NotificationDispatcher:
         job_description: str = "",
         channel_title: str = "",
         channel_link: str = "",
+        entry_title: str = "",
+        entry_link: str = "",
         feed_id: int | None = None,
         sub_id: int | None = None,
         send_mode: int | None = None,
@@ -1087,6 +1108,8 @@ class NotificationDispatcher:
                     context=MessageContext(
                         channel_title=channel_title,
                         channel_link=channel_link,
+                        entry_title=entry_title,
+                        entry_link=entry_link,
                         platform_name=target.platform_name or "",
                         send_mode=self._normalize_send_mode_value(send_mode),
                         style=style,
@@ -1229,6 +1252,8 @@ class NotificationDispatcher:
                     job_description=f"retry history={history.id}",
                     channel_title=history.feed_title,
                     channel_link=history.feed_link,
+                    entry_title=history.entry_title,
+                    entry_link=history.entry_link,
                     feed_id=history.feed_id,
                     sub_id=history.sub_id,
                     send_mode=(

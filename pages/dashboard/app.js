@@ -23,6 +23,7 @@ import {
   deletePushHistory,
   deletePushHistoryBatch,
   cleanupPushHistory,
+  clearPushHistory,
   getUserDetails,
   updateUser,
   deleteUser,
@@ -1282,11 +1283,29 @@ const store = PetiteVue.reactive({
     );
     if (!ok) return;
     await this.runPending('push-history:cleanup', async () => {
-      await cleanupPushHistory(this.historyRetentionDays);
-      this.showToast(`已按 ${this.historyRetentionDays} 天范围清理历史记录`);
+      const result = await cleanupPushHistory(this.historyRetentionDays);
+      this.showToast(result.message || `已按 ${this.historyRetentionDays} 天范围清理历史记录`);
       await this.loadPushHistory();
     }).catch((err) => {
       this.showToast(`清理失败: ${err.message}`, 'error');
+    });
+  },
+
+  async clearPushHistory() {
+    const ok = await this.showConfirm(
+      '确定清空全部推送历史？该操作会删除成功、失败和待重试记录。',
+      '清空历史',
+      '清空'
+    );
+    if (!ok) return;
+    await this.runPending('push-history:clear', async () => {
+      const result = await clearPushHistory();
+      this.showToast(result.message || '已清空推送历史');
+      this.selectedPushHistoryIds = [];
+      await this.loadPushHistory();
+      await this.loadStats();
+    }).catch((err) => {
+      this.showToast(`清空失败: ${err.message}`, 'error');
     });
   },
 

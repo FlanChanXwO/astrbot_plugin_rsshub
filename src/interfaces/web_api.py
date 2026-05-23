@@ -216,6 +216,12 @@ class WebApiHandler:
                 self.handle_cleanup_push_history,
                 "清理推送历史",
             ),
+            (
+                "POST",
+                "/push-history/clear",
+                self.handle_clear_push_history,
+                "清空推送历史",
+            ),
             ("GET", "/users/detail", self.handle_user_details, "用户详情列表"),
             ("POST", "/users/update", self.handle_update_user, "更新用户配置"),
             ("POST", "/users/delete", self.handle_delete_user, "删除用户"),
@@ -1316,7 +1322,25 @@ class WebApiHandler:
         days = data.get("days", 30) if data else 30
         count = await self._push_history_repo.delete_old_records(int(days))
         self._bump_counter()
-        return jsonify({"ok": True, "message": f"已清理 {count} 条记录"})
+        return jsonify(
+            {
+                "ok": True,
+                "removed_count": count,
+                "message": f"已清理 {count} 条记录",
+            }
+        )
+
+    async def handle_clear_push_history(self):
+        """清空推送历史。"""
+        count = await self._push_history_repo.delete_all()
+        self._bump_counter()
+        return jsonify(
+            {
+                "ok": True,
+                "removed_count": count,
+                "message": f"已清空 {count} 条记录",
+            }
+        )
 
 
 def _dump_dataclass_like(value: Any) -> dict[str, Any]:

@@ -189,6 +189,14 @@ class PushHistoryRepository(Protocol):
         """
         ...
 
+    async def delete_all(self) -> int:
+        """删除全部推送历史记录。
+
+        Returns:
+            删除的记录数量
+        """
+        ...
+
     async def get_stats(self) -> dict[str, int]:
         """获取推送统计信息
 

@@ -11,7 +11,14 @@ from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.factory import (
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.qq_official_sender import (
     QQOfficialMessageSender,
 )
+from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.telegram_sender import (
+    TelegramMessageSender,
+)
+from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.telegraph_client import (
+    TelegraphClient,
+)
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
+    ChannelInfo,
     MessageContext,
     PreparedMedia,
     SendRequest,
@@ -372,3 +379,99 @@ async def test_weixin_oc_partial_media_failure_continues_and_appends_url(monkeyp
 def test_factory_maps_weixin_aliases_to_dedicated_sender():
     assert get_sender_for_platform("weixin_oc") is WeixinOCMessageSender
     assert get_sender_for_platform("wechat") is WeixinOCMessageSender
+
+
+@pytest.mark.asyncio
+async def test_telegram_large_local_image_is_sent_as_file(monkeypatch, tmp_path):
+    _patch_components(monkeypatch)
+    image_path = tmp_path / "large.jpg"
+    image_path.write_bytes(b"0" * (10 * 1024 * 1024 + 1))
+    sender = TelegramMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="telegram:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="image",
+                    original_url="https://example.com/large.jpg",
+                    local_path=image_path,
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="telegram"),
+    )
+
+    assert result.ok is True
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], _Plain)
+    assert isinstance(calls[0][1], _File)
+    assert calls[0][1].file == str(image_path)
+
+
+@pytest.mark.asyncio
+async def test_telegram_telegraph_uses_entry_title_and_plain_url(monkeypatch):
+    _patch_components(monkeypatch)
+    created: dict[str, object] = {}
+
+    async def fake_create_page(self, **kwargs):
+        created.update(kwargs)
+        return "https://telegra.ph/entry-title"
+
+    monkeypatch.setattr(TelegraphClient, "create_media_page", fake_create_page)
+
+    sender = TelegramMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="telegram:UserMessage:1",
+            message="Entry title\n\nBody text\n\nvia https://example.com/post | Feed",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="image",
+                    original_url="https://example.com/1.webp",
+                ),
+                PreparedMedia(
+                    media_type="image",
+                    original_url="https://example.com/2.webp",
+                ),
+            ],
+        ),
+        context=MessageContext(
+            platform_name="telegram",
+            send_mode=0,
+            entry_title="Entry title",
+            entry_link="https://example.com/post",
+            channel=ChannelInfo(title="Feed", link="https://example.com/feed"),
+            sender_strategy={
+                "enable_telegraph": True,
+                "telegraph_token": "token",
+            },
+        ),
+    )
+
+    assert result.ok is True
+    assert created["title"] == "Entry title"
+    assert created["media_urls"] == [
+        "https://example.com/1.webp",
+        "https://example.com/2.webp",
+    ]
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], _Plain)
+    assert "https://telegra.ph/entry-title" in calls[0][0].text
+    assert "Telegraph:" not in calls[0][0].text

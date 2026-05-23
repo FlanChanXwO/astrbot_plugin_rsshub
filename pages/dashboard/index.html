@@ -712,6 +712,7 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-primary btn-small" :class="{ 'is-loading': isPending('push-history:settings-save') }" :disabled="isPending('push-history:settings-save')" @click="savePushHistorySettings()">保存设置</button>
           <button class="btn btn-secondary btn-small" :class="{ 'is-loading': isPending('push-history:cleanup') }" :disabled="isPending('push-history:cleanup')" @click="cleanupPushHistory()">立即清理旧记录</button>
+          <button class="btn btn-danger btn-small" :class="{ 'is-loading': isPending('push-history:clear') }" :disabled="isPending('push-history:clear')" @click="clearPushHistory()">清空历史</button>
         </div>
       </div>
     </div>

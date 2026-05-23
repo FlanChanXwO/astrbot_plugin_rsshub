@@ -42,6 +42,7 @@ def _handler(
     set_user_settings_cmd=None,
     test_sub_cmd=None,
     route_knowledge_service=None,
+    push_history_repo=None,
 ):
     return WebApiHandler(
         subscribe_cmd=subscribe_cmd or MagicMock(),
@@ -60,7 +61,7 @@ def _handler(
         feed_repo=MagicMock(),
         sub_repo=MagicMock(),
         user_repo=MagicMock(),
-        push_history_repo=MagicMock(),
+        push_history_repo=push_history_repo or MagicMock(),
         route_knowledge_service=route_knowledge_service,
         config=config or MagicMock(),
         raw_config=raw_config,
@@ -587,6 +588,54 @@ async def test_delete_push_history_endpoint_supports_batch_delete():
     assert payload["ok"] is True
     assert payload["removed_count"] == 2
     push_history_repo.delete_many.assert_awaited_once_with([11, 12])
+
+
+@pytest.mark.asyncio
+async def test_cleanup_push_history_endpoint_returns_removed_count():
+    push_history_repo = MagicMock()
+    push_history_repo.delete_old_records = AsyncMock(return_value=42)
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/cleanup",
+        method="POST",
+        json={"days": 7},
+    ):
+        response = await handler.handle_cleanup_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["removed_count"] == 42
+    assert payload["message"] == "已清理 42 条记录"
+    push_history_repo.delete_old_records.assert_awaited_once_with(7)
+
+
+@pytest.mark.asyncio
+async def test_clear_push_history_endpoint_deletes_all_history_rows():
+    push_history_repo = MagicMock()
+    push_history_repo.delete_all = AsyncMock(return_value=9607)
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/clear",
+        method="POST",
+        json={},
+    ):
+        response = await handler.handle_clear_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["removed_count"] == 9607
+    assert payload["message"] == "已清空 9607 条记录"
+    push_history_repo.delete_all.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

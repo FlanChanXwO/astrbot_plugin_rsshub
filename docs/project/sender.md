@@ -86,6 +86,14 @@ provider 会同时解析 sender strategy：
 
 OneBot auto/classic 使用合并转发，节点名优先使用 feed title。合并转发失败后会回退为纯文本 Nodes。OneBot original 不使用大合并转发包，而是按 layout fragments 逐条发送图文片段，适合 AI 日报这类多图长文。
 
+### Telegram 大图片
+
+Telegram Bot API 对 photo 有大小上限。发送前如果本地图片文件超过 10 MiB，Telegram sender 会把它改为文件组件发送，避免平台把大图按 photo 拒绝。这个降级只改变发送组件类型，不改变原始媒体 URL 和失败历史记录。
+
+### m3u8 / HLS 视频
+
+开启先下载后发送时，m3u8/HLS 链接会交给 FFmpeg 合并为 MP4。下载流程不只检查文件非空，还会用 ffprobe 校验输出文件存在视频流且时长大于 0；校验失败会删除坏文件，并沿用媒体下载失败路径，让 sender 追加原始链接或按平台能力降级，而不是缓存 0 秒视频。
+
 ## 媒体 fingerprint
 
 ### `HttpMediaFingerprintService`

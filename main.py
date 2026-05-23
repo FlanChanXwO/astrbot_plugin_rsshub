@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import File
 from astrbot.api.star import Context, Star
 
 try:
@@ -27,6 +29,17 @@ from .src.interfaces import handlers as _h
 logger = get_logger()
 
 _HELP_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "help" / "rsshelp.png"
+_IMPORT_WAIT_SECONDS = 5 * 60
+_event_message_type = getattr(filter, "event_message_type", None)
+_event_message_type_all = getattr(getattr(filter, "EventMessageType", None), "ALL", None)
+
+
+def _noop_event_message_type(*_args, **_kwargs):
+    return lambda fn: fn
+
+
+if not callable(_event_message_type):
+    _event_message_type = _noop_event_message_type
 
 
 class RSSHubPlugin(Star):
@@ -44,6 +57,7 @@ class RSSHubPlugin(Star):
         self._notification_dispatcher = None
         self._runtime: PluginRuntime | None = None
         self._registered_llm_tools: list[str] = []
+        self._pending_imports: dict[str, float] = {}
 
     async def initialize(self):
         try:
@@ -301,8 +315,60 @@ class RSSHubPlugin(Star):
         - /sub_import  (进入上传等待)
         """
         result = await _h.handle_import(event, str(args), self._deps)
+        if result.get("wait_import"):
+            self._pending_imports[self._import_wait_key(event)] = (
+                time.time() + _IMPORT_WAIT_SECONDS
+            )
         if result.get("plain"):
             yield event.plain_result(result["plain"])
+
+    @_event_message_type(_event_message_type_all)
+    async def import_upload_listener(self, event: AstrMessageEvent):
+        """处理 /sub_import 空参数后的文件上传。"""
+        key = self._import_wait_key(event)
+        expire_ts = self._pending_imports.get(key)
+        if not expire_ts:
+            return
+        if expire_ts < time.time():
+            self._pending_imports.pop(key, None)
+            return
+
+        file_component = self._find_uploaded_file(event)
+        if file_component is None:
+            return
+
+        self._pending_imports.pop(key, None)
+        try:
+            file_path = await file_component.get_file()
+            if not file_path:
+                yield event.plain_result("导入失败: 未能获取上传文件")
+                return
+            result = await _h.handle_import(event, file_path, self._deps)
+        except Exception as ex:
+            logger.warning("订阅导入上传文件处理失败: %s", ex, exc_info=True)
+            yield event.plain_result(f"导入失败: {ex}")
+            return
+
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @staticmethod
+    def _import_wait_key(event: AstrMessageEvent) -> str:
+        return f"{event.unified_msg_origin}:{event.get_sender_id()}"
+
+    @staticmethod
+    def _find_uploaded_file(event: AstrMessageEvent) -> File | None:
+        message = getattr(getattr(event, "message_obj", None), "message", None) or []
+        for component in message:
+            try:
+                if isinstance(component, File):
+                    return component
+            except TypeError:
+                pass
+            component_type = component.__class__.__name__.lower()
+            if component_type == "file" or hasattr(component, "get_file"):
+                return component
+        return None
 
     @filter.command("rsshelp", alias={"RSS帮助", "rss帮助"})
     async def rsshelp(self, event: AstrMessageEvent):

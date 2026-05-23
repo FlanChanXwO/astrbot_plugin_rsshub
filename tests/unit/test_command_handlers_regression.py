@@ -43,6 +43,7 @@ async def test_handle_test_sub_parse_and_route():
         platform_name="telegram",
         start=1,
         end=3,
+        event=event,
     )
 
 
@@ -168,6 +169,7 @@ async def test_handle_import_path_and_waiting(tmp_path):
 
     waiting = await handle_import(event, "", {"import_cmd": import_cmd})
     assert "上传 TOML" in waiting["plain"]
+    assert waiting["wait_import"] is True
 
     p = tmp_path / "subs.toml"
     p.write_text("[[subscriptions]]\nlink='https://a.com/rss'\n")

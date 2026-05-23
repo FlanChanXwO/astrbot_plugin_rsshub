@@ -200,7 +200,7 @@ Plugin Pages 的用户/订阅处理链编辑器会优先读取 Web API `handlers
 | `telegraph_token` | 字符串 | 仅 Telegram 使用：Telegraph access token；启用自动分流时必填 |
 | `prefer_local_video` | 布尔值 | 仅 OneBot 使用：视频是否优先本地文件；默认关闭，优先远程 URL |
 
-Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略里触发：当前为自动发送、Telegram 策略已启用 Telegraph、token 有效，且去重后的媒体条目数大于 1。OneBot 不使用 Telegraph，避免在 QQ/NapCat 环境中依赖不可访问的外部页面服务。
+Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略里触发：当前为自动发送、Telegram 策略已启用 Telegraph、token 有效，且去重后的媒体条目数大于 1。OneBot 不使用 Telegraph，避免在 QQ/NapCat 环境中依赖不可访问的外部页面服务。Telegram 本地图片超过 10 MiB 时会降级为文件发送，避免 Bot API photo 大小限制导致整条推送失败。
 
 发送前会先生成平台无关消息组件并由排序器统一整理顺序。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。默认视频来源仍优先远程 URL，只有显式开启 `prefer_local_video` 时才使用本地视频文件。
 
@@ -218,7 +218,7 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 | `/unsub_all [global]`                  | `/取消全部订阅` | 删除订阅；默认仅清除当前会话，`global` 清除所有会话（需管理员） |
 | `/sub_list [page] [page_size]` | `/订阅列表` | 查看当前会话订阅列表（分页） |
 | `/sub_export [all]`                    | `/导出订阅` | 导出订阅到 TOML 文件，默认当前会话，`all`=所有订阅（管理员） |
-| `/sub_import [文件路径]`                   | `/导入订阅` | 从 TOML 文件导入订阅；也可直接上传 TOML 文件进行导入 |
+| `/sub_import [文件路径]`                   | `/导入订阅` | 从 TOML 文件导入订阅；不带参数时进入 5 分钟文件上传等待 |
 | `/activate_subs`                       | `/enable_subs`, `/启用全部订阅` | 启用当前会话所有订阅 |
 | `/deactivate_subs`                     | `/disable_subs`, `/禁用全部订阅` | 禁用当前会话所有订阅 |
 | `/sub_status`                          | `/推送状态`, `/任务状态` | 查看当前会话推送任务（running + queued，含 job_id/feed 信息） |
@@ -349,7 +349,7 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 - `failed_queue_capacity=0` 只禁用自动失败重试队列，不会关闭失败历史记录。失败发送仍应写 `push_history`，供审计、展示和人工补发排障。
 - `failed_queue_max_retries` 只定义自动重试链路对单条 `push_history` 的最大尝试次数；超过上限后仍保留失败历史，不做静默删除。
 - `deduplicate_multi_bot` 只在同一 `target_session` 内比较最终 payload 是否等价；命中后不发送重复消息，但必须保留一条 `status=skipped` 的审计记录。
-- 推送历史自动清理范围不属于插件配置页；它只在 Dashboard 的推送历史页管理。
+- 推送历史自动清理范围不属于插件配置页；它只在 Dashboard 的推送历史页管理。Dashboard 也提供清空全部推送历史，用于清理本地测试或旧失败队列爆量数据。
 
 ---
 
@@ -402,6 +402,8 @@ src/
 
 - RSS 解析优先读取 `content` 结构化正文，并兼容 `content:encoded` / `content_encoded` 字段，适配 Juya AI Daily 等完整正文位于 `content:encoded` 的源。
 - HTML `<video>`、`<audio>` 会作为结构化媒体传入发送器，正文中不会残留 `[视频]` / `[音频]` 占位；RSSHub 常见的 `?url=<encoded media>` 包装链接也会参与媒体类型推断。
+- 关闭标题显示时，正文不会再因为与标题开头重复而被剔除，适配 bsky 等会把正文首句同步放入标题的源。
+- m3u8/HLS 在先下载后发送时会通过 FFmpeg 合并为 MP4，并用 ffprobe 校验视频流与时长；校验失败会按媒体下载失败处理，避免 0 秒坏视频进入缓存。
 - OneBot / NapCat 经典合并转发失败后会回退为纯文本 Nodes；多图长文建议使用 `style=2` 的原始顺序排版。
 - 推送历史中的失败原因会按 512 字符上限统一截断；旧数据库里遗留的超长失败原因也会在读取时自动清洗，避免 `/push-history` 接口和定时重试任务因脏数据崩溃。
 

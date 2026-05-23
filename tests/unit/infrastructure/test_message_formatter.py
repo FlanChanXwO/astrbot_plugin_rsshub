@@ -192,6 +192,43 @@ async def test_entry_text_formatter_omits_empty_via_suffix():
 
 
 @pytest.mark.asyncio
+async def test_entry_text_formatter_keeps_body_prefix_when_title_hidden():
+    formatter = EntryTextFormatter()
+
+    text = await formatter.format_entry(
+        EntryFormatInput(
+            title="Lead text before hashtags",
+            content="Lead text before hashtags<br><br>#tag",
+            link="https://example.com/post",
+            feed_title="Feed",
+        ),
+        EffectivePushOptions(display_title=-1),
+    )
+
+    assert "Lead text before hashtags" in text
+    assert "#tag" in text
+    assert not text.startswith("#tag")
+
+
+@pytest.mark.asyncio
+async def test_entry_text_formatter_removes_repeated_title_when_title_visible():
+    formatter = EntryTextFormatter()
+
+    text = await formatter.format_entry(
+        EntryFormatInput(
+            title="Lead text before hashtags",
+            content="Lead text before hashtags<br><br>#tag",
+            link="https://example.com/post",
+            feed_title="Feed",
+        ),
+        EffectivePushOptions(display_title=0),
+    )
+
+    assert text.startswith("Lead text before hashtags\n\n#tag")
+    assert text.count("Lead text before hashtags") == 1
+
+
+@pytest.mark.asyncio
 async def test_entry_text_formatter_omits_broken_separator_when_link_missing():
     formatter = EntryTextFormatter()
 

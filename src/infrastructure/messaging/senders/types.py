@@ -55,6 +55,8 @@ class MessageContext:
     """消息发送上下文（运行时元信息）"""
 
     channel: ChannelInfo = field(default_factory=ChannelInfo)
+    entry_title: str = ""
+    entry_link: str = ""
     platform_name: str = ""
     timeout_seconds: int = 30
     proxy: str = ""

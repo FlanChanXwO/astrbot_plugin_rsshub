@@ -224,14 +224,30 @@ class PushHistoryRepositoryImpl:
         db = get_database()
         async with db.get_session() as session:
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+            last_activity = func.max(
+                PushHistoryORM.created_at,
+                PushHistoryORM.updated_at,
+                func.coalesce(PushHistoryORM.completed_at, PushHistoryORM.updated_at),
+            )
             stmt = (
                 delete(PushHistoryORM)
-                .where(PushHistoryORM.created_at < cutoff_date)
+                .where(last_activity < cutoff_date)
                 .execution_options(synchronize_session=False)
             )
             result = await session.execute(stmt)
             await session.commit()
             return result.rowcount or 0
+
+    async def delete_all(self) -> int:
+        """删除全部推送历史记录。"""
+        db = get_database()
+        async with db.get_session() as session:
+            stmt = delete(PushHistoryORM).execution_options(
+                synchronize_session=False
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def get_all(
         self,

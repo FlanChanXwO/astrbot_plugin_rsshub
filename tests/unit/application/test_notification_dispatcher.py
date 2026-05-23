@@ -692,6 +692,36 @@ async def test_send_to_session_preserves_explicit_video_media_item():
 
 
 @pytest.mark.asyncio
+async def test_send_to_session_passes_entry_context_to_sender():
+    sender = FakeSender()
+    dispatcher = NotificationDispatcher(
+        subscription_repo=AsyncMock(),
+        push_history_repo=AsyncMock(),
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    result = await dispatcher.send_to_session(
+        target=SendTarget(
+            user_id="user-1",
+            platform_name="telegram",
+            target_session="telegram:Group:1",
+            sub_id=1,
+        ),
+        content="content",
+        media_urls=None,
+        channel_title="Feed",
+        channel_link="https://example.com/feed",
+        entry_title="Entry title",
+        entry_link="https://example.com/post",
+    )
+
+    assert result["ok"] is True
+    _request, context = sender.requests[0]
+    assert context.entry_title == "Entry title"
+    assert context.entry_link == "https://example.com/post"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_persists_media_urls_and_appends_links_on_failure():
     sender = FakeSender(SendResult(ok=False, detail="forward failed"))
     sub = Subscription(

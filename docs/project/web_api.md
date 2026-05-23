@@ -130,6 +130,14 @@
 - `keyword`
 - 分页
 
+### `POST /push-history/cleanup`
+
+按保留天数清理推送历史。清理判断使用记录的最后活动时间，也就是 `created_at`、`updated_at`、`completed_at` 中较新的时间，避免仍在近期更新的失败记录被误删。响应会返回 `removed_count`。
+
+### `POST /push-history/clear`
+
+清空全部推送历史，用于本地测试或旧失败队列爆量后快速止血。这个接口只删除 push history，不删除订阅、Feed 或用户配置。
+
 ## 数据管理接口
 
 ### `GET /data-management/overview`

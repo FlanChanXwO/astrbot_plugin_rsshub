@@ -60,7 +60,8 @@ async def handle_import(event: AstrMessageEvent, content: str, deps: dict) -> di
 
     if not args:
         return {
-            "plain": "请在 5 分钟内上传 TOML 订阅文件，或使用 /sub_import <文件路径>"
+            "plain": "请在 5 分钟内上传 TOML 订阅文件，或使用 /sub_import <文件路径>",
+            "wait_import": True,
         }
 
     if "\n" in args or "[[subscriptions]]" in args:

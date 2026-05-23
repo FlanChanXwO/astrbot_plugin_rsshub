@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -203,6 +203,9 @@ def _build_history_row(
     status: str,
     retry_count: int,
     max_retries: int,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
+    completed_at: datetime | None = None,
 ) -> PushHistoryORM:
     now = datetime.now(timezone.utc)
     return PushHistoryORM(
@@ -215,8 +218,9 @@ def _build_history_row(
         status=status,
         retry_count=retry_count,
         max_retries=max_retries,
-        created_at=now,
-        updated_at=now,
+        created_at=created_at or now,
+        updated_at=updated_at or now,
+        completed_at=completed_at,
     )
 
 
@@ -313,3 +317,68 @@ async def test_count_retryable_alias_matches_primary_method(monkeypatch, tmp_pat
     monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
 
     assert await repo.count_retryable() == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_old_records_uses_last_activity_timestamp(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=40)
+    recent = now - timedelta(hours=1)
+    db = await _build_test_database(
+        tmp_path / "push_history_cleanup.db",
+        [
+            _build_history_row(
+                user_id="old-created-recent-updated",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                created_at=old,
+                updated_at=recent,
+            ),
+            _build_history_row(
+                user_id="all-old",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                created_at=old,
+                updated_at=old,
+                completed_at=old,
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    removed = await repo.delete_old_records(days=30)
+    remaining = await repo.get_all(limit=10)
+
+    assert removed == 1
+    assert [item.user_id for item in remaining] == ["old-created-recent-updated"]
+
+
+@pytest.mark.asyncio
+async def test_delete_all_removes_every_push_history_row(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    db = await _build_test_database(
+        tmp_path / "push_history_delete_all.db",
+        [
+            _build_history_row(
+                user_id="u1",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+            ),
+            _build_history_row(
+                user_id="u2",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    removed = await repo.delete_all()
+
+    assert removed == 2
+    assert await repo.get_all(limit=10) == []

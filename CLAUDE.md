@@ -107,6 +107,9 @@ tests/                      # unit/integration tests, fixtures, mocks
 - Keep sender error detail and `PushHistory.fail_reason` within the 512-character persistence/model limit, and truncate legacy oversized DB values on read.
 - `send_mode` semantics are `-1=仅链接`、`0=自动`、`1=直接发送`; legacy `1=Telegraph` should normalize to `0`, and legacy `2=直接消息` should normalize to `1`.
 - Telegraph is a Telegram sender auto-routing policy instead of an explicit `send_mode`; it should only trigger for the Telegram sender when deduplicated normalized media count is greater than 1. Do not expose or execute Telegraph routing for OneBot/QQ Official.
+- Telegram local image files larger than 10 MiB must be sent as files instead of photos to avoid Bot API photo size rejection.
+- m3u8/HLS pre-download must validate FFmpeg output with ffprobe before caching; reject zero-duration or no-video files and let sender failure fallback expose the original URL.
+- When title display is disabled, formatter must not remove a body prefix just because it equals the title; repeated-title removal only applies when the title is actually shown.
 - `minimal_interval` is a persisted write-time hard floor for subscription/default interval values; do not weaken it into a runtime-only clamp.
 - `failed_queue_capacity=0` disables automatic retry queue pickup only; failed `push_history` records must still be written and retained.
 - `failed_queue_max_retries` is the automatic retry ceiling for one `push_history` record; it does not authorize dropping failed history.

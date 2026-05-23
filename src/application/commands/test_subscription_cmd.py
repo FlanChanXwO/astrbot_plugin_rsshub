@@ -234,6 +234,8 @@ class TestSubscriptionCommand:
         pushed = 0
         entered_chain = 0
         skipped = 0
+        failed = 0
+        failure_reasons: list[str] = []
         for entry in selected:
             title = entry.title or ""
             raw_content = entry.content or entry.summary or ""
@@ -299,6 +301,7 @@ class TestSubscriptionCommand:
                         include_inactive_subscription_ids=True,
                         bypass_success_dedup=True,
                         event=event,
+                        include_error_detail=True,
                     )
                 )
                 if stats.get("success", 0) > 0 or stats.get("pending", 0) > 0:
@@ -306,6 +309,13 @@ class TestSubscriptionCommand:
                     if stats.get("success", 0) > 0:
                         pushed += 1
                     skipped += stats.get("skipped", 0)
+                    continue
+                if stats.get("failed", 0) > 0:
+                    entered_chain += 1
+                    failed += stats.get("failed", 0)
+                    reason = str(stats.get("last_error") or "").strip()
+                    if reason:
+                        failure_reasons.append(reason)
                     continue
                 if stats.get("skipped", 0) > 0:
                     entered_chain += 1
@@ -327,9 +337,15 @@ class TestSubscriptionCommand:
                 job_description=f"sub_test target={target}",
                 channel_title=effective_feed_title,
                 channel_link=feed_url,
+                entry_title=title,
+                entry_link=entry_link,
             )
             if send_result.get("ok"):
                 pushed += 1
+            else:
+                reason = str(send_result.get("error") or "").strip()
+                if reason:
+                    failure_reasons.append(reason)
 
         if subscription is not None:
             if entered_chain == 0:
@@ -338,6 +354,12 @@ class TestSubscriptionCommand:
                     message=(
                         "测试推送未进入正式发送链路，可能因通知关闭、被 handler 过滤或条目已去重"
                     ),
+                )
+            if pushed == 0 and failed > 0:
+                reason = f": {failure_reasons[0]}" if failure_reasons else ""
+                return CommandResult(
+                    success=False,
+                    message=f"测试推送发送失败{reason}",
                 )
             note = ""
             if pushed == 0 and skipped > 0:
@@ -348,6 +370,11 @@ class TestSubscriptionCommand:
                     f"已触发测试推送: {entered_chain}/{len(selected)} 条进入正式链路"
                     f"（成功 {pushed} 条，范围 {start}-{end}）{note}"
                 ),
+            )
+        if pushed == 0 and failure_reasons:
+            return CommandResult(
+                success=False,
+                message=f"测试推送发送失败: {failure_reasons[0]}",
             )
         return CommandResult(
             success=pushed > 0,

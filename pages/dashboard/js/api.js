@@ -221,6 +221,10 @@ export async function cleanupPushHistory(days = 30) {
   return await apiPost('push-history/cleanup', { days });
 }
 
+export async function clearPushHistory() {
+  return await apiPost('push-history/clear', {});
+}
+
 export async function getUserDetails(filters = {}) {
   const params = {};
   if (filters.user_id) params.user_id = filters.user_id;

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from html import escape
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -79,44 +79,88 @@ class TelegraphClient:
         channel: ChannelInfo | None,
     ) -> list[dict[str, object]]:
         nodes: list[dict[str, object]] = []
-        safe_title = escape(title)
-        if safe_title:
-            nodes.append({"tag": "h3", "children": [safe_title]})
+        meta = TelegraphClient._build_meta_line(channel)
+        if meta:
+            nodes.append({"tag": "p", "children": meta})
 
-        channel_title = escape(str(channel.title or "").strip()) if channel else ""
-        channel_link = escape(str(channel.link or "").strip()) if channel else ""
-        if channel_title or channel_link:
-            children: list[object] = []
-            if channel_title:
-                children.append(channel_title)
-            if channel_link:
-                if children:
-                    children.append(" | ")
-                children.append(
-                    {
-                        "tag": "a",
-                        "attrs": {"href": channel_link},
-                        "children": [channel_link],
-                    }
-                )
-            nodes.append({"tag": "p", "children": children})
-
-        for paragraph in [part.strip() for part in str(content or "").split("\n\n")]:
-            if paragraph:
-                nodes.append({"tag": "p", "children": [escape(paragraph)]})
+        body_paragraphs = TelegraphClient._content_paragraphs(content, title, channel)
+        for paragraph in body_paragraphs:
+            nodes.append({"tag": "p", "children": [paragraph]})
 
         for media_url in media_urls:
-            safe_url = escape(media_url)
-            nodes.append(
+            media_node = TelegraphClient._media_node(media_url)
+            if media_node is not None:
+                nodes.append(media_node)
+        return nodes
+
+    @staticmethod
+    def _build_meta_line(channel: ChannelInfo | None) -> list[object]:
+        channel_title = str(channel.title or "").strip() if channel else ""
+        channel_link = str(channel.link or "").strip() if channel else ""
+        if not channel_title and not channel_link:
+            return []
+        children: list[object] = []
+        if channel_link:
+            children.append(
                 {
-                    "tag": "p",
-                    "children": [
-                        {
-                            "tag": "a",
-                            "attrs": {"href": safe_url},
-                            "children": [safe_url],
-                        }
-                    ],
+                    "tag": "a",
+                    "attrs": {"href": channel_link},
+                    "children": [channel_title or channel_link],
                 }
             )
-        return nodes
+        elif channel_title:
+            children.append(channel_title)
+        return children
+
+    @staticmethod
+    def _content_paragraphs(
+        content: str,
+        title: str,
+        channel: ChannelInfo | None,
+    ) -> list[str]:
+        paragraphs: list[str] = []
+        seen: set[str] = set()
+        skipped_via = False
+        channel_title = str(channel.title or "").strip() if channel else ""
+        channel_link = str(channel.link or "").strip() if channel else ""
+        for paragraph in [part.strip() for part in str(content or "").split("\n\n")]:
+            if not paragraph:
+                continue
+            if paragraph == title and not paragraphs:
+                continue
+            if paragraph.startswith("via "):
+                if skipped_via or channel_title or channel_link:
+                    skipped_via = True
+                    continue
+                skipped_via = True
+            if paragraph == channel_title or paragraph == channel_link:
+                continue
+            if paragraph in seen:
+                continue
+            paragraphs.append(paragraph)
+            seen.add(paragraph)
+        return paragraphs
+
+    @staticmethod
+    def _media_node(media_url: str) -> dict[str, object] | None:
+        url = str(media_url or "").strip()
+        if not url:
+            return None
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return None
+        suffix = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
+        if suffix in {"jpg", "jpeg", "png", "gif", "webp"}:
+            return {"tag": "img", "attrs": {"src": url}}
+        if suffix in {"mp4", "webm"}:
+            return {"tag": "video", "attrs": {"src": url, "controls": "true"}}
+        return {
+            "tag": "p",
+            "children": [
+                {
+                    "tag": "a",
+                    "attrs": {"href": url},
+                    "children": [url],
+                }
+            ],
+        }

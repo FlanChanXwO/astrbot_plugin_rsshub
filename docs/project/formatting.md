@@ -98,3 +98,7 @@
 正常成功态不追加，避免正文被原始媒体链接污染。
 
 `qq_official` / `weixin_oc` 是平台特例：QQ Official 单图可与文本合发，视频和多媒体场景仍由 sender 拆批；Weixin OC 不支持图文同发，只能逐条发送。OneBot auto/classic 合并转发失败后会回退为纯文本 Nodes，original 排版不使用大合并转发包。
+
+## 标题去重边界
+
+正文开头与标题完全重复时，formatter 只会在标题实际显示的情况下剔除重复正文标题。若用户关闭标题显示，正文必须保持完整；这避免 bsky 等源把正文首句同时写入 `title` 和 `description` 时，推送只剩 hashtag 或后半段正文。

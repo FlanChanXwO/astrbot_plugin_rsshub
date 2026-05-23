@@ -33,7 +33,7 @@ def test_default_chain_keeps_failed_media_as_url_component():
         failed_urls=[],
         platform="",
     )
-    assert len(chain) == 2
+    assert len(chain) == 1
     assert Plain.call_args.args[0] == "hello\n媒体原始链接:\nhttps://example.com/a.jpg"
 
 
@@ -53,8 +53,31 @@ def test_telegram_chain_keeps_failed_media_as_url_component():
         failed_urls=[],
         platform="telegram",
     )
-    assert len(chain) == 2
+    assert len(chain) == 1
     assert Plain.call_args.args[0] == "hello\n媒体原始链接:\nhttps://example.com/a.jpg"
+
+
+def test_failed_video_is_not_sent_as_remote_video_component():
+    formatter = MessageFormatter()
+
+    components = formatter.build_components(
+        prepared_media=[
+            PreparedMedia(
+                media_type="video",
+                original_url="https://example.com/playlist.m3u8",
+                local_path=None,
+                download_failed=True,
+            )
+        ],
+        text="hello",
+        failed_urls=[],
+        platform="onebot",
+    )
+
+    assert [(item.kind, item.media_type) for item in components] == [("text", "")]
+    assert components[0].text == (
+        "hello\n媒体原始链接:\nhttps://example.com/playlist.m3u8"
+    )
 
 
 def test_telegram_chain_does_not_truncate_caption_text():

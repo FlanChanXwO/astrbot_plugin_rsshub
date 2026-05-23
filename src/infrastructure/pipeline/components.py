@@ -103,6 +103,8 @@ class MessageComponentSorter:
         if not prepared_media:
             return components
         for item in prepared_media:
+            if item.download_failed:
+                continue
             if not item.local_path and not item.original_url:
                 continue
             path = self._resolve_media_path(item, prefer_local_video=prefer_local_video)

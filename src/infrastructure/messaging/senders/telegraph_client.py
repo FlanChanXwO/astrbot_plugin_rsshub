@@ -100,7 +100,7 @@ class TelegraphClient:
         if not channel_title and not channel_link:
             return []
         children: list[object] = []
-        if channel_link:
+        if channel_link and TelegraphClient._is_safe_http_url(channel_link):
             children.append(
                 {
                     "tag": "a",
@@ -108,9 +108,14 @@ class TelegraphClient:
                     "children": [channel_title or channel_link],
                 }
             )
-        elif channel_title:
-            children.append(channel_title)
+        elif channel_title or channel_link:
+            children.append(channel_title or channel_link)
         return children
+
+    @staticmethod
+    def _is_safe_http_url(url: str) -> bool:
+        parsed = urlparse(str(url or "").strip())
+        return parsed.scheme in {"http", "https"}
 
     @staticmethod
     def _content_paragraphs(
@@ -146,9 +151,9 @@ class TelegraphClient:
         url = str(media_url or "").strip()
         if not url:
             return None
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
+        if not TelegraphClient._is_safe_http_url(url):
             return None
+        parsed = urlparse(url)
         suffix = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
         if suffix in {"jpg", "jpeg", "png", "gif", "webp"}:
             return {"tag": "img", "attrs": {"src": url}}

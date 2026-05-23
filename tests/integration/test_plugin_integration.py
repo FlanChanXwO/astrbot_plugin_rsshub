@@ -147,6 +147,21 @@ class TestCommandIntegration:
 
         assert plugin._find_uploaded_file(event) is event.message_obj.message[0]
 
+    def test_pending_import_prune_removes_expired_entries(
+        self, main_module, monkeypatch
+    ):
+        plugin = main_module.RSSHubPlugin(MagicMock(), {})
+        plugin._pending_imports = {
+            "expired": 100.0,
+            "active": 300.0,
+        }
+
+        monkeypatch.setattr(main_module.time, "time", lambda: 200.0)
+
+        plugin._prune_pending_imports()
+
+        assert plugin._pending_imports == {"active": 300.0}
+
 
 class TestSchedulerIntegration:
     """调度器集成测试."""

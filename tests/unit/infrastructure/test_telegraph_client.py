@@ -48,3 +48,18 @@ def test_telegraph_page_keeps_non_image_media_as_link():
 
     assert nodes[-1]["tag"] == "p"
     assert nodes[-1]["children"][0]["tag"] == "a"
+
+
+def test_telegraph_meta_line_rejects_unsafe_channel_link():
+    nodes = TelegraphClient._build_html(
+        title="Entry title",
+        content="Body text",
+        media_urls=[],
+        channel=ChannelInfo(
+            title="Feed title",
+            link="javascript:alert(1)",
+        ),
+    )
+
+    assert nodes[0] == {"tag": "p", "children": ["Feed title"]}
+    assert "javascript:" not in str(nodes)

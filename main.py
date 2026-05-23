@@ -318,6 +318,7 @@ class RSSHubPlugin(Star):
         """
         result = await _h.handle_import(event, str(args), self._deps)
         if result.get("wait_import"):
+            self._prune_pending_imports()
             self._pending_imports[self._import_wait_key(event)] = (
                 time.time() + _IMPORT_WAIT_SECONDS
             )
@@ -327,6 +328,7 @@ class RSSHubPlugin(Star):
     @_event_message_type(_event_message_type_all)
     async def import_upload_listener(self, event: AstrMessageEvent):
         """处理 /sub_import 空参数后的文件上传。"""
+        self._prune_pending_imports()
         key = self._import_wait_key(event)
         expire_ts = self._pending_imports.get(key)
         if not expire_ts:
@@ -357,6 +359,14 @@ class RSSHubPlugin(Star):
     @staticmethod
     def _import_wait_key(event: AstrMessageEvent) -> str:
         return f"{event.unified_msg_origin}:{event.get_sender_id()}"
+
+    def _prune_pending_imports(self) -> None:
+        now = time.time()
+        expired_keys = [
+            key for key, expire_ts in self._pending_imports.items() if expire_ts < now
+        ]
+        for key in expired_keys:
+            self._pending_imports.pop(key, None)
 
     @staticmethod
     def _find_uploaded_file(event: AstrMessageEvent) -> File | None:

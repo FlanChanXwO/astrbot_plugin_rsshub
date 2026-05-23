@@ -60,6 +60,8 @@ async def test_sub_test_execute_target_dispatches_messages():
         end=2,
     )
     assert result.success is True
+    assert "范围" not in result.message
+    assert "最新 2 条" in result.message
     assert dispatcher.send_to_session.await_count == 2
     first_call = dispatcher.send_to_session.await_args_list[0].kwargs
     assert "<br" not in first_call["content"]
@@ -123,6 +125,8 @@ async def test_sub_test_execute_target_by_sub_id_uses_dispatcher_chain():
     )
 
     assert result.success is True
+    assert "范围" not in result.message
+    assert "最新 1 条" in result.message
     dispatcher.send_to_session.assert_not_called()
     dispatcher.dispatch_to_feed_subscribers.assert_awaited_once()
     call = dispatcher.dispatch_to_feed_subscribers.await_args.kwargs

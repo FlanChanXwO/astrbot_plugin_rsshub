@@ -368,7 +368,7 @@ class TestSubscriptionCommand:
                 success=True,
                 message=(
                     f"已触发测试推送: {entered_chain}/{len(selected)} 条进入正式链路"
-                    f"（成功 {pushed} 条，范围 {start}-{end}）{note}"
+                    f"（成功 {pushed} 条，最新 {len(selected)} 条）{note}"
                 ),
             )
         if pushed == 0 and failure_reasons:
@@ -378,7 +378,7 @@ class TestSubscriptionCommand:
             )
         return CommandResult(
             success=pushed > 0,
-            message=f"已触发测试推送: {pushed}/{len(selected)} 条成功（范围 {start}-{end}）",
+            message=f"已触发测试推送: {pushed}/{len(selected)} 条成功（最新 {len(selected)} 条）",
         )
 
     async def execute_by_url(

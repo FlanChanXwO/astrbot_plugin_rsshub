@@ -271,7 +271,7 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 | 命令 | 中文别名 | 说明 |
 |------|---------|------|
 | `/rsshelp` | `/RSS 帮助` | 查看帮助图片 |
-| `/sub_test <目标> [起始] [结束]` | `/测试订阅` | 管理员测试推送。目标可以是订阅 ID 或 RSS URL；条目编号从 1 开始（1=最新） |
+| `/sub_test <目标>` | `/测试订阅` | 管理员测试推送。目标可以是订阅 ID 或 RSS URL，固定推送最新 1 条 |
 
 > `rsshelp` 使用仓库内预生成并提交的帮助图片：`assets/help/rsshelp.png`。运行时如果图片缺失，只会提示“没有找到帮助图片”，不会自动生成。
 >
@@ -285,9 +285,7 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 | 命令 | 说明 |
 |------|------|
 | `/sub_test 5` | 测试订阅ID=5，推送条目1（最新） |
-| `/sub_test 5 1 3` | 测试订阅ID=5，推送条目1、2、3 |
-| `/sub_test https://example.com/rss.xml 2` | 测试URL，只推送条目2 |
-| `/sub_test https://example.com/rss.xml 1 5` | 测试URL，推送条目1-5 |
+| `/sub_test https://example.com/rss.xml` | 测试URL，推送最新 1 条 |
 
 > **说明：** 使用URL测试时，将使用全局配置进行推送。
 

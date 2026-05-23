@@ -89,7 +89,7 @@ tests/                      # unit/integration tests, fixtures, mocks
   - `/rsshub_kb_sync`
   - `/rsshub_kb_status`
   - `/rsshub_kb_task`
-- `/sub_test <ID|URL> [start] [end]` must be **real push**, not preview-only.
+- `/sub_test <ID|URL>` must be **real push** of the latest entry, not preview-only; chat command does not accept extra range args.
 - `/sub_import` supports TOML file path and upload-waiting flow; no OPML fallback.
 - `/sub_list` only lists current session; no `all` scope in chat command.
 - `/sub` and `/unsub` both support batch arguments.
@@ -175,7 +175,7 @@ uv run ruff check data/plugins/astrbot_plugin_rsshub
 Recent regression recovery completed:
 
 - Restored command semantics for `/sub_test`, `/sub`, `/unsub`, `/sub_list`, `/sub_export`, `/sub_import`.
-- Restored `/sub_test` real push path for ID/URL and 1-based range.
+- Restored `/sub_test` real push path for ID/URL; chat command sends the latest entry only.
 - Restored OneBot merged-forward compatibility behavior and legacy `via ...` tail format.
 - Added/updated handler + application regression tests for command routing and formatting.
 - Command surface cleanup:

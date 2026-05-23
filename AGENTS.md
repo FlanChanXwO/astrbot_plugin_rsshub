@@ -60,7 +60,7 @@ Keep these command signatures full-argument (`GreedyStr` compatible):
 
 Behavior invariants:
 
-- `/sub_test <ID|URL> [start] [end]` = real push (not preview).
+- `/sub_test <ID|URL>` = real push of the latest entry (not preview); chat command does not accept extra range args.
 - `/unsub` supports ID/URL mixed batch semantics.
 - `/sub` supports multi-URL batch semantics.
 - `/sub_list` supports current-session pagination only (no `all` scope).
@@ -138,7 +138,7 @@ uv run ruff check data/plugins/astrbot_plugin_rsshub
 Recently completed regression fixes include:
 
 - Restored command signatures/semantics for `/sub_test`, `/sub`, `/unsub`, `/sub_list`, `/sub_export`, `/sub_import`.
-- Restored real push behavior and range routing for `/sub_test`.
+- Restored real push behavior for `/sub_test`; chat command now sends the latest entry only.
 - Restored compatibility formatting (`via ...`) and OneBot merged-forward naming path.
 - Added regression tests for handlers/application behavior.
 - Command surface slimming:

@@ -33,7 +33,7 @@ async def test_handle_test_sub_parse_and_route():
 
     cmd = MagicMock()
     cmd.execute_target = AsyncMock(return_value=SimpleNamespace(message="ok"))
-    result = await handle_test_sub(event, "5 1 3", {"test_sub_cmd": cmd})
+    result = await handle_test_sub(event, "5", {"test_sub_cmd": cmd})
 
     assert result["plain"] == "ok"
     cmd.execute_target.assert_awaited_once_with(
@@ -41,10 +41,20 @@ async def test_handle_test_sub_parse_and_route():
         user_id="u1",
         target_session="sess",
         platform_name="telegram",
-        start=1,
-        end=3,
         event=event,
     )
+
+
+@pytest.mark.asyncio
+async def test_handle_test_sub_rejects_extra_args():
+    event = MagicMock()
+    cmd = MagicMock()
+    cmd.execute_target = AsyncMock()
+
+    result = await handle_test_sub(event, "5 1 3", {"test_sub_cmd": cmd})
+
+    assert result["plain"] == "sub_test 不支持额外参数\n用法: /sub_test <ID|URL>"
+    cmd.execute_target.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -418,10 +418,9 @@ class RSSHubPlugin(Star):
         """管理员测试推送。
 
         用法:
-        - /sub_test <ID|URL> [start] [end]
+        - /sub_test <ID|URL>
         示例:
         - /sub_test 5
-        - /sub_test 5 1 3
         """
         result = await _h.handle_test_sub(event, str(args), self._deps)
         if result.get("plain"):

@@ -227,7 +227,9 @@ def _normalize_template_list_value(
                 _record_config_heal(changes, child_path, "added missing default")
         for key in item:
             if key != "__template_key" and key not in template_items:
-                _record_config_heal(changes, f"{item_path}.{key}", "removed unknown key")
+                _record_config_heal(
+                    changes, f"{item_path}.{key}", "removed unknown key"
+                )
         normalized.append(normalized_item)
     return normalized
 
@@ -329,9 +331,7 @@ def _apply_legacy_config_aliases(
             basic_config = {}
             normalized["basic_config"] = basic_config
             _record_config_heal(changes, "basic_config", "reset invalid object")
-        basic_config["download_media_timeout"] = normalized.pop(
-            "m3u8_download_timeout"
-        )
+        basic_config["download_media_timeout"] = normalized.pop("m3u8_download_timeout")
         _record_config_heal(
             changes,
             "m3u8_download_timeout",
@@ -339,13 +339,10 @@ def _apply_legacy_config_aliases(
         )
 
     sender_strategies = normalized.get("sender_strategies")
-    if (
-        isinstance(sender_strategies, (str, list, tuple, set))
-        or (
-            isinstance(sender_strategies, dict)
-            and "enabled_platforms" not in sender_strategies
-            and "platform_strategies" not in sender_strategies
-        )
+    if isinstance(sender_strategies, (str, list, tuple, set)) or (
+        isinstance(sender_strategies, dict)
+        and "enabled_platforms" not in sender_strategies
+        and "platform_strategies" not in sender_strategies
     ):
         normalized["sender_strategies"] = SenderStrategiesConfig.from_config(
             sender_strategies
@@ -371,7 +368,9 @@ def heal_astrbot_plugin_config(
 
     changes: list[str] = []
     aliased = _apply_legacy_config_aliases(raw_config, changes)
-    normalized = _normalize_schema_value(aliased, {"type": "object", "items": schema}, "", changes)
+    normalized = _normalize_schema_value(
+        aliased, {"type": "object", "items": schema}, "", changes
+    )
     if normalized == raw_config:
         changes.clear()
     return normalized, changes

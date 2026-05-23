@@ -867,7 +867,7 @@ class NotificationDispatcher:
                     history.mark_success()
                     stats["success"] += 1
                 elif result.get("cancelled"):
-                    history.mark_stopped(result.get("error", "Stopped by /sub_stop"))
+                    history.mark_stopped(result.get("error", "Stopped by System or Command"))
                     history.max_retries = 0
                     stats["success"] += 1
                 else:
@@ -986,7 +986,7 @@ class NotificationDispatcher:
             history.mark_success()
             stats["success"] = 1
         elif result.get("cancelled"):
-            history.mark_stopped(result.get("error", "Stopped by /sub_stop"))
+            history.mark_stopped(result.get("error", "Stopped by System or Command"))
             history.max_retries = 0
             stats["success"] = 1
         else:
@@ -1136,7 +1136,7 @@ class NotificationDispatcher:
                 return {
                     "ok": False,
                     "cancelled": True,
-                    "error": f"Cancelled by /sub_stop (job_id={job_result.job_id})",
+                    "error": f"Cancelled by System or Command (job_id={job_result.job_id})",
                     "job_id": job_result.job_id,
                 }
 
@@ -1270,7 +1270,7 @@ class NotificationDispatcher:
                     history.mark_success()
                     stats["success"] += 1
                 elif result.get("cancelled"):
-                    history.mark_stopped(result.get("error", "Stopped by /sub_stop"))
+                    history.mark_stopped(result.get("error", "Stopped by System or Command"))
                     history.max_retries = 0
                     stats["success"] += 1
                 elif is_unrecoverable_error(error_msg):

@@ -1330,7 +1330,7 @@ async def test_dispatch_pending_retries_marks_cancelled_history_failed():
     assert stats == {"success": 1, "failed": 0, "skipped": 0}
     assert history.status == "stopped"
     assert history.max_retries == 0
-    assert "Cancelled by /sub_stop" in (history.fail_reason or "")
+    assert "Cancelled by System or Command" in (history.fail_reason or "")
     history_repo.save.assert_awaited_once_with(history)
 
 

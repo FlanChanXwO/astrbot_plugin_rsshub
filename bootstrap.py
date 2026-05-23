@@ -48,6 +48,7 @@ from .src.infrastructure.config import (
     ApplicationSettings,
     RsshubPluginConfig,
     build_application_settings,
+    heal_astrbot_plugin_config,
     set_config,
 )
 from .src.infrastructure.fetcher.rss import RSSFeedFetcher
@@ -192,6 +193,18 @@ def _init_config(
     config: AstrBotConfig | None,
 ) -> tuple[RsshubPluginConfig, ApplicationSettings]:
     raw_config = dict(config) if config else {}
+    if config is not None:
+        schema = getattr(config, "schema", None)
+        healed_config, healed_changes = heal_astrbot_plugin_config(raw_config, schema)
+        if healed_changes:
+            config.clear()
+            config.update(healed_config)
+            config.save_config()
+            logger.info(
+                "插件配置已按 schema 自愈: fields=%s",
+                ", ".join(healed_changes[:20]),
+            )
+            raw_config = healed_config
     plugin_config = RsshubPluginConfig.from_astrbot_config(raw_config)
     set_config(plugin_config)
     app_settings = build_application_settings(plugin_config)
@@ -206,7 +219,6 @@ def _configure_message_senders(app_settings: ApplicationSettings) -> None:
         proxy=app_settings.basic.proxy,
     )
     DefaultMessageSender.configure_behavior(
-        download_media_before_send=app_settings.basic.download_media_before_send,
         video_transcode=app_settings.ffmpeg.video_transcode,
         video_transcode_timeout=app_settings.ffmpeg.video_transcode_timeout,
         gif_transcode=app_settings.ffmpeg.gif_transcode,

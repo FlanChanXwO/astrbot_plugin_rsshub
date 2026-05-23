@@ -69,6 +69,35 @@ def test_application_settings_maps_fetch_config_and_ignores_pipeline_config():
     assert not hasattr(settings, "pipeline")
 
 
+def test_application_settings_normalizes_proxy_url():
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        RsshubPluginConfig,
+        build_application_settings,
+    )
+
+    settings = build_application_settings(
+        RsshubPluginConfig.from_astrbot_config(
+            {"basic_config": {"proxy": " localhost:7890 "}}
+        )
+    )
+    assert settings.basic.proxy == "http://localhost:7890"
+    assert settings.fetch.proxy == "http://localhost:7890"
+
+    settings = build_application_settings(
+        RsshubPluginConfig.from_astrbot_config(
+            {"basic_config": {"proxy": "socks5://127.0.0.1:7890"}}
+        )
+    )
+    assert settings.basic.proxy == "socks5://127.0.0.1:7890"
+    assert settings.fetch.proxy == "socks5://127.0.0.1:7890"
+
+    settings = build_application_settings(
+        RsshubPluginConfig.from_astrbot_config({"basic_config": {"proxy": "  "}})
+    )
+    assert settings.basic.proxy == ""
+    assert settings.fetch.proxy == ""
+
+
 def test_config_ignores_removed_translation_template_credentials():
     from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
 
@@ -98,6 +127,138 @@ def test_config_ignores_removed_pipeline_config():
     )
 
     assert not hasattr(config, "pipeline")
+
+
+def test_config_ignores_legacy_download_media_before_send_false():
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        RsshubPluginConfig,
+        build_application_settings,
+    )
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {
+            "download_image_before_send": False,
+            "basic_config": {"download_media_before_send": False},
+        }
+    )
+    settings = build_application_settings(config)
+
+    assert config.download_media_before_send is True
+    assert config.download_image_before_send is True
+    assert settings.basic.download_media_before_send is True
+
+
+def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
+    import json
+    from pathlib import Path
+
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        heal_astrbot_plugin_config,
+    )
+
+    schema = json.loads(
+        (Path(__file__).resolve().parents[3] / "_conf_schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    healed, changes = heal_astrbot_plugin_config(
+        {
+            "download_image_before_send": False,
+            "m3u8_download_timeout": "80",
+            "unknown_top": True,
+            "basic_config": {
+                "timeout": "12",
+                "minimal_interval": 99999,
+                "hash_history_min": "abc",
+                "deduplicate_multi_bot": "false",
+                "tracking_query_params": ["utm_source", 1, "ref"],
+                "download_media_before_send": False,
+                "unknown_basic": "x",
+            },
+            "route_knowledge": {
+                "source_mode": "bad",
+                "timeout": 999,
+            },
+            "ffmpeg": {
+                "video_transcode": "false",
+                "video_transcode_timeout": 1,
+            },
+            "content_handlers": "bad",
+            "sender_strategies": {
+                "telegram": False,
+                "aiocqhttp": True,
+                "qq_official": True,
+                "unknown": True,
+            },
+        },
+        schema,
+    )
+
+    assert changes
+    assert "download_image_before_send" not in healed
+    assert "m3u8_download_timeout" not in healed
+    assert "unknown_top" not in healed
+    assert healed["basic_config"]["timeout"] == 12
+    assert healed["basic_config"]["minimal_interval"] == 1440
+    assert healed["basic_config"]["hash_history_min"] == 200
+    assert healed["basic_config"]["deduplicate_multi_bot"] is True
+    assert healed["basic_config"]["tracking_query_params"] == ["utm_source", "ref"]
+    assert "download_media_before_send" not in healed["basic_config"]
+    assert "unknown_basic" not in healed["basic_config"]
+    assert healed["basic_config"]["download_media_timeout"] == 80
+    assert healed["route_knowledge"]["source_mode"] == "mirror"
+    assert healed["route_knowledge"]["timeout"] == 300
+    assert healed["ffmpeg"]["video_transcode"] is False
+    assert healed["ffmpeg"]["video_transcode_timeout"] == 10
+    assert healed["content_handlers"] == {
+        "ai_provider_id": "",
+        "ai_persona_id": "",
+    }
+    assert healed["sender_strategies"] == {
+        "enabled_platforms": ["aiocqhttp", "qq_official"],
+        "platform_strategies": [],
+    }
+
+
+def test_heal_astrbot_plugin_config_returns_no_changes_for_clean_config():
+    import json
+    from pathlib import Path
+
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        heal_astrbot_plugin_config,
+    )
+
+    schema = json.loads(
+        (Path(__file__).resolve().parents[3] / "_conf_schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    clean_config = {
+        "basic_config": {
+            key: value["default"]
+            for key, value in schema["basic_config"]["items"].items()
+        },
+        "route_knowledge": {
+            key: value["default"]
+            for key, value in schema["route_knowledge"]["items"].items()
+        },
+        "ffmpeg": {
+            key: value["default"] for key, value in schema["ffmpeg"]["items"].items()
+        },
+        "content_handlers": {
+            key: value["default"]
+            for key, value in schema["content_handlers"]["items"].items()
+        },
+        "sender_strategies": {
+            key: value["default"]
+            for key, value in schema["sender_strategies"]["items"].items()
+        },
+    }
+
+    healed, changes = heal_astrbot_plugin_config(clean_config, schema)
+
+    assert healed == clean_config
+    assert changes == []
 
 
 def test_sender_strategies_default_to_all_enabled():

@@ -28,11 +28,8 @@ class MediaDownloader:
     """媒体下载器，支持缓存管理和格式转换。"""
 
     _CACHE_TTL_SECONDS: int = 15 * 60
-    _FAILURE_CACHE_TTL_SECONDS: int = 5 * 60
-    _FAILURE_CACHE_MAX_ENTRIES: int = 1024
     _CACHE_GC_INTERVAL_SECONDS: int = 5 * 60
     _CACHE_GC_GRACE_SECONDS: int = 10 * 60
-    _FAILURE_CACHE_SUFFIX = ".fail"
     _CACHE_MEDIA_SUFFIXES: tuple[str, ...] = (
         ".jpg",
         ".jpeg",
@@ -44,7 +41,6 @@ class MediaDownloader:
         ".ogg",
         ".bin",
     )
-    _failure_cache: dict[str, tuple[float, str]] = {}
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         if cache_dir is None:
@@ -178,102 +174,6 @@ class MediaDownloader:
     def _cache_file_prefix(self, url: str) -> str:
         return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
-    @classmethod
-    def _failure_cache_key(cls, url: str, proxy: str | None) -> str:
-        return hashlib.sha256(f"{url}\n{proxy or ''}".encode()).hexdigest()
-
-    def _failure_cache_path(self, url: str, proxy: str | None) -> Path:
-        return self._cache_dir / f"{self._failure_cache_key(url, proxy)}.fail"
-
-    @classmethod
-    def _prune_failure_cache(cls) -> None:
-        if not cls._failure_cache:
-            return
-
-        now = time.time()
-        expired_keys = [
-            key
-            for key, (expire_ts, _detail) in cls._failure_cache.items()
-            if expire_ts < now
-        ]
-        for key in expired_keys:
-            cls._failure_cache.pop(key, None)
-
-        max_entries = cls._FAILURE_CACHE_MAX_ENTRIES
-        if max_entries <= 0 or len(cls._failure_cache) <= max_entries:
-            return
-
-        sorted_items = sorted(
-            cls._failure_cache.items(),
-            key=lambda item: item[1][0],
-        )
-        for key, _value in sorted_items[: len(cls._failure_cache) - max_entries]:
-            cls._failure_cache.pop(key, None)
-
-    def _read_disk_failure_cache(self, url: str, proxy: str | None) -> str | None:
-        fail_path = self._failure_cache_path(url, proxy)
-        if not fail_path.exists():
-            return None
-        try:
-            raw_expire_ts, detail = fail_path.read_text(encoding="utf-8").split("\n", 1)
-            expire_ts = float(raw_expire_ts)
-        except Exception:
-            self.safe_unlink(fail_path)
-            return None
-        if expire_ts < time.time():
-            self.safe_unlink(fail_path)
-            return None
-        return detail.strip()
-
-    def _read_failure_cache(self, url: str, proxy: str | None) -> str | None:
-        cls = type(self)
-        cls._prune_failure_cache()
-        key = cls._failure_cache_key(url, proxy)
-        cached = cls._failure_cache.get(key)
-        if cached is None:
-            disk_cached = self._read_disk_failure_cache(url, proxy)
-            if disk_cached is not None:
-                cls._failure_cache[key] = (
-                    time.time() + cls._FAILURE_CACHE_TTL_SECONDS,
-                    disk_cached[:300],
-                )
-            return disk_cached
-        expire_ts, detail = cached
-        if expire_ts < time.time():
-            cls._failure_cache.pop(key, None)
-            self.safe_unlink(self._failure_cache_path(url, proxy))
-            return None
-        return detail
-
-    def _write_failure_cache(self, url: str, proxy: str | None, detail: str) -> None:
-        cls = type(self)
-        cls._prune_failure_cache()
-        key = cls._failure_cache_key(url, proxy)
-        expire_ts = time.time() + cls._FAILURE_CACHE_TTL_SECONDS
-        normalized_detail = detail[:300]
-        cls._failure_cache[key] = (
-            expire_ts,
-            normalized_detail,
-        )
-        try:
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
-            self._failure_cache_path(url, proxy).write_text(
-                f"{expire_ts}\n{normalized_detail}",
-                encoding="utf-8",
-            )
-        except Exception as ex:
-            logger.debug(
-                "Media failure cache write failed: url=%s, err=%s",
-                url,
-                ex,
-            )
-        cls._prune_failure_cache()
-
-    def _clear_failure_cache(self, url: str, proxy: str | None) -> None:
-        cls = type(self)
-        cls._failure_cache.pop(cls._failure_cache_key(url, proxy), None)
-        self.safe_unlink(self._failure_cache_path(url, proxy))
-
     def _cache_file_path(self, url: str, suffix: str | None = None) -> Path:
         digest = self._cache_file_prefix(url)
         if suffix is None:
@@ -306,18 +206,8 @@ class MediaDownloader:
                 continue
             meta_paths_to_check.append(meta_path)
 
-        for fail_path in self._cache_dir.glob(f"*{self._FAILURE_CACHE_SUFFIX}"):
-            try:
-                raw_expire_ts = fail_path.read_text(encoding="utf-8").split("\n", 1)[0]
-                expire_ts = float(raw_expire_ts)
-            except Exception:
-                expire_ts = 0.0
-            if expire_ts + self._CACHE_GC_GRACE_SECONDS >= now_ts:
-                continue
-            meta_paths_to_check.append(fail_path)
-
         stale_orphan_age = self._stale_orphan_age_threshold()
-        for suffix in (*self._CACHE_MEDIA_SUFFIXES, self._FAILURE_CACHE_SUFFIX):
+        for suffix in self._CACHE_MEDIA_SUFFIXES:
             for media_path in self._cache_dir.glob(f"*{suffix}"):
                 meta_path = media_path.with_suffix(".meta")
                 if meta_path.exists():
@@ -514,16 +404,39 @@ class MediaDownloader:
             bool(proxy),
         )
 
-        success = await FFmpegTool.download_m3u8_to_mp4(
-            m3u8_url=url,
-            output_path=cache_path,
-            timeout_seconds=m3u8_timeout,
-            proxy=proxy,
-        )
+        last_error: str | None = None
+        success = False
+        for candidate_url in self._expand_download_candidates(url):
+            candidate_error: str | None = None
+            try:
+                if cache_path.exists():
+                    self.safe_unlink(cache_path)
+                success = await FFmpegTool.download_m3u8_to_mp4(
+                    m3u8_url=candidate_url,
+                    output_path=cache_path,
+                    timeout_seconds=m3u8_timeout,
+                    proxy=proxy,
+                )
+            except Exception as ex:
+                success = False
+                candidate_error = repr(ex)
+            if success:
+                break
+            if candidate_error is None:
+                candidate_error = "ffmpeg returned unsuccessful result"
+            last_error = candidate_error
+            logger.warning(
+                "Media cache m3u8 download attempt failed: origin=%s, candidate=%s, "
+                "detail=%s",
+                url,
+                candidate_url,
+                candidate_error,
+            )
 
         if not success:
-            logger.warning("Media cache m3u8 download failed: url=%s", url)
-            raise RuntimeError(f"m3u8 download failed: {url}")
+            self.safe_unlink(cache_path)
+            detail = f", last_error={last_error}" if last_error else ""
+            raise RuntimeError(f"m3u8 download failed: {url}{detail}")
 
         expire_ts = time.time() + self._CACHE_TTL_SECONDS
         meta_path.write_text(str(expire_ts), encoding="utf-8")
@@ -563,22 +476,9 @@ class MediaDownloader:
 
         is_m3u8 = self._guess_suffix(url) == ".m3u8"
         if is_m3u8:
-            cache_url = f"{url}#mp4"
-            cached_failure = self._read_failure_cache(cache_url, proxy)
-            if cached_failure is not None:
-                raise RuntimeError(
-                    f"recent media download failure cached: url={url}, "
-                    f"last_error={cached_failure}"
-                )
-            try:
-                path = await self._download_m3u8_to_cache(
-                    url=url, proxy=proxy, m3u8_timeout=m3u8_timeout
-                )
-            except Exception as ex:
-                self._write_failure_cache(cache_url, proxy, str(ex))
-                raise
-            self._clear_failure_cache(cache_url, proxy)
-            return path
+            return await self._download_m3u8_to_cache(
+                url=url, proxy=proxy, m3u8_timeout=m3u8_timeout
+            )
 
         is_video = self._guess_suffix(url) in {
             ".mp4",
@@ -601,12 +501,6 @@ class MediaDownloader:
                     cached,
                 )
                 return cached
-            cached_failure = self._read_failure_cache(cache_url, proxy)
-            if cached_failure is not None:
-                raise RuntimeError(
-                    f"recent media download failure cached: url={url}, "
-                    f"last_error={cached_failure}"
-                )
 
         logger.debug(
             "Media cache download start: url=%s, timeout_seconds=%s, "
@@ -616,15 +510,11 @@ class MediaDownloader:
             bool(proxy),
             try_convert_gif,
         )
-        try:
-            tmp_path = await self.download_to_temp(
-                url=url,
-                timeout_seconds=timeout_seconds,
-                proxy=proxy,
-            )
-        except Exception as ex:
-            self._write_failure_cache(cache_url, proxy, str(ex))
-            raise
+        tmp_path = await self.download_to_temp(
+            url=url,
+            timeout_seconds=timeout_seconds,
+            proxy=proxy,
+        )
         logger.debug(
             "Media cache download complete: url=%s, tmp=%s, tmp_exists=%s",
             url,
@@ -682,7 +572,6 @@ class MediaDownloader:
                     )
                     return cached
                 written = self._write_cache(cache_url, converted_path)
-                self._clear_failure_cache(cache_url, proxy)
                 logger.debug(
                     "Media cache return new write: url=%s, path=%s",
                     cache_url,

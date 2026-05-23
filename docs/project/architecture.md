@@ -178,6 +178,8 @@ flowchart TD
 - 全局 AI handler provider/persona
 - 平台 sender 策略
 
+插件启动时会在基础设施配置层按 `_conf_schema.json` 做一次配置自愈：补齐缺失字段、删除 schema 外字段、转换可恢复的数值类型，并按 `options` / `slider` 修正非法选项和越界数值。旧 sender strategy 结构和少量 legacy 别名仍在进入运行态配置前归一化；内部字段如 `db_file` 不写回 AstrBot 配置面。
+
 ### 运行级用户/订阅配置
 
 主要放在数据库与 Plugin Pages：

@@ -91,3 +91,45 @@ async def test_m3u8_download_rejects_invalid_ffmpeg_output(
         is False
     )
     assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_m3u8_download_passes_proxy_to_ffmpeg(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "out.mp4"
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(FFmpegTool, "ensure_ffmpeg_ready", lambda **kwargs: "ffmpeg")
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs.get("env")
+        output.write_bytes(b"valid mp4")
+        return _FakeProcess(returncode=0, stdout=b"", stderr=b"")
+
+    async def fake_validate(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(FFmpegTool, "has_valid_video_stream", fake_validate)
+
+    assert (
+        await FFmpegTool.download_m3u8_to_mp4(
+            "https://example.com/video.m3u8",
+            output,
+            proxy="localhost:7890",
+        )
+        is True
+    )
+
+    args = list(captured["args"])
+    assert args[args.index("-http_proxy") + 1] == "http://localhost:7890"
+    assert args.index("-http_proxy") < args.index("-i")
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["HTTP_PROXY"] == "http://localhost:7890"
+    assert env["HTTPS_PROXY"] == "http://localhost:7890"
+    assert env["http_proxy"] == "http://localhost:7890"
+    assert env["https_proxy"] == "http://localhost:7890"

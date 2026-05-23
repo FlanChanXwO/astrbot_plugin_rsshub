@@ -110,11 +110,13 @@
 
 在 AstrBot 管理面板的「配置」页面，找到 `RSSHub` 插件配置：
 
+插件启动时会按当前 `_conf_schema.json` 对实际配置文件做一次轻量自愈：补齐缺失字段、移除已废弃字段、修正常见类型错误，并把下拉选项和滑块数值收敛到合法范围。旧版字段如 `download_media_before_send` 会被清理且不再影响运行时；只有检测到实际变化时才会写回配置文件。
+
 ### 基础设施配置 (`basic_config`)
 
 | 配置项 | 类型 | 说明 | 默认值 |
 |--------|------|------|--------|
-| `proxy` | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890` | `""` |
+| `proxy` | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890`；填写 `localhost:7890` 这类裸地址时会按 `http://localhost:7890` 处理，媒体预下载和 FFmpeg m3u8/HLS 下载也会使用该代理 | `""` |
 | `rsshub_base_url` | 字符串 | 默认 RSSHub 域名，用于路由检索与订阅链接拼接 | `https://rsshub.app` |
 | `timeout` | 整数 | 请求超时（秒），获取 RSS 源时的 HTTP 请求超时时间 | `30` |
 | `minimal_interval` | 整数 | 最小监控间隔（分钟）。这是保存期硬限制：命令、Web API、Plugin Pages 在写入订阅/默认配置时都不得保存更小值；不是仅运行时兜底。 | `1` |
@@ -127,7 +129,6 @@
 | `deduplicate_multi_bot` | 布尔值 | 单会话多 BOT 去重。仅当多个目标落在同一 `target_session`，且最终发送 payload 等价时才压重；被压掉的记录写入 `skipped` push history 作为审计。 | `true` |
 | `bootstrap_skip_history` | 布尔值 | 首轮是否跳过历史条目，开启后首次仅建立去重历史不推送旧消息 | `true` |
 | `history_entry_limit` | 整数 | 历史条目推送限制，0=不限制 | `0` |
-| `download_media_before_send` | 布尔值 | 先下载媒体后发送，Docker 环境下需共享数据卷 | `false` |
 | `download_media_timeout` | 整数 | 媒体下载超时（秒），m3u8/HLS 建议 60-180 秒 | `30` |
 
 ### RSSHub Routes 知识库 (`route_knowledge`)
@@ -202,7 +203,7 @@ Plugin Pages 的用户/订阅处理链编辑器会优先读取 Web API `handlers
 
 Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略里触发：当前为自动发送、Telegram 策略已启用 Telegraph、token 有效，且去重后的媒体条目数大于 1。OneBot 不使用 Telegraph，避免在 QQ/NapCat 环境中依赖不可访问的外部页面服务。Telegram 本地图片超过 10 MiB 时会降级为文件发送，避免 Bot API photo 大小限制导致整条推送失败。
 
-发送前会先生成平台无关消息组件并由排序器统一整理顺序。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。默认视频来源仍优先远程 URL，只有显式开启 `prefer_local_video` 时才使用本地视频文件。
+发送前会先下载媒体到本地成功缓存，再生成平台无关消息组件并由排序器统一整理顺序；下载失败不会写入失败缓存，下一次推送会重新尝试。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。`prefer_local_video` 仅控制 OneBot 视频组件是否优先使用本地文件路径，不再控制是否预下载。
 
 ## 📝 使用方法
 

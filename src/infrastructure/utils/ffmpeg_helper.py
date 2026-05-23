@@ -38,6 +38,15 @@ class FFmpegTool:
     )
 
     @staticmethod
+    def _normalize_proxy_url(proxy: str | None) -> str:
+        proxy_url = (proxy or "").strip()
+        if not proxy_url:
+            return ""
+        if "://" not in proxy_url:
+            return f"http://{proxy_url}"
+        return proxy_url
+
+    @staticmethod
     def ensure_ffmpeg_ready(*, auto_install: bool = True) -> str | None:
         """Resolve an FFmpeg executable path for plugin runtime use.
 
@@ -566,25 +575,35 @@ class FFmpegTool:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        proxy_url = FFmpegTool._normalize_proxy_url(proxy)
+
         args = [
             ffmpeg_exe,
             "-y",
             "-protocol_whitelist",
             "file,http,https,tcp,tls,crypto,httpproxy",
-            "-i",
-            m3u8_url,
-            "-c",
-            "copy",
-            "-bsf:a",
-            "aac_adtstoasc",
-            str(output_path),
         ]
+        if proxy_url:
+            args.extend(["-http_proxy", proxy_url])
+        args.extend(
+            [
+                "-i",
+                m3u8_url,
+                "-c",
+                "copy",
+                "-bsf:a",
+                "aac_adtstoasc",
+                str(output_path),
+            ]
+        )
 
         env = None
-        if proxy:
+        if proxy_url:
             env = os.environ.copy()
-            env["HTTP_PROXY"] = proxy
-            env["HTTPS_PROXY"] = proxy
+            env["HTTP_PROXY"] = proxy_url
+            env["HTTPS_PROXY"] = proxy_url
+            env["http_proxy"] = proxy_url
+            env["https_proxy"] = proxy_url
 
         process: asyncio.subprocess.Process | None = None
         try:

@@ -572,7 +572,7 @@ async def test_send_to_session_returns_cancelled_result_from_queue():
     assert result["ok"] is False
     assert result["cancelled"] is True
     assert result["job_id"] == "rss-000123"
-    assert "Cancelled by /sub_stop" in result["error"]
+    assert "Cancelled by System or Command" in result["error"]
     assert sender.requests == []
 
 

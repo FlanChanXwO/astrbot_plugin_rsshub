@@ -42,7 +42,7 @@ class BasicSettings:
     failed_queue_max_retries: int = 3
     deduplicate_multi_bot: bool = True
     history_entry_limit: int = 0
-    download_media_before_send: bool = False
+    download_media_before_send: bool = True
     download_media_timeout: int = 30
 
 
@@ -253,7 +253,10 @@ class BasicConfig(BaseModel):
     bootstrap_skip_history: bool = Field(default=True, description="首轮跳过历史")
     history_entry_limit: int = Field(default=0, description="历史条目限制")
     history_retention_days: int = Field(default=30, description="推送历史保留天数")
-    download_media_before_send: bool = Field(default=False, description="先下载后发送")
+    download_media_before_send: bool = Field(
+        default=True,
+        description="兼容旧配置；运行时始终先下载媒体后发送",
+    )
     download_media_timeout: int = Field(default=30, description="媒体下载超时")
 
     @classmethod
@@ -582,13 +585,7 @@ class RsshubPluginConfig(BaseModel):
         if not astrbot_config:
             return cls()
 
-        if (
-            "download_image_before_send" in astrbot_config
-            and "basic_config" in astrbot_config
-        ):
-            astrbot_config["basic_config"]["download_media_before_send"] = (
-                astrbot_config.pop("download_image_before_send")
-            )
+        astrbot_config.pop("download_image_before_send", None)
         if (
             "m3u8_download_timeout" in astrbot_config
             and "basic_config" in astrbot_config
@@ -616,6 +613,7 @@ class RsshubPluginConfig(BaseModel):
 
     def save(self, astrbot_config: AstrBotConfig) -> None:
         config_dict = self.model_dump()
+        config_dict.get("basic_config", {}).pop("download_media_before_send", None)
         config_dict["sender_strategies"] = self.sender_strategies.to_config_dict()
         for key, value in config_dict.items():
             if key != "db_file":
@@ -684,7 +682,7 @@ class RsshubPluginConfig(BaseModel):
 
     @property
     def download_media_before_send(self) -> bool:
-        return self.basic_config.download_media_before_send
+        return True
 
     @property
     def download_media_timeout(self) -> int:
@@ -692,4 +690,4 @@ class RsshubPluginConfig(BaseModel):
 
     @property
     def download_image_before_send(self) -> bool:
-        return self.basic_config.download_media_before_send
+        return True

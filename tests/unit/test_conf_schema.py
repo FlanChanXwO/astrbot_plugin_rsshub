@@ -75,6 +75,7 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
     assert "translation" not in schema
 
     basic_config_items = schema["basic_config"]["items"]
+    assert "download_media_before_send" not in basic_config_items
     assert basic_config_items["timeout"]["slider"] == {
         "min": 1,
         "max": 300,

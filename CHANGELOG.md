@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.0.3] - 2026-05-23
+
+### Changed
+
+- 媒体发送统一先下载到本地成功缓存后再交给平台发送器；旧配置 `download_media_before_send=false` 不再影响运行时。
+- 从 `_conf_schema.json` 移除 `basic_config.download_media_before_send`，插件启动时会清理实际配置文件中的遗留字段。
+- 插件启动配置会按当前 `_conf_schema.json` 自动自愈：补齐缺失字段、移除未知字段、修正常见类型错误，并按下拉选项与滑块范围收敛非法值。
+
+### Fixed
+
+- 移除媒体下载失败缓存；下载失败不再写入内存或 `.fail` 文件，网络、代理或反代恢复后同一媒体会在下次推送重新尝试下载。
+- 保留成功媒体缓存行为，避免重复下载已成功缓存的媒体。
+- 修复启用 `basic_config.proxy` 后，FFmpeg m3u8/HLS 下载没有显式走代理的问题；裸 `host:port` 代理配置现在会统一按 `http://host:port` 处理。
+- 修复发送上下文默认值覆盖启动级 `basic_config.proxy` 与 `download_media_timeout`，导致媒体预下载日志显示 `proxy=False` 且超时配置不生效的问题。
+
 ## [2.0.2] - 2026-05-23
 
 ### Fixed

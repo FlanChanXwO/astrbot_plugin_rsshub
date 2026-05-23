@@ -17,8 +17,6 @@ class MessageContext:
     entry_title: str = ""
     entry_link: str = ""
     platform_name: str = ""
-    timeout_seconds: int = 30
-    proxy: str = ""
     send_mode: int | None = None
     style: int = 0
     sender_strategy: Any = None

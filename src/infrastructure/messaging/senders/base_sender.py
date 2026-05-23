@@ -33,7 +33,6 @@ class DefaultMessageSender:
 
     _timeout_seconds: int = 30
     _proxy: str = ""
-    _download_media_before_send: bool = True
     _video_transcode: bool = False
     _video_transcode_timeout: int = 120
     _gif_transcode: bool = False
@@ -51,14 +50,12 @@ class DefaultMessageSender:
     def configure_behavior(
         cls,
         *,
-        download_media_before_send: bool,
         video_transcode: bool = False,
         video_transcode_timeout: int = 120,
         gif_transcode: bool = False,
         gif_transcode_timeout: int = 60,
     ) -> None:
         """配置发送行为"""
-        cls._download_media_before_send = bool(download_media_before_send)
         cls._video_transcode = bool(video_transcode)
         cls._video_transcode_timeout = max(1, int(video_transcode_timeout))
         cls._gif_transcode = bool(gif_transcode)
@@ -74,10 +71,6 @@ class DefaultMessageSender:
         if proxy is None:
             proxy = getattr(DefaultMessageSender, "_proxy", None)
         return str(proxy or "")
-
-    @classmethod
-    def _should_download_media_before_send(cls) -> bool:
-        return bool(getattr(cls, "_download_media_before_send", True))
 
     @classmethod
     def _should_transcode_video(cls) -> bool:
@@ -163,12 +156,6 @@ class DefaultMessageSender:
 
             seen_urls.add(media_url)
 
-            if not self._should_download_media_before_send():
-                prepared.append(
-                    PreparedMedia(media_type=media_type, original_url=media_url)
-                )
-                continue
-
             try:
                 local_path = await downloader.get_or_download(
                     url=media_url,
@@ -229,8 +216,8 @@ class DefaultMessageSender:
         request: SendRequest,
         context: MessageContext | None = None,
     ) -> list[PreparedMedia] | None:
-        timeout = context.timeout_seconds if context else self._get_timeout_seconds()
-        proxy = context.proxy if context else self._get_proxy()
+        timeout = self._get_timeout_seconds()
+        proxy = self._get_proxy()
 
         effective_prepared = request.prepared_media
         if effective_prepared is None and request.media:

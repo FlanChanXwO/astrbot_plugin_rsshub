@@ -136,12 +136,6 @@
           "step": 1
         }
       },
-      "download_media_before_send": {
-        "type": "bool",
-        "description": "先下载媒体后发送",
-        "hint": "发送前是否先下载媒体",
-        "default": false
-      },
       "download_media_timeout": {
         "type": "int",
         "description": "媒体下载超时（秒）",

@@ -3,9 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.base_sender import (
     DefaultMessageSender,
+)
+from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
+    MessageContext,
+    SendRequest,
 )
 
 
@@ -22,7 +25,6 @@ class _FakeDownloader:
 def _reset_sender_behavior():
     DefaultMessageSender.configure_runtime(timeout_seconds=30, proxy="")
     DefaultMessageSender.configure_behavior(
-        download_media_before_send=True,
         video_transcode=False,
         video_transcode_timeout=120,
         gif_transcode=False,
@@ -33,7 +35,6 @@ def _reset_sender_behavior():
     yield
     DefaultMessageSender.configure_runtime(timeout_seconds=30, proxy="")
     DefaultMessageSender.configure_behavior(
-        download_media_before_send=True,
         video_transcode=False,
         video_transcode_timeout=120,
         gif_transcode=False,
@@ -49,7 +50,6 @@ async def test_prepare_media_passes_gif_transcode_config(monkeypatch):
     )
 
     DefaultMessageSender.configure_behavior(
-        download_media_before_send=True,
         gif_transcode=True,
         gif_transcode_timeout=77,
     )
@@ -96,7 +96,6 @@ async def test_prepare_media_applies_video_transcode_config(monkeypatch):
     monkeypatch.setattr(Path, "exists", lambda self: True)
 
     DefaultMessageSender.configure_behavior(
-        download_media_before_send=True,
         video_transcode=True,
         video_transcode_timeout=222,
         gif_transcode=True,
@@ -116,17 +115,44 @@ async def test_prepare_media_applies_video_transcode_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prepare_media_does_not_download_when_disabled(monkeypatch):
+async def test_prepare_media_always_downloads_media(monkeypatch):
     monkeypatch.setattr(
         "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
         _FakeDownloader,
     )
-    DefaultMessageSender.configure_behavior(download_media_before_send=False)
 
     prepared = await DefaultMessageSender().prepare_media(
         [("video", "https://example.com/remote-only-video.webm")]
     )
 
-    assert prepared[0].local_path is None
+    assert prepared[0].local_path == Path("/tmp/source.webm")
     assert prepared[0].original_url == "https://example.com/remote-only-video.webm"
-    assert _FakeDownloader.calls == []
+    assert _FakeDownloader.calls[0]["url"] == (
+        "https://example.com/remote-only-video.webm"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_effective_media_falls_back_to_runtime_proxy(monkeypatch):
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
+        _FakeDownloader,
+    )
+
+    DefaultMessageSender.configure_runtime(
+        timeout_seconds=120,
+        proxy="http://localhost:7890",
+    )
+
+    prepared = await DefaultMessageSender()._prepare_effective_media(
+        SendRequest(
+            session_id="default:GroupMessage:1",
+            media=[("video", "https://example.com/video.m3u8#mp4")],
+        ),
+        MessageContext(platform_name="qq_official"),
+    )
+
+    assert prepared is not None
+    assert prepared[0].local_path == Path("/tmp/source.webm")
+    assert _FakeDownloader.calls[0]["timeout_seconds"] == 120
+    assert _FakeDownloader.calls[0]["proxy"] == "http://localhost:7890"

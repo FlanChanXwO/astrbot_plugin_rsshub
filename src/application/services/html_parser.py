@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import html as html_lib
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -17,6 +17,7 @@ from bs4.element import NavigableString, Tag
 
 from ...domain.entities.content_types import (
     AudioContent,
+    ContentNode,
     ContentNodeType,
     FileContent,
     HtmlNode,
@@ -69,8 +70,9 @@ class HTMLParser:
         Returns:
             ParsedResult 对象
         """
-        self.soup = await self._run_async(BeautifulSoup, self.html, "lxml")
-        children = await self._parse_children(self.soup)
+        soup = await self._run_async(BeautifulSoup, self.html, "lxml")
+        self.soup = soup
+        children = await self._parse_children(soup)
         html_tree = HtmlNode(children=children)
         return ParsedResult(
             html_tree=html_tree,
@@ -80,18 +82,23 @@ class HTMLParser:
             mentions=self.mentions,
         )
 
-    async def _run_async(self, func, *args, **kwargs) -> Any:
+    async def _run_async(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
         """异步执行同步函数"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
-    async def _parse_children(self, element) -> list[ContentNodeType | HtmlNode]:
+    async def _parse_children(self, element: Any) -> list[ContentNode | HtmlNode]:
         """解析子元素"""
         self._parse_count += 1
         if self._parse_count % 64 == 0:
             await asyncio.sleep(0)
 
-        result: list[ContentNodeType | HtmlNode] = []
+        result: list[ContentNode | HtmlNode] = []
 
         if isinstance(element, Iterator):
             for child in element:
@@ -126,8 +133,8 @@ class HTMLParser:
         return result
 
     async def _parse_element(
-        self, element
-    ) -> ContentNodeType | HtmlNode | list[ContentNodeType | HtmlNode] | None:
+        self, element: Any
+    ) -> ContentNode | HtmlNode | list[ContentNode | HtmlNode] | None:
         parsed = await self._parse_children(element)
         if not parsed:
             return None
@@ -137,19 +144,13 @@ class HTMLParser:
 
     async def _parse_tag(
         self, tag: Tag
-    ) -> ContentNodeType | list[ContentNodeType | HtmlNode] | None:
+    ) -> ContentNode | list[ContentNode | HtmlNode] | None:
         """解析单个标签"""
         tag_name = tag.name
 
         if tag_name in ("at", "mention"):
-            target = (
-                tag.get("qq")
-                or tag.get("id")
-                or tag.get("uid")
-                or tag.get("target")
-                or ""
-            )
-            name = tag.get("name") or tag.get_text().strip()
+            target = self._first_attr(tag, ("qq", "id", "uid", "target"))
+            name = self._attr_str(tag, "name") or tag.get_text().strip()
             mention = MentionContent(target=str(target).strip(), name=name)
             if mention.target:
                 self._append_mention(mention)
@@ -159,7 +160,7 @@ class HTMLParser:
             src = self._choose_image_src(tag)
             if src:
                 url = self._resolve_url(src)
-                alt = tag.get("alt", "")
+                alt = self._attr_str(tag, "alt")
                 if (
                     alt
                     and len(alt) <= 3
@@ -188,7 +189,7 @@ class HTMLParser:
             return None
 
         if tag_name == "a":
-            href = tag.get("href", "")
+            href = self._attr_str(tag, "href")
             text = tag.get_text().strip()
             if not href:
                 return TextContent(text=text)
@@ -273,7 +274,7 @@ class HTMLParser:
             return TextContent(text=f"\n```\n{text}\n```\n")
 
         if tag_name == "iframe":
-            src = tag.get("src", "")
+            src = self._attr_str(tag, "src")
             if src:
                 url = self._resolve_url(src)
                 return TextContent(text=f"\n[嵌入内容: {url}]\n")
@@ -284,11 +285,13 @@ class HTMLParser:
 
         return await self._parse_children(tag.children)
 
-    async def _parse_ordered_list(self, ordered_list: Tag) -> list[ContentNodeType]:
+    async def _parse_ordered_list(self, ordered_list: Tag) -> list[ContentNode]:
         """解析有序列表"""
-        result: list[ContentNodeType] = []
+        result: list[ContentNode] = []
         index = 1
         for li in ordered_list.find_all("li", recursive=False):
+            if not isinstance(li, Tag):
+                continue
             children = await self._parse_children(li.children)
             if children:
                 result.append(TextContent(text=f"{index}. "))
@@ -297,17 +300,21 @@ class HTMLParser:
                 index += 1
         return result
 
-    async def _parse_table(self, table: Tag) -> list[ContentNodeType] | None:
+    async def _parse_table(self, table: Tag) -> list[ContentNode] | None:
         """将表格简化为按行文本"""
         rows = table.find_all("tr")
         if not rows:
             return None
 
-        result: list[ContentNodeType] = [TextContent(text="\n")]
+        result: list[ContentNode] = [TextContent(text="\n")]
         for row in rows:
+            if not isinstance(row, Tag):
+                continue
             cols = row.find_all(("th", "td"))
             values: list[str] = []
             for col in cols:
+                if not isinstance(col, Tag):
+                    continue
                 parsed = await self._parse_children(col.children)
                 plain = "".join(item.get_plain() for item in parsed).strip()
                 if plain:
@@ -374,7 +381,7 @@ class HTMLParser:
 
     def _choose_image_src(self, tag: Tag) -> str:
         """优先从 srcset 选择最优图片源"""
-        srcset = tag.get("srcset", "")
+        srcset = self._attr_str(tag, "srcset")
         if srcset:
             best_url = ""
             best_score = -1.0
@@ -410,7 +417,7 @@ class HTMLParser:
             "data-url",
             "data-fallback-src",
         ):
-            value = tag.get(key, "")
+            value = self._attr_str(tag, key)
             if value:
                 return value
         return ""
@@ -418,12 +425,14 @@ class HTMLParser:
     def _get_multi_src(self, tag: Tag) -> list[str]:
         """获取 media 标签中的多来源 URL"""
         urls: list[str] = []
-        src = tag.get("src", "")
+        src = self._attr_str(tag, "src")
         if src:
             urls.append(self._resolve_url(src))
 
         for source in tag.find_all("source"):
-            source_src = source.get("src", "")
+            if not isinstance(source, Tag):
+                continue
+            source_src = self._attr_str(source, "src")
             if source_src:
                 urls.append(self._resolve_url(source_src))
 
@@ -451,12 +460,32 @@ class HTMLParser:
         """获取纯文本内容"""
         if not self.soup:
             return ""
-        for element in self.soup(["script", "style", "noscript"]):
+        soup = self.soup
+        for element in soup.find_all(["script", "style", "noscript"]):
             element.decompose()
-        text = self.soup.get_text()
+        text = soup.get_text()
         lines = (line.strip() for line in text.splitlines())
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         return "\n".join(chunk for chunk in chunks if chunk)
+
+    @staticmethod
+    def _attr_str(tag: Tag, key: str, default: str = "") -> str:
+        value = tag.get(key, default)
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Sequence):
+            return " ".join(str(item) for item in value)
+        return str(value)
+
+    @classmethod
+    def _first_attr(cls, tag: Tag, keys: Sequence[str]) -> str:
+        for key in keys:
+            value = cls._attr_str(tag, key)
+            if value:
+                return value
+        return ""
 
 
 async def parse_html(html: str, feed_link: str | None = None) -> ParsedResult:

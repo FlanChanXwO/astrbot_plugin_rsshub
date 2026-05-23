@@ -47,6 +47,3 @@ uv run python -m py_compile data/plugins/astrbot_plugin_rsshub/main.py
 
 - [ ] 😮 My changes do not introduce malicious code.
   / 我的更改没有引入恶意代码。
-
-- [ ] 📘 I have read and followed `CONTRIBUTE.md`.
-  / 我已阅读并遵守 `CONTRIBUTE.md` 规范。

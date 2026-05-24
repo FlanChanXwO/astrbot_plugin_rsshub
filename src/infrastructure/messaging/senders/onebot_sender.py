@@ -39,7 +39,13 @@ class OneBotMessageSender(DefaultMessageSender):
     @classmethod
     def _prefer_local_video(cls, context: MessageContext | None) -> bool:
         strategy = getattr(context, "sender_strategy", None) if context else None
-        return bool(cls._strategy_value(strategy, "prefer_local_video", False))
+        return bool(
+            cls._strategy_value(
+                strategy,
+                "prefer_local_video",
+                cls._get_onebot_prefer_local_video_default(),
+            )
+        )
 
     async def send_to_user(
         self,
@@ -62,9 +68,16 @@ class OneBotMessageSender(DefaultMessageSender):
                 )
 
             if self._is_original_style(context) and request.layout:
+                prepared_media_by_url = {
+                    pm.original_url: pm
+                    for pm in (effective_prepared or [])
+                    if pm.original_url
+                }
                 return await self._send_components_in_order(
                     session_id,
-                    self._layout_to_components(request),
+                    self._layout_to_components(
+                        request, prepared_media_by_url=prepared_media_by_url
+                    ),
                     combine_image_text=True,
                     default_text=request.message,
                 )

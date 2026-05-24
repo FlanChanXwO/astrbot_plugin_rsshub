@@ -6,7 +6,7 @@
 
 - 命令语义回归收口
 - `link_preview` 全量移除
-- 类型化配置模型与运行态设置统一到 `src/infrastructure/config/datamodels.py`
+- 类型化配置模型与运行态设置统一到 `src/infrastructure/config/models/`，其中 `src/infrastructure/config/datamodels.py` 仅作为兼容导出
 - handler registry 与内置 AI handlers 上线
 - Plugin Pages 管理面板大幅扩展
 - RSSHub Routes 知识库同步能力接入

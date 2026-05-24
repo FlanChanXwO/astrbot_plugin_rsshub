@@ -19,15 +19,22 @@ class WeixinOCMessageSender(DefaultMessageSender):
     ) -> SendResult:
         """按媒体逐条、文本最后的顺序发送。"""
         try:
+            prepared_media = await self._prepare_effective_media(request, context)
             if self._is_original_style(context) and request.layout:
+                prepared_media_by_url = {
+                    pm.original_url: pm
+                    for pm in (prepared_media or [])
+                    if pm.original_url
+                }
                 return await self._send_components_in_order(
                     request.session_id,
-                    self._layout_to_components(request),
+                    self._layout_to_components(
+                        request, prepared_media_by_url=prepared_media_by_url
+                    ),
                     combine_image_text=False,
                     default_text=request.message,
                 )
 
-            prepared_media = await self._prepare_effective_media(request, context)
             components = self._build_components(
                 request,
                 prepared_media,

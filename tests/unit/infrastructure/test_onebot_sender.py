@@ -186,7 +186,7 @@ async def test_onebot_sender_places_media_nodes_before_text(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_onebot_sender_prefers_remote_video_url_by_default(monkeypatch):
+async def test_onebot_sender_prefers_local_video_path_by_default(monkeypatch):
     sender = OneBotMessageSender()
     calls: list[tuple[str, list]] = []
 
@@ -237,7 +237,7 @@ async def test_onebot_sender_prefers_remote_video_url_by_default(monkeypatch):
     assert result.ok is True
     assert len(calls) == 1
     media_node = calls[0][1][0].nodes[0]
-    assert media_node.content[0].file == "https://example.com/video.mp4"
+    assert media_node.content[0].file == "/tmp/video.mp4"
 
 
 @pytest.mark.asyncio
@@ -357,3 +357,120 @@ async def test_onebot_original_style_sends_layout_without_merged_forward(monkeyp
     assert isinstance(calls[1][1][0], _Image)
     assert isinstance(calls[1][1][1], _Plain)
     assert calls[1][1][1].text == "caption 2"
+
+
+# ------------------------------------------------------------------
+# GIF conversion regression
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_onebot_merged_forward_uses_image_for_gif(monkeypatch):
+    """OneBot 合并转发对 video + *.gif 应生成 Image(file=...)。"""
+    sender = OneBotMessageSender()
+    calls: list[tuple[str, list]] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append((session_id, chain))
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Node",
+        _Node,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Nodes",
+        _Nodes,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Plain",
+        _Plain,
+    )
+    monkeypatch.setattr(
+        sys.modules["astrbot.api.message_components"], "Image", _Image, raising=False
+    )
+    monkeypatch.setattr(
+        sys.modules["astrbot.api.message_components"], "Video", _Video, raising=False
+    )
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:GroupMessage:1",
+            message="entry content",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/video.mp4",
+                    local_path=Path("/tmp/video.gif"),
+                )
+            ],
+        ),
+        context=MessageContext(
+            channel=ChannelInfo(title="Feed Title"),
+            platform_name="aiocqhttp",
+        ),
+    )
+
+    assert result.ok is True
+    nodes = calls[0][1][0].nodes
+    assert len(nodes) == 2  # image node + text node
+    assert isinstance(nodes[0].content[0], _Image)
+    assert nodes[0].content[0].file == "/tmp/video.gif"
+
+
+@pytest.mark.asyncio
+async def test_onebot_original_style_gif_from_downloaded_media(monkeypatch):
+    """original layout 使用真实预下载结果时，video→gif 应按 Image 发送。"""
+    sender = OneBotMessageSender()
+    calls: list[tuple[str, list]] = []
+
+    async def fake_prepare_media(media, timeout=30, proxy=""):
+        assert media == [("video", "https://example.com/video.mp4")]
+        return [
+            PreparedMedia(
+                media_type="video",
+                original_url="https://example.com/video.mp4",
+                local_path=Path("/tmp/video.gif"),
+            )
+        ]
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append((session_id, chain))
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "prepare_media", fake_prepare_media)
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+    monkeypatch.setattr(
+        sys.modules["astrbot.api.message_components"], "Plain", _Plain, raising=False
+    )
+    monkeypatch.setattr(
+        sys.modules["astrbot.api.message_components"], "Image", _Image, raising=False
+    )
+    monkeypatch.setattr(
+        sys.modules["astrbot.api.message_components"], "Video", _Video, raising=False
+    )
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:GroupMessage:1",
+            message="fallback",
+            media=[("video", "https://example.com/video.mp4")],
+            layout=[
+                LayoutFragment(
+                    kind="video",
+                    media_type="video",
+                    url="https://example.com/video.mp4",
+                ),
+                LayoutFragment(kind="text", text="caption"),
+            ],
+        ),
+        context=MessageContext(platform_name="aiocqhttp", style=2),
+    )
+
+    assert result.ok is True
+    assert len(calls) == 1
+    assert isinstance(calls[0][1][0], _Image)
+    assert calls[0][1][0].file == "/tmp/video.gif"
+    assert isinstance(calls[0][1][1], _Plain)
+    assert calls[0][1][1].text == "caption"

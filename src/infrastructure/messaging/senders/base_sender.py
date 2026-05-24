@@ -11,7 +11,14 @@ from typing import TYPE_CHECKING
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.star.star_tools import StarTools
 
-from ....shared.constants import STYLE_ORIGINAL
+from ....shared.constants import (
+    ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
+    QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
+    QQ_OFFICIAL_DEGRADE_STRATEGY_OPTIONS,
+    QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
+    STYLE_ORIGINAL,
+    TELEGRAM_PHOTO_MAX_BYTES,
+)
 from ...pipeline import MessageComponent, MessageFormatter
 from ...utils import get_logger
 from ...utils.lock import locked
@@ -37,6 +44,10 @@ class DefaultMessageSender:
     _video_transcode_timeout: int = 120
     _gif_transcode: bool = False
     _gif_transcode_timeout: int = 60
+    _telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES
+    _onebot_prefer_local_video_default: bool = ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT
+    _qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT
+    _qq_official_degrade_strategy: str = QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
 
     _formatter: MessageFormatter = MessageFormatter()
 
@@ -54,12 +65,25 @@ class DefaultMessageSender:
         video_transcode_timeout: int = 120,
         gif_transcode: bool = False,
         gif_transcode_timeout: int = 60,
+        telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES,
+        onebot_prefer_local_video_default: bool = ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
+        qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
+        qq_official_degrade_strategy: str = QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     ) -> None:
         """配置发送行为"""
         cls._video_transcode = bool(video_transcode)
         cls._video_transcode_timeout = max(1, int(video_transcode_timeout))
         cls._gif_transcode = bool(gif_transcode)
         cls._gif_transcode_timeout = max(1, int(gif_transcode_timeout))
+        cls._telegram_photo_max_bytes = max(1, int(telegram_photo_max_bytes))
+        cls._onebot_prefer_local_video_default = bool(onebot_prefer_local_video_default)
+        cls._qq_official_media_threshold = max(0, int(qq_official_media_threshold))
+        strategy = str(
+            qq_official_degrade_strategy or QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
+        )
+        if strategy not in QQ_OFFICIAL_DEGRADE_STRATEGY_OPTIONS:
+            strategy = QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
+        cls._qq_official_degrade_strategy = strategy
 
     @classmethod
     def _get_timeout_seconds(cls) -> int:
@@ -87,6 +111,49 @@ class DefaultMessageSender:
     @classmethod
     def _get_gif_transcode_timeout(cls) -> int:
         return max(1, int(getattr(cls, "_gif_transcode_timeout", 60)))
+
+    @classmethod
+    def _get_telegram_photo_max_bytes(cls) -> int:
+        return max(
+            1, int(getattr(cls, "_telegram_photo_max_bytes", TELEGRAM_PHOTO_MAX_BYTES))
+        )
+
+    @classmethod
+    def _get_onebot_prefer_local_video_default(cls) -> bool:
+        return bool(
+            getattr(
+                cls,
+                "_onebot_prefer_local_video_default",
+                ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
+            )
+        )
+
+    @classmethod
+    def _get_qq_official_media_threshold(cls) -> int:
+        return max(
+            0,
+            int(
+                getattr(
+                    cls,
+                    "_qq_official_media_threshold",
+                    QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
+                )
+            ),
+        )
+
+    @classmethod
+    def _get_qq_official_degrade_strategy(cls) -> str:
+        strategy = str(
+            getattr(
+                cls,
+                "_qq_official_degrade_strategy",
+                QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
+            )
+            or QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
+        )
+        if strategy not in QQ_OFFICIAL_DEGRADE_STRATEGY_OPTIONS:
+            return QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
+        return strategy
 
     async def _maybe_transcode_video_to_mp4(self, media_path: Path) -> Path:
         if not self._should_transcode_video():
@@ -161,6 +228,7 @@ class DefaultMessageSender:
                     url=media_url,
                     timeout_seconds=timeout,
                     proxy=proxy,
+                    media_type=media_type,
                     try_convert_gif=media_type == "video"
                     and self._should_transcode_gif(),
                     gif_transcode_timeout=self._get_gif_transcode_timeout(),
@@ -266,7 +334,11 @@ class DefaultMessageSender:
     def _layout_to_components(
         self,
         request: SendRequest,
+        *,
+        prepared_media_by_url: dict[str, PreparedMedia] | None = None,
     ) -> list[MessageComponent]:
+        from ...utils.media_dispatch import MediaDispatchResolver
+
         components: list[MessageComponent] = []
         for fragment in request.layout or []:
             kind = str(fragment.kind or "").strip()
@@ -275,24 +347,20 @@ class DefaultMessageSender:
                 if text:
                     components.append(MessageComponent(kind="text", text=text))
                 continue
-            if kind in {"image", "video"} and fragment.url:
-                components.append(
-                    MessageComponent(
-                        kind="media",
-                        media_type=kind,
-                        file=str(fragment.url),
-                        original_url=str(fragment.url),
-                    )
+            if kind in {"image", "video", "audio", "file"} and fragment.url:
+                info = MediaDispatchResolver.resolve_layout_fragment(
+                    fragment,
+                    prepared_media_by_url=prepared_media_by_url,
                 )
-                continue
-            if kind in {"audio", "file"} and fragment.url:
+                if not info.media_type:
+                    continue
                 components.append(
                     MessageComponent(
-                        kind="tail",
-                        media_type=kind,
-                        file=str(fragment.url),
-                        original_url=str(fragment.url),
-                        name=str(fragment.name or ""),
+                        kind=info.component_kind,
+                        media_type=info.media_type,
+                        file=info.file,
+                        original_url=info.original_url,
+                        name=info.name,
                     )
                 )
         return components

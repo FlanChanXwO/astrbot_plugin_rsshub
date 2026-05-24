@@ -17,7 +17,7 @@ from .config_loader import (
     set_config,
     validate_interval_value,
 )
-from .datamodels import (
+from .models import (
     ApplicationSettings,
     BasicConfig,
     BasicSettings,
@@ -27,6 +27,10 @@ from .datamodels import (
     FFmpegConfig,
     FFmpegSettings,
     GlobalConfig,
+    HttpConfig,
+    HttpSettings,
+    MediaConfig,
+    MediaSettings,
     PlatformSenderStrategyConfig,
     PlatformStrategySettings,
     RouteKnowledgeConfig,
@@ -48,6 +52,10 @@ __all__ = [
     "ContentHandlersConfig",
     "ContentHandlerSettings",
     "GlobalConfig",
+    "HttpConfig",
+    "HttpSettings",
+    "MediaConfig",
+    "MediaSettings",
     "FFmpegConfig",
     "FFmpegSettings",
     "SenderStrategiesConfig",

@@ -25,6 +25,10 @@ from .lock import (
     locked,
 )
 from .logger import get_logger
+from .media_dispatch import (
+    MediaDispatchInfo,
+    MediaDispatchResolver,
+)
 from .normalizer import (
     normalize_config_positive_int,
     normalize_identifier,
@@ -68,6 +72,9 @@ __all__ = [
     "cacheevict",
     # FFmpeg
     "FFmpegTool",
+    # Media Dispatch
+    "MediaDispatchInfo",
+    "MediaDispatchResolver",
     # Normalizer
     "normalize_text",
     "normalize_identifier",

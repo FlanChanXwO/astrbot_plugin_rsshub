@@ -2,30 +2,13 @@
   "basic_config": {
     "type": "object",
     "description": "基础设施配置",
-    "hint": "启动级网络、去重、队列与下载策略配置",
+    "hint": "启动级去重、队列与订阅策略配置",
     "items": {
-      "proxy": {
-        "type": "string",
-        "description": "代理地址",
-        "hint": "HTTP/SOCKS 代理地址，留空表示直连",
-        "default": ""
-      },
       "rsshub_base_url": {
         "type": "string",
         "description": "默认 RSSHub 域名",
         "hint": "用于相对路由拼接的默认域名",
         "default": "https://rsshub.app"
-      },
-      "timeout": {
-        "type": "int",
-        "description": "请求超时（秒）",
-        "hint": "拉取 RSS 源的 HTTP 超时",
-        "default": 30,
-        "slider": {
-          "min": 1,
-          "max": 300,
-          "step": 1
-        }
       },
       "minimal_interval": {
         "type": "int",
@@ -135,15 +118,39 @@
           "max": 500,
           "step": 1
         }
+      }
+    }
+  },
+  "http_config": {
+    "type": "object",
+    "description": "HTTP 网络配置",
+    "hint": "控制 RSS 拉取、媒体下载与 FFmpeg HLS 下载使用的代理和超时",
+    "items": {
+      "proxy": {
+        "type": "string",
+        "description": "代理地址",
+        "hint": "HTTP/SOCKS 代理地址，留空表示直连；裸 host:port 会按 http://host:port 处理",
+        "default": ""
       },
-      "download_media_timeout": {
+      "timeout": {
         "type": "int",
-        "description": "媒体下载超时（秒）",
-        "hint": "媒体下载的最大等待时间",
+        "description": "请求超时（秒）",
+        "hint": "拉取 RSS 源和普通 HTTP 请求的超时",
         "default": 30,
         "slider": {
           "min": 1,
           "max": 300,
+          "step": 1
+        }
+      },
+      "media_timeout": {
+        "type": "int",
+        "description": "媒体下载超时（秒）",
+        "hint": "媒体预下载、m3u8/HLS 合并与 FFmpeg 下载的最大等待时间",
+        "default": 30,
+        "slider": {
+          "min": 1,
+          "max": 1800,
           "step": 1
         }
       }

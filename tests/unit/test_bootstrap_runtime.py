@@ -3,7 +3,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from astrbot_plugin_rsshub import bootstrap
 from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
 
@@ -29,8 +28,15 @@ def test_init_config_heals_dirty_astrbot_config_before_parsing(monkeypatch):
         "basic_config": {
             "type": "object",
             "items": {
+                "minimal_interval": {"type": "int", "default": 1},
+            },
+        },
+        "http_config": {
+            "type": "object",
+            "items": {
                 "timeout": {"type": "int", "default": 30},
-                "download_media_timeout": {"type": "int", "default": 30},
+                "media_timeout": {"type": "int", "default": 30},
+                "proxy": {"type": "string", "default": ""},
             },
         },
         "sender_strategies": {
@@ -73,14 +79,18 @@ def test_init_config_heals_dirty_astrbot_config_before_parsing(monkeypatch):
     assert isinstance(plugin_config, RsshubPluginConfig)
     assert fake_config.saved is True
     assert fake_config["basic_config"] == {
+        "minimal_interval": 1,
+    }
+    assert fake_config["http_config"] == {
         "timeout": 12,
-        "download_media_timeout": 30,
+        "media_timeout": 30,
+        "proxy": "",
     }
     assert fake_config["sender_strategies"] == {
         "enabled_platforms": ["aiocqhttp", "qq_official"],
         "platform_strategies": [],
     }
-    assert settings.basic.timeout == 12
+    assert settings.http.timeout == 12
 
 
 @pytest.mark.asyncio

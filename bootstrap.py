@@ -57,6 +57,7 @@ from .src.infrastructure.knowledge import (
     AstrBotRouteKnowledgeRepository,
     build_route_knowledge_source,
 )
+from .src.infrastructure.media import MediaDownloader
 from .src.infrastructure.messaging import (
     DefaultMessageSender,
     InfrastructureMessageSenderProvider,
@@ -74,6 +75,7 @@ from .src.infrastructure.utils import (
     get_plugin_cache_dir,
     get_plugin_data_dir,
 )
+from .src.infrastructure.utils.media_integrity import configure_media_integrity
 from .src.interfaces import WebApiHandler
 
 logger = get_logger()
@@ -215,15 +217,29 @@ def _init_config(
 def _configure_message_senders(app_settings: ApplicationSettings) -> None:
     """Apply runtime config consumed by concrete message senders."""
     DefaultMessageSender.configure_runtime(
-        timeout_seconds=app_settings.basic.download_media_timeout,
-        proxy=app_settings.basic.proxy,
+        timeout_seconds=app_settings.http.media_timeout,
+        proxy=app_settings.http.proxy,
     )
     DefaultMessageSender.configure_behavior(
         video_transcode=app_settings.ffmpeg.video_transcode,
         video_transcode_timeout=app_settings.ffmpeg.video_transcode_timeout,
         gif_transcode=app_settings.ffmpeg.gif_transcode,
         gif_transcode_timeout=app_settings.ffmpeg.gif_transcode_timeout,
+        telegram_photo_max_bytes=app_settings.media_config.telegram_photo_max_bytes,
+        onebot_prefer_local_video_default=(
+            app_settings.media_config.onebot_prefer_local_video_default
+        ),
+        qq_official_media_threshold=app_settings.media_config.qq_official_media_threshold,
+        qq_official_degrade_strategy=(
+            app_settings.media_config.qq_official_degrade_strategy
+        ),
     )
+    MediaDownloader.configure_cache(
+        ttl_seconds=app_settings.media_config.cache_ttl_seconds,
+        gc_interval_seconds=app_settings.media_config.cache_gc_interval_seconds,
+        gc_grace_seconds=app_settings.media_config.cache_gc_grace_seconds,
+    )
+    configure_media_integrity(min_valid_bytes=app_settings.media_config.min_valid_bytes)
 
 
 async def _init_database(config: RsshubPluginConfig) -> None:
@@ -273,7 +289,7 @@ def _build_dependencies(
     )
     route_source = build_route_knowledge_source(
         app_settings.route_knowledge,
-        proxy=app_settings.basic.proxy,
+        proxy=app_settings.http.proxy,
     )
     route_repository = AstrBotRouteKnowledgeRepository(
         context=context,

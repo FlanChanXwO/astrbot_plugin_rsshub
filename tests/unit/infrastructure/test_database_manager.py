@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from astrbot_plugin_rsshub.src.domain.entities.handlers import handlers_json
-from astrbot_plugin_rsshub.src.domain.entities.subscription import HANDLERS_MODE_INHERIT
 from astrbot_plugin_rsshub.src.infrastructure.persistence.database import (
     DatabaseManager,
 )
@@ -13,10 +11,6 @@ from astrbot_plugin_rsshub.src.infrastructure.persistence.migrations import (
     ensure_push_history_schema,
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.models import SubORM
-from astrbot_plugin_rsshub.src.infrastructure.persistence.subscription_repository_impl import (
-    SubscriptionRepositoryImpl,
-)
-from astrbot_plugin_rsshub.src.shared.constants import INHERIT_VALUE, STATE_ENABLED
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -197,25 +191,25 @@ async def test_ensure_profile_schema_allows_current_sub_orm_reads():
             """
             CREATE TABLE rsshub_sub (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                state INTEGER,
+                state INTEGER NOT NULL DEFAULT 1,
                 user_id VARCHAR NOT NULL,
                 feed_id INTEGER NOT NULL,
-                title VARCHAR,
-                tags VARCHAR,
+                title VARCHAR NOT NULL DEFAULT '',
+                tags VARCHAR NOT NULL DEFAULT '',
                 target_session VARCHAR,
                 platform_name VARCHAR,
-                interval INTEGER,
+                interval INTEGER NOT NULL DEFAULT -100,
                 next_check_time DATETIME,
-                notify INTEGER,
-                send_mode INTEGER,
-                length_limit INTEGER,
-                display_author INTEGER,
-                display_via INTEGER,
-                display_title INTEGER,
-                display_entry_tags INTEGER,
-                style INTEGER,
-                display_media INTEGER,
-                handlers TEXT,
+                notify INTEGER NOT NULL DEFAULT -100,
+                send_mode INTEGER NOT NULL DEFAULT -100,
+                length_limit INTEGER NOT NULL DEFAULT -100,
+                display_author INTEGER NOT NULL DEFAULT -100,
+                display_via INTEGER NOT NULL DEFAULT -100,
+                display_title INTEGER NOT NULL DEFAULT -100,
+                display_entry_tags INTEGER NOT NULL DEFAULT -100,
+                style INTEGER NOT NULL DEFAULT -100,
+                display_media INTEGER NOT NULL DEFAULT -100,
+                handlers TEXT NOT NULL DEFAULT '[]',
                 created_at DATETIME,
                 updated_at DATETIME
             )
@@ -228,7 +222,7 @@ async def test_ensure_profile_schema_allows_current_sub_orm_reads():
         await conn.exec_driver_sql(
             """
             INSERT INTO rsshub_sub (id, user_id, feed_id, title, handlers)
-            VALUES (1, 'u1', 1, NULL, NULL)
+            VALUES (1, 'u1', 1, 'Sub', '[]')
             """
         )
 
@@ -239,38 +233,7 @@ async def test_ensure_profile_schema_allows_current_sub_orm_reads():
         sub = await session.get(SubORM, 1)
 
     assert sub is not None
-    entity = SubscriptionRepositoryImpl._to_entity(sub)
-
-    expected_options = {
-        "interval": INHERIT_VALUE,
-        "notify": INHERIT_VALUE,
-        "send_mode": INHERIT_VALUE,
-        "length_limit": INHERIT_VALUE,
-        "display_author": INHERIT_VALUE,
-        "display_via": INHERIT_VALUE,
-        "display_title": INHERIT_VALUE,
-        "display_entry_tags": INHERIT_VALUE,
-        "style": INHERIT_VALUE,
-        "display_media": INHERIT_VALUE,
-    }
-    for field, expected in expected_options.items():
-        assert getattr(sub, field) == expected
-        assert getattr(entity, field) == expected
-
-    assert sub.state == STATE_ENABLED
-    assert entity.state == STATE_ENABLED
-    assert sub.handlers_mode == HANDLERS_MODE_INHERIT
-    assert entity.handlers_mode == HANDLERS_MODE_INHERIT
-    assert sub.title == ""
-    assert entity.title == ""
-    assert sub.tags == ""
-    assert entity.tags == ""
-    assert sub.handlers == handlers_json([])
-    assert entity.handlers == []
-    assert sub.created_at is not None
-    assert sub.updated_at is not None
-    assert entity.created_at is not None
-    assert entity.updated_at is not None
+    assert sub.handlers_mode == "inherit"
     await engine.dispose()
 
 

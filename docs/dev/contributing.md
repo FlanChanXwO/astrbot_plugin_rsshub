@@ -50,7 +50,7 @@
 最重要的几条：
 
 - `main.py` 与 `bootstrap.py` 的职责不能混
-- 配置模型只认 `src/infrastructure/config/datamodels.py` 与 `src/infrastructure/config/config_loader.py`；共享常量只认 `src/shared/constants.py`
+- 配置模型位于 `src/infrastructure/config/models/`：持久化配置在 `plugin_config_models.py`，运行态设置在 `runtime_settings.py`，sender 策略兼容在 `sender_strategy_models.py`；`src/infrastructure/config/datamodels.py` 仅保留兼容导出。共享常量只认 `src/shared/constants.py`
 - 订阅/用户配置只认 `-100` 继承
 - `handlers` 是当前内容处理入口，不要把旧翻译管道加回来
 - Plugin Pages 不负责新建订阅和 TOML 导入导出

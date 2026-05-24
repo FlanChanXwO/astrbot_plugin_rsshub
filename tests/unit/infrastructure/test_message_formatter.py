@@ -13,6 +13,7 @@ from astrbot_plugin_rsshub.src.infrastructure.pipeline import (
     MessageComponentSorter,
     MessageFormatter,
 )
+from pathlib import Path
 
 from astrbot.api.message_components import Plain
 
@@ -285,3 +286,50 @@ async def test_html_parser_builds_ordered_layout_fragments():
         ("text", "Caption", ""),
         ("video", "", "https://example.com/2.mp4"),
     ]
+
+
+# ------------------------------------------------------------------
+# GIF conversion dispatch regression
+# ------------------------------------------------------------------
+
+
+def test_sorter_video_gif_becomes_image_component():
+    """video + *.gif PreparedMedia 应生成 kind=media, media_type=image 组件。"""
+    sorter = MessageComponentSorter()
+    components = sorter.build_components(
+        prepared_media=[
+            PreparedMedia(
+                media_type="video",
+                original_url="https://example.com/video.mp4",
+                local_path=Path("/tmp/video.gif"),
+            )
+        ],
+        text="hello",
+        failed_urls=[],
+        platform="onebot",
+    )
+    assert [(item.kind, item.media_type, item.file) for item in components] == [
+        ("media", "image", "/tmp/video.gif"),
+        ("text", "", ""),
+    ]
+    assert all(item.text == "hello" for item in components if item.kind == "text")
+
+
+def test_formatter_build_components_gif_conversion():
+    """MessageFormatter.build_components 对 video + *.gif 应生成 media_type=image 组件。"""
+    formatter = MessageFormatter()
+    components = formatter.build_components(
+        prepared_media=[
+            PreparedMedia(
+                media_type="video",
+                original_url="https://example.com/video.mp4",
+                local_path=Path("/tmp/video.gif"),
+            )
+        ],
+        text="hello",
+        failed_urls=[],
+        platform="",
+    )
+    media_items = [(c.kind, c.media_type, c.file) for c in components if c.kind == "media"]
+    assert media_items == [("media", "image", "/tmp/video.gif")]
+    assert all(c.text == "hello" for c in components if c.kind == "text")

@@ -20,6 +20,7 @@ from astrbot.core.utils.http_ssl import build_tls_connector
 from ..utils import get_plugin_cache_dir
 from ..utils.ffmpeg_helper import FFmpegTool
 from ..utils.logger import get_logger
+from ..utils.media_integrity import validate_media_file
 
 logger = get_logger()
 
@@ -37,10 +38,30 @@ class MediaDownloader:
         ".gif",
         ".webp",
         ".mp4",
+        ".webm",
+        ".mov",
+        ".mkv",
+        ".avi",
         ".mp3",
         ".ogg",
+        ".wav",
+        ".m4a",
+        ".aac",
         ".bin",
     )
+
+    @classmethod
+    def configure_cache(
+        cls,
+        *,
+        ttl_seconds: int,
+        gc_interval_seconds: int,
+        gc_grace_seconds: int,
+    ) -> None:
+        """Configure media success-cache timing thresholds."""
+        cls._CACHE_TTL_SECONDS = max(1, int(ttl_seconds))
+        cls._CACHE_GC_INTERVAL_SECONDS = max(1, int(gc_interval_seconds))
+        cls._CACHE_GC_GRACE_SECONDS = max(0, int(gc_grace_seconds))
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         if cache_dir is None:
@@ -65,10 +86,24 @@ class MediaDownloader:
             return ".webp"
         if ".mp4" in lowered:
             return ".mp4"
+        if ".webm" in lowered:
+            return ".webm"
+        if ".mov" in lowered:
+            return ".mov"
+        if ".mkv" in lowered:
+            return ".mkv"
+        if ".avi" in lowered:
+            return ".avi"
         if ".mp3" in lowered:
             return ".mp3"
         if ".ogg" in lowered:
             return ".ogg"
+        if ".wav" in lowered:
+            return ".wav"
+        if ".m4a" in lowered:
+            return ".m4a"
+        if ".aac" in lowered:
+            return ".aac"
         return ".bin"
 
     @staticmethod
@@ -183,6 +218,12 @@ class MediaDownloader:
     def _cache_meta_path(self, url: str) -> Path:
         digest = self._cache_file_prefix(url)
         return self._cache_dir / f"{digest}.meta"
+
+    def _delete_cache_entry(self, url: str) -> None:
+        digest = self._cache_file_prefix(url)
+        self.safe_unlink(self._cache_meta_path(url))
+        for suffix in self._CACHE_MEDIA_SUFFIXES:
+            self.safe_unlink(self._cache_dir / f"{digest}{suffix}")
 
     def _stale_orphan_age_threshold(self) -> int:
         return self._CACHE_TTL_SECONDS + self._CACHE_GC_GRACE_SECONDS
@@ -336,6 +377,41 @@ class MediaDownloader:
         logger.debug("Media cache hit: url=%s, file=%s", url, file_path)
         return file_path
 
+    async def _read_valid_cache(
+        self,
+        url: str,
+        *,
+        media_type: str | None,
+    ) -> Path | None:
+        cached = self._read_cache(url)
+        if cached is None:
+            return None
+
+        validation = await validate_media_file(
+            cached,
+            media_type=media_type,
+            timeout_seconds=10,
+        )
+        if validation.ok:
+            return cached
+
+        logger.warning(
+            "Media cache validation failed, removing cache: url=%s, path=%s, detail=%s",
+            url,
+            cached,
+            validation.detail,
+        )
+        self._delete_cache_entry(url)
+        return None
+
+    @staticmethod
+    def _validation_type_for_path(path: Path, media_type: str | None) -> str | None:
+        if str(media_type or "").strip().lower() != "video":
+            return media_type
+        if path.suffix.lower() == ".gif":
+            return "image"
+        return media_type
+
     def _write_cache(self, url: str, source: Path) -> Path:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         actual_suffix = (
@@ -384,7 +460,7 @@ class MediaDownloader:
         cache_url = f"{url}#mp4"
 
         async with self._cache_io_lock:
-            cached = self._read_cache(cache_url)
+            cached = await self._read_valid_cache(cache_url, media_type="video")
             if cached is not None:
                 logger.debug(
                     "Media cache return existing m3u8: url=%s, path=%s",
@@ -438,6 +514,18 @@ class MediaDownloader:
             detail = f", last_error={last_error}" if last_error else ""
             raise RuntimeError(f"m3u8 download failed: {url}{detail}")
 
+        validation = await validate_media_file(
+            cache_path,
+            media_type="video",
+            timeout_seconds=10,
+        )
+        if not validation.ok:
+            self.safe_unlink(cache_path)
+            raise RuntimeError(
+                f"m3u8 download produced invalid video: {url}, "
+                f"detail={validation.detail}"
+            )
+
         expire_ts = time.time() + self._CACHE_TTL_SECONDS
         meta_path.write_text(str(expire_ts), encoding="utf-8")
 
@@ -455,6 +543,7 @@ class MediaDownloader:
         url: str,
         timeout_seconds: int = 30,
         proxy: str = "",
+        media_type: str | None = None,
         try_convert_gif: bool = False,
         gif_transcode_timeout: int = 60,
         m3u8_timeout: int = 120,
@@ -465,6 +554,7 @@ class MediaDownloader:
             url: 媒体URL
             timeout_seconds: 下载超时
             proxy: 代理地址
+            media_type: 调用方已知媒体类型（image/video/audio/file）
             try_convert_gif: 是否尝试将无声视频转为GIF
             gif_transcode_timeout: GIF转码超时
             m3u8_timeout: m3u8下载超时
@@ -494,6 +584,23 @@ class MediaDownloader:
 
         async with self._cache_io_lock:
             cached = self._read_cache(cache_url)
+            if cached is not None:
+                validation_type = self._validation_type_for_path(cached, media_type)
+                validation = await validate_media_file(
+                    cached,
+                    media_type=validation_type,
+                    timeout_seconds=10,
+                )
+                if not validation.ok:
+                    logger.warning(
+                        "Media cache validation failed, removing cache: "
+                        "url=%s, path=%s, detail=%s",
+                        cache_url,
+                        cached,
+                        validation.detail,
+                    )
+                    self._delete_cache_entry(cache_url)
+                    cached = None
             if cached is not None:
                 logger.debug(
                     "Media cache return existing: url=%s, path=%s",
@@ -565,12 +672,42 @@ class MediaDownloader:
             async with self._cache_io_lock:
                 cached = self._read_cache(cache_url)
                 if cached is not None:
+                    validation_type = self._validation_type_for_path(cached, media_type)
+                    validation = await validate_media_file(
+                        cached,
+                        media_type=validation_type,
+                        timeout_seconds=10,
+                    )
+                    if not validation.ok:
+                        logger.warning(
+                            "Media cache peer write validation failed, "
+                            "removing cache: url=%s, path=%s, detail=%s",
+                            cache_url,
+                            cached,
+                            validation.detail,
+                        )
+                        self._delete_cache_entry(cache_url)
+                        cached = None
+                if cached is not None:
                     logger.debug(
                         "Media cache filled by peer task: url=%s, path=%s",
                         cache_url,
                         cached,
                     )
                     return cached
+                validation_type = (
+                    "image" if converted_path.suffix.lower() == ".gif" else media_type
+                )
+                validation = await validate_media_file(
+                    converted_path,
+                    media_type=validation_type,
+                    timeout_seconds=10,
+                )
+                if not validation.ok:
+                    raise RuntimeError(
+                        f"media validation failed before cache: url={url}, "
+                        f"detail={validation.detail}"
+                    )
                 written = self._write_cache(cache_url, converted_path)
                 logger.debug(
                     "Media cache return new write: url=%s, path=%s",

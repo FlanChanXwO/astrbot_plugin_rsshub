@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 from astrbot_plugin_rsshub.src.domain.entities.content_types import LayoutFragment
+from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.base_sender import (
+    DefaultMessageSender,
+)
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.factory import (
     get_sender_for_platform,
 )
@@ -66,6 +69,13 @@ def _patch_components(monkeypatch) -> None:
     monkeypatch.setattr(module, "File", _File, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_sender_behavior():
+    DefaultMessageSender.configure_behavior()
+    yield
+    DefaultMessageSender.configure_behavior()
+
+
 def _request() -> SendRequest:
     return SendRequest(
         session_id="default:UserMessage:1",
@@ -109,7 +119,7 @@ async def test_qq_official_plain_text_uses_single_send(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_qq_official_sends_media_before_text(monkeypatch):
+async def test_qq_official_sends_multimedia_as_files_before_text(monkeypatch):
     _patch_components(monkeypatch)
     sender = QQOfficialMessageSender()
     calls: list[list] = []
@@ -126,7 +136,9 @@ async def test_qq_official_sends_media_before_text(monkeypatch):
     )
 
     assert result.ok is True
-    assert [type(chain[0]) for chain in calls] == [_Image, _Video, _Plain]
+    assert [type(chain[0]) for chain in calls] == [_File, _File, _Plain]
+    assert calls[0][0].file == "/tmp/1.jpg"
+    assert calls[1][0].file == "/tmp/2.mp4"
     assert calls[-1][0].text == "entry text"
 
 
@@ -209,7 +221,7 @@ async def test_qq_official_original_style_pairs_image_with_following_text(monkey
 
 
 @pytest.mark.asyncio
-async def test_qq_official_partial_media_failure_continues_and_appends_url(
+async def test_qq_official_file_degrade_failure_continues_and_appends_url(
     monkeypatch,
 ):
     _patch_components(monkeypatch)
@@ -218,8 +230,8 @@ async def test_qq_official_partial_media_failure_continues_and_appends_url(
 
     async def fake_send_chain(session_id: str, chain: list):
         calls.append(chain)
-        if isinstance(chain[0], _Image):
-            return SendResult(ok=False, transient=True, detail="image failed")
+        if isinstance(chain[0], _File) and chain[0].file == "/tmp/1.jpg":
+            return SendResult(ok=False, transient=True, detail="file failed")
         return SendResult(ok=True)
 
     monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
@@ -232,10 +244,115 @@ async def test_qq_official_partial_media_failure_continues_and_appends_url(
     assert result.ok is False
     assert result.transient is True
     assert "partial send" in result.detail
-    assert [type(chain[0]) for chain in calls] == [_Image, _Video, _Plain]
+    assert [type(chain[0]) for chain in calls] == [_File, _File, _Plain]
     assert "媒体原始链接:" in calls[-1][0].text
     assert "https://example.com/1.jpg" in calls[-1][0].text
     assert "https://example.com/2.mp4" not in calls[-1][0].text
+
+
+@pytest.mark.asyncio
+async def test_qq_official_single_image_failure_tries_file_then_link(monkeypatch):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_degrade_strategy="file_then_link",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        if isinstance(chain[0], _Image):
+            return SendResult(ok=False, transient=True, detail="image failed")
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="image",
+                    original_url="https://example.com/1.jpg",
+                    local_path=Path("/tmp/1.jpg"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is False
+    assert "partial send" in result.detail
+    assert [type(chain[0]) for chain in calls] == [_Image, _File, _Plain]
+    assert calls[1][0].file == "/tmp/1.jpg"
+    assert calls[2][0].text == "entry text"
+
+
+@pytest.mark.asyncio
+async def test_qq_official_single_image_failure_can_fail_without_link_fallback(
+    monkeypatch,
+):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_degrade_strategy="fail",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        return SendResult(ok=False, transient=False, detail="image rejected")
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="image",
+                    original_url="https://example.com/1.jpg",
+                    local_path=Path("/tmp/1.jpg"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is False
+    assert result.detail == "image rejected"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_qq_official_media_threshold_link_only_degrade(monkeypatch):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_media_threshold=1,
+        qq_official_degrade_strategy="link_only",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        _request(),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is True
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], _Plain)
+    assert "媒体原始链接:" in calls[0][0].text
+    assert "https://example.com/1.jpg" in calls[0][0].text
+    assert "https://example.com/2.mp4" in calls[0][0].text
 
 
 @pytest.mark.asyncio
@@ -475,3 +592,136 @@ async def test_telegram_telegraph_uses_entry_title_and_plain_url(monkeypatch):
     assert isinstance(calls[0][0], _Plain)
     assert "https://telegra.ph/entry-title" in calls[0][0].text
     assert "Telegraph:" not in calls[0][0].text
+
+
+# ------------------------------------------------------------------
+# GIF conversion regression
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_qq_official_gif_from_video_counts_as_single_image_with_text(monkeypatch):
+    """转换 GIF（video + *.gif）在 QQ Official 中应与单图+文本合发。"""
+    _patch_components(monkeypatch)
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/video.mp4",
+                    local_path=Path("/tmp/video.gif"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is True
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], _Image)
+    assert isinstance(calls[0][1], _Plain)
+    assert calls[0][1].text == "entry text"
+
+
+@pytest.mark.asyncio
+async def test_qq_official_original_style_gif_from_layout_matches_prepared(monkeypatch):
+    """style=original 中 layout URL 命中转换后的 PreparedMedia 时按图片发送。"""
+    _patch_components(monkeypatch)
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    prepared = [
+        PreparedMedia(
+            media_type="video",
+            original_url="https://example.com/video.gif",
+            local_path=Path("/tmp/video.gif"),
+        )
+    ]
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="fallback",
+            prepared_media=prepared,
+            layout=[
+                LayoutFragment(
+                    kind="video",
+                    media_type="video",
+                    url="https://example.com/video.gif",
+                ),
+                LayoutFragment(kind="text", text="caption"),
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official", style=2),
+    )
+
+    assert result.ok is True
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], _Image)
+    assert isinstance(calls[0][1], _Plain)
+    assert calls[0][1].text == "caption"
+
+
+@pytest.mark.asyncio
+async def test_qq_official_original_style_gif_from_downloaded_media(monkeypatch):
+    """真实推送路径中 request.media 预下载成 GIF 后，original layout 也按图片发送。"""
+    _patch_components(monkeypatch)
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_prepare_media(media, timeout=30, proxy=""):
+        assert media == [("video", "https://example.com/video.mp4")]
+        return [
+            PreparedMedia(
+                media_type="video",
+                original_url="https://example.com/video.mp4",
+                local_path=Path("/tmp/video.gif"),
+            )
+        ]
+
+    async def fake_send_chain(session_id: str, chain: list):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "prepare_media", fake_prepare_media)
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="fallback",
+            media=[("video", "https://example.com/video.mp4")],
+            layout=[
+                LayoutFragment(
+                    kind="video",
+                    media_type="video",
+                    url="https://example.com/video.mp4",
+                ),
+                LayoutFragment(kind="text", text="caption"),
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official", style=2),
+    )
+
+    assert result.ok is True
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], _Image)
+    assert calls[0][0].file == "/tmp/video.gif"
+    assert isinstance(calls[0][1], _Plain)

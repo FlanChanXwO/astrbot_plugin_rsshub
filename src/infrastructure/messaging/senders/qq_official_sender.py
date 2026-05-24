@@ -157,7 +157,9 @@ class QQOfficialMessageSender(DefaultMessageSender):
         first_failure: SendResult,
     ) -> SendResult:
         image_component = next(
-            item for item in components if item.kind == "media" and item.media_type == "image"
+            item
+            for item in components
+            if item.kind == "media" and item.media_type == "image"
         )
         strategy = self._get_qq_official_degrade_strategy()
         if strategy == QQ_OFFICIAL_DEGRADE_STRATEGY_FAIL:
@@ -197,7 +199,9 @@ class QQOfficialMessageSender(DefaultMessageSender):
         failed_urls = [
             item.original_url for item in components if self._is_media_component(item)
         ]
-        return await self._send_failed_media_links_text(request, components, failed_urls)
+        return await self._send_failed_media_links_text(
+            request, components, failed_urls
+        )
 
     async def _send_file_then_link_degrade(
         self,

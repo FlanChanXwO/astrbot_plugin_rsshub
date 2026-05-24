@@ -158,7 +158,9 @@ async def test_media_downloader_m3u8_tries_wrapped_and_inner_url(
     async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
         return True
 
-    monkeypatch.setattr(FFmpegTool, "has_valid_video_stream", fake_has_valid_video_stream)
+    monkeypatch.setattr(
+        FFmpegTool, "has_valid_video_stream", fake_has_valid_video_stream
+    )
 
     downloader = MediaDownloader(cache_dir=tmp_path)
     path = await downloader.get_or_download(url=wrapped_url)

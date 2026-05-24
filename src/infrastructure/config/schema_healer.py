@@ -178,9 +178,7 @@ def _normalize_template_list_value(
                 record_config_heal(changes, child_path, "added missing default")
         for key in item:
             if key != "__template_key" and key not in template_items:
-                record_config_heal(
-                    changes, f"{item_path}.{key}", "removed unknown key"
-                )
+                record_config_heal(changes, f"{item_path}.{key}", "removed unknown key")
         normalized.append(normalized_item)
     return normalized
 

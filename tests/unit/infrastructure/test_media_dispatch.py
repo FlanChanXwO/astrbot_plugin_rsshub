@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from astrbot_plugin_rsshub.src.domain.entities.content_types import LayoutFragment
-from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import PreparedMedia
+from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
+    PreparedMedia,
+)
 from astrbot_plugin_rsshub.src.infrastructure.utils.media_dispatch import (
-    MediaDispatchInfo,
     MediaDispatchResolver,
 )
 

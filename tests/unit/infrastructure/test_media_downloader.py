@@ -8,6 +8,13 @@ from astrbot_plugin_rsshub.src.infrastructure.media.media_downloader import (
 )
 from astrbot_plugin_rsshub.src.infrastructure.utils.ffmpeg_helper import FFmpegTool
 
+_VALID_GIF = (
+    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00"
+    b"\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,"
+    b"\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02"
+    b"D\x01\x00;"
+)
+
 
 @pytest.mark.asyncio
 async def test_media_downloader_retries_after_download_failures(
@@ -71,22 +78,51 @@ async def test_media_downloader_keeps_success_cache(
     async def fake_download(self, **kwargs):
         nonlocal calls
         calls += 1
-        path = tmp_path / f"source-{calls}.jpg"
-        path.write_bytes(f"image-{calls}".encode())
+        path = tmp_path / f"source-{calls}.gif"
+        path.write_bytes(_VALID_GIF)
         return path
 
     monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
 
     first = MediaDownloader(cache_dir=tmp_path)
-    first_path = await first.get_or_download(url="https://example.com/a.jpg")
+    first_path = await first.get_or_download(url="https://example.com/a.gif")
 
     second = MediaDownloader(cache_dir=tmp_path)
-    second_path = await second.get_or_download(url="https://example.com/a.jpg")
+    second_path = await second.get_or_download(url="https://example.com/a.gif")
 
     assert calls == 1
     assert first_path == second_path
-    assert second_path.read_bytes() == b"image-1"
+    assert second_path.read_bytes() == _VALID_GIF
     assert not list(tmp_path.glob("*.fail"))
+
+
+@pytest.mark.asyncio
+async def test_media_downloader_discards_invalid_success_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls = 0
+
+    async def fake_download(self, **kwargs):
+        nonlocal calls
+        calls += 1
+        path = tmp_path / f"source-{calls}.gif"
+        path.write_bytes(b"not an image" if calls == 1 else _VALID_GIF)
+        return path
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+
+    first = MediaDownloader(cache_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="media validation failed"):
+        await first.get_or_download(url="https://example.com/a.gif", media_type="image")
+
+    second = MediaDownloader(cache_dir=tmp_path)
+    path = await second.get_or_download(
+        url="https://example.com/a.gif", media_type="image"
+    )
+
+    assert calls == 2
+    assert path.read_bytes() == _VALID_GIF
 
 
 @pytest.mark.asyncio
@@ -117,6 +153,13 @@ async def test_media_downloader_m3u8_tries_wrapped_and_inner_url(
         FFmpegTool,
         "download_m3u8_to_mp4",
         fake_download_m3u8_to_mp4,
+    )
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        FFmpegTool, "has_valid_video_stream", fake_has_valid_video_stream
     )
 
     downloader = MediaDownloader(cache_dir=tmp_path)

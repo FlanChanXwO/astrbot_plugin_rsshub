@@ -15,6 +15,7 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
         "basic_config",
         "content_handlers",
         "ffmpeg",
+        "http_config",
         "route_knowledge",
         "sender_strategies",
     }
@@ -76,11 +77,8 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
 
     basic_config_items = schema["basic_config"]["items"]
     assert "download_media_before_send" not in basic_config_items
-    assert basic_config_items["timeout"]["slider"] == {
-        "min": 1,
-        "max": 300,
-        "step": 1,
-    }
+    assert "proxy" not in basic_config_items
+    assert "timeout" not in basic_config_items
     assert basic_config_items["minimal_interval"]["slider"] == {
         "min": 1,
         "max": 1440,
@@ -101,9 +99,18 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
         "max": 10,
         "step": 1,
     }
-    assert basic_config_items["download_media_timeout"]["slider"] == {
+    assert "download_media_timeout" not in basic_config_items
+
+    http_config_items = schema["http_config"]["items"]
+    assert set(http_config_items) == {"proxy", "timeout", "media_timeout"}
+    assert http_config_items["timeout"]["slider"] == {
         "min": 1,
         "max": 300,
+        "step": 1,
+    }
+    assert http_config_items["media_timeout"]["slider"] == {
+        "min": 1,
+        "max": 1800,
         "step": 1,
     }
 

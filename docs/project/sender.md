@@ -92,7 +92,9 @@ Telegram Bot API 对 photo 有大小上限。发送前如果本地图片文件�
 
 ### m3u8 / HLS 视频
 
-媒体发送始终先预下载到本地成功缓存；下载失败不会写入失败缓存，下一次推送会重新尝试。m3u8/HLS 链接会交给 FFmpeg 合并为 MP4，并沿用标准化后的 `basic_config.proxy` 作为 FFmpeg HTTP 代理参数；裸 `host:port` 会按 `http://host:port` 处理。下载流程不只检查文件非空，还会用 ffprobe 校验输出文件存在视频流且时长大于 0；校验失败会删除坏文件，并沿用媒体下载失败路径，让 sender 追加原始链接或按平台能力降级，而不是缓存 0 秒视频。
+媒体发送始终先预下载到本地成功缓存；下载失败不会写入失败缓存，下一次推送会重新尝试。m3u8/HLS 链接会交给 FFmpeg 合并为 MP4，并沿用标准化后的 `http_config.proxy` 作为 FFmpeg HTTP 代理参数；裸 `host:port` 会按 `http://host:port` 处理。`http_config.media_timeout` 控制媒体预下载和 FFmpeg 下载超时，上限 1800 秒。下载流程不只检查文件非空，还会用 `media_integrity` 验证图片头/可选 Pillow 完整性，并用 ffprobe 校验视频流与时长；校验失败会删除坏缓存，并沿用媒体下载失败路径，让 sender 追加原始链接或按平台能力降级，而不是缓存坏文件。
+
+平台限制默认值集中在 `src/shared/constants.py`。OneBot 默认优先发送本地视频文件，避免 NapCat/OneBot 端自行拉取远程 m3u8 失败；Telegram photo 阈值默认 10 MiB，超限图片按文件发送；QQ Official 对视频和多媒体优先尝试本地文件发送，失败时保留 partial 结果并在文本中暴露失败媒体链接。
 
 ## 媒体 fingerprint
 

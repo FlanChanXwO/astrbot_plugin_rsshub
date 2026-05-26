@@ -22,16 +22,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ....domain.entities.handlers import handlers_json
-from ....domain.entities.subscription import (
-    HANDLERS_MODE_INHERIT,
-    HANDLERS_MODE_OVERRIDE,
-)
-from ....shared.constants import INHERIT_VALUE, STATE_ENABLED, USER_STATE_USER
 from ...utils import get_logger
 
 logger = get_logger()
-DEFAULT_HANDLERS_JSON = handlers_json([])
 
 # 匹配迁移文件名: V1_init.py
 _MIGRATION_PATTERN = re.compile(r"^V(\d+)_.+\.py$")
@@ -355,33 +348,6 @@ async def ensure_profile_schema(conn) -> list[str]:
         result = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
         return {str(row[1]) for row in result.fetchall()}
 
-    async def _fill_nulls(
-        table: str, columns: set[str], defaults: dict[str, Any]
-    ) -> list[str]:
-        fixed: list[str] = []
-        for column, default in defaults.items():
-            if column not in columns:
-                continue
-            result = await conn.exec_driver_sql(
-                f"UPDATE {table} SET {column} = ? WHERE {column} IS NULL",
-                (default,),
-            )
-            if result.rowcount and result.rowcount > 0:
-                fixed.append(f"{table}.{column}.nulls")
-        return fixed
-
-    async def _fill_timestamp_nulls(table: str, columns: set[str]) -> list[str]:
-        fixed: list[str] = []
-        for column in ("created_at", "updated_at"):
-            if column not in columns:
-                continue
-            result = await conn.exec_driver_sql(
-                f"UPDATE {table} SET {column} = CURRENT_TIMESTAMP WHERE {column} IS NULL"
-            )
-            if result.rowcount and result.rowcount > 0:
-                fixed.append(f"{table}.{column}.nulls")
-        return fixed
-
     applied: list[str] = []
 
     if await _table_exists("rsshub_user"):
@@ -392,33 +358,6 @@ async def ensure_profile_schema(conn) -> list[str]:
             )
             applied.append("rsshub_user.handlers")
             logger.info("数据库 schema 自愈: 为 rsshub_user 添加 handlers 字段")
-            user_columns.add("handlers")
-        fixed = await _fill_nulls(
-            "rsshub_user",
-            user_columns,
-            {
-                "state": USER_STATE_USER,
-                "interval": INHERIT_VALUE,
-                "notify": INHERIT_VALUE,
-                "send_mode": INHERIT_VALUE,
-                "handlers": DEFAULT_HANDLERS_JSON,
-                "length_limit": INHERIT_VALUE,
-                "display_author": INHERIT_VALUE,
-                "display_via": INHERIT_VALUE,
-                "display_title": INHERIT_VALUE,
-                "display_entry_tags": INHERIT_VALUE,
-                "style": INHERIT_VALUE,
-                "display_media": INHERIT_VALUE,
-                "needs_binding_notice": 0,
-            },
-        )
-        if fixed:
-            applied.extend(fixed)
-            logger.info("数据库 schema 自愈: 修正 rsshub_user 的 NULL 配置字段")
-        fixed = await _fill_timestamp_nulls("rsshub_user", user_columns)
-        if fixed:
-            applied.extend(fixed)
-            logger.info("数据库 schema 自愈: 修正 rsshub_user 的 NULL 时间字段")
 
     if await _table_exists("rsshub_sub"):
         sub_columns = await _column_names("rsshub_sub")
@@ -431,18 +370,18 @@ async def ensure_profile_schema(conn) -> list[str]:
             sub_columns.add("handlers")
         if "handlers_mode" not in sub_columns:
             await conn.exec_driver_sql(
-                f"ALTER TABLE rsshub_sub ADD COLUMN handlers_mode TEXT NOT NULL DEFAULT '{HANDLERS_MODE_INHERIT}'"
+                "ALTER TABLE rsshub_sub ADD COLUMN handlers_mode TEXT NOT NULL DEFAULT 'inherit'"
             )
             await conn.exec_driver_sql(
-                f"""
+                """
                 UPDATE rsshub_sub
                 SET handlers_mode = CASE
-                    WHEN handlers IS NULL THEN '{HANDLERS_MODE_INHERIT}'
-                    WHEN json_valid(handlers) AND json_array_length(handlers) = 0 THEN '{HANDLERS_MODE_INHERIT}'
+                    WHEN handlers IS NULL THEN 'inherit'
+                    WHEN json_valid(handlers) AND json_array_length(handlers) = 0 THEN 'inherit'
                     WHEN NOT json_valid(handlers) AND REPLACE(
                         REPLACE(
                             REPLACE(
-                                REPLACE(TRIM(COALESCE(handlers, '{DEFAULT_HANDLERS_JSON}')), ' ', ''),
+                                REPLACE(TRIM(COALESCE(handlers, '[]')), ' ', ''),
                                 CHAR(10),
                                 ''
                             ),
@@ -451,42 +390,13 @@ async def ensure_profile_schema(conn) -> list[str]:
                         ),
                         CHAR(9),
                         ''
-                    ) IN ('', '{DEFAULT_HANDLERS_JSON}') THEN '{HANDLERS_MODE_INHERIT}'
-                    ELSE '{HANDLERS_MODE_OVERRIDE}'
+                    ) IN ('', '[]') THEN 'inherit'
+                    ELSE 'override'
                 END
                 """
             )
             applied.append("rsshub_sub.handlers_mode")
             logger.info("数据库 schema 自愈: 为 rsshub_sub 添加 handlers_mode 字段")
-            sub_columns.add("handlers_mode")
-        fixed = await _fill_nulls(
-            "rsshub_sub",
-            sub_columns,
-            {
-                "state": STATE_ENABLED,
-                "title": "",
-                "tags": "",
-                "interval": INHERIT_VALUE,
-                "notify": INHERIT_VALUE,
-                "send_mode": INHERIT_VALUE,
-                "handlers": DEFAULT_HANDLERS_JSON,
-                "handlers_mode": HANDLERS_MODE_INHERIT,
-                "length_limit": INHERIT_VALUE,
-                "display_author": INHERIT_VALUE,
-                "display_via": INHERIT_VALUE,
-                "display_title": INHERIT_VALUE,
-                "display_entry_tags": INHERIT_VALUE,
-                "style": INHERIT_VALUE,
-                "display_media": INHERIT_VALUE,
-            },
-        )
-        if fixed:
-            applied.extend(fixed)
-            logger.info("数据库 schema 自愈: 修正 rsshub_sub 的 NULL 配置字段")
-        fixed = await _fill_timestamp_nulls("rsshub_sub", sub_columns)
-        if fixed:
-            applied.extend(fixed)
-            logger.info("数据库 schema 自愈: 修正 rsshub_sub 的 NULL 时间字段")
 
     return applied
 

@@ -24,7 +24,6 @@
 - 项目与架构：[`docs/project/README.md`](./docs/project/README.md)
 - 开发与贡献：[`docs/dev/README.md`](./docs/dev/README.md)
 - 使用文档索引：[`docs/usage/README.md`](./docs/usage/README.md)
-- 插件讨论群：https://qm.qq.com/q/2KRsO8usbe
 
 > 当前 `usage/` 目录还在逐步拆分中。命令、配置和管理页说明目前仍以本 README 为主。
 
@@ -117,9 +116,7 @@
 
 | 配置项 | 类型 | 说明 | 默认值 |
 |--------|------|------|--------|
-| `proxy` | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890`；填写 `localhost:7890` 这类裸地址时会按 `http://localhost:7890` 处理，媒体预下载和 FFmpeg m3u8/HLS 下载也会使用该代理 | `""` |
 | `rsshub_base_url` | 字符串 | 默认 RSSHub 域名，用于路由检索与订阅链接拼接 | `https://rsshub.app` |
-| `timeout` | 整数 | 请求超时（秒），获取 RSS 源时的 HTTP 请求超时时间 | `30` |
 | `minimal_interval` | 整数 | 最小监控间隔（分钟）。这是保存期硬限制：命令、Web API、Plugin Pages 在写入订阅/默认配置时都不得保存更小值；不是仅运行时兜底。 | `1` |
 | `hash_history_min` | 整数 | 去重历史最小保留数量，避免历史回流重复推送 | `500` |
 | `hash_history_multiplier` | 整数 | 去重历史增长倍数，动态扩展历史窗口 | `2` |
@@ -130,7 +127,16 @@
 | `deduplicate_multi_bot` | 布尔值 | 单会话多 BOT 去重。仅当多个目标落在同一 `target_session`，且最终发送 payload 等价时才压重；被压掉的记录写入 `skipped` push history 作为审计。 | `true` |
 | `bootstrap_skip_history` | 布尔值 | 首轮是否跳过历史条目，开启后首次仅建立去重历史不推送旧消息 | `true` |
 | `history_entry_limit` | 整数 | 历史条目推送限制，0=不限制 | `0` |
-| `download_media_timeout` | 整数 | 媒体下载超时（秒），m3u8/HLS 建议 60-180 秒 | `30` |
+
+### HTTP 网络配置 (`http_config`)
+
+`http_config.proxy` 会同时用于 RSS 拉取、媒体预下载和 FFmpeg m3u8/HLS 下载。媒体发送始终先下载到本地成功缓存；失败下载不写入失败缓存。平台限制、缓存 GC、媒体完整性校验和降级策略由 `src/shared/constants.py` 的内置策略统一维护，不作为用户配置项暴露。
+
+| 配置项 | 类型 | 说明 | 默认值 |
+|--------|------|------|--------|
+| `proxy` | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890`；填写 `localhost:7890` 这类裸地址时会按 `http://localhost:7890` 处理 | `""` |
+| `timeout` | 整数 | RSS 拉取和普通 HTTP 请求超时（秒） | `30` |
+| `media_timeout` | 整数 | 媒体预下载、m3u8/HLS 合并与 FFmpeg 下载超时（秒），上限 1800 秒 | `30` |
 
 ### RSSHub Routes 知识库 (`route_knowledge`)
 
@@ -200,11 +206,11 @@ Plugin Pages 的用户/订阅处理链编辑器会优先读取 Web API `handlers
 |--------|------|------|
 | `enable_telegraph` | 布尔值 | 仅 Telegram 使用：启用 Telegraph 自动分流 |
 | `telegraph_token` | 字符串 | 仅 Telegram 使用：Telegraph access token；启用自动分流时必填 |
-| `prefer_local_video` | 布尔值 | 仅 OneBot 使用：视频是否优先本地文件；默认关闭，优先远程 URL |
+| `prefer_local_video` | 布尔值 | 仅 OneBot 使用：覆盖默认视频来源策略；默认优先使用本地视频文件 |
 
 Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略里触发：当前为自动发送、Telegram 策略已启用 Telegraph、token 有效，且去重后的媒体条目数大于 1。OneBot 不使用 Telegraph，避免在 QQ/NapCat 环境中依赖不可访问的外部页面服务。Telegram 本地图片超过 10 MiB 时会降级为文件发送，避免 Bot API photo 大小限制导致整条推送失败。
 
-发送前会先下载媒体到本地成功缓存，再生成平台无关消息组件并由排序器统一整理顺序；下载失败不会写入失败缓存，下一次推送会重新尝试。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。`prefer_local_video` 仅控制 OneBot 视频组件是否优先使用本地文件路径，不再控制是否预下载。
+发送前会先下载媒体到本地成功缓存，再生成平台无关消息组件并由排序器统一整理顺序；下载失败不会写入失败缓存，下一次推送会重新尝试。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。OneBot 默认使用本地视频文件，`prefer_local_video=false` 仅作为兼容覆盖项。
 
 ## 📝 使用方法
 

@@ -867,7 +867,9 @@ class NotificationDispatcher:
                     history.mark_success()
                     stats["success"] += 1
                 elif result.get("cancelled"):
-                    history.mark_stopped(result.get("error", "Stopped by System or Command"))
+                    history.mark_stopped(
+                        result.get("error", "Stopped by System or Command")
+                    )
                     history.max_retries = 0
                     stats["success"] += 1
                 else:
@@ -1270,7 +1272,9 @@ class NotificationDispatcher:
                     history.mark_success()
                     stats["success"] += 1
                 elif result.get("cancelled"):
-                    history.mark_stopped(result.get("error", "Stopped by System or Command"))
+                    history.mark_stopped(
+                        result.get("error", "Stopped by System or Command")
+                    )
                     history.max_retries = 0
                     stats["success"] += 1
                 elif is_unrecoverable_error(error_msg):

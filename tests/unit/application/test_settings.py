@@ -167,6 +167,7 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
             "m3u8_download_timeout": "80",
             "unknown_top": True,
             "basic_config": {
+                "proxy": "127.0.0.1:7890",
                 "timeout": "12",
                 "minimal_interval": 99999,
                 "hash_history_min": "abc",
@@ -174,6 +175,11 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
                 "tracking_query_params": ["utm_source", 1, "ref"],
                 "download_media_before_send": False,
                 "unknown_basic": "x",
+            },
+            "media_config": {
+                "cache_ttl_seconds": 60,
+                "download_media_timeout": "70",
+                "telegram_photo_max_bytes": 1,
             },
             "route_knowledge": {
                 "source_mode": "bad",
@@ -198,14 +204,20 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert "download_image_before_send" not in healed
     assert "m3u8_download_timeout" not in healed
     assert "unknown_top" not in healed
-    assert healed["basic_config"]["timeout"] == 12
+    assert "proxy" not in healed["basic_config"]
+    assert "timeout" not in healed["basic_config"]
+    assert healed["http_config"] == {
+        "proxy": "127.0.0.1:7890",
+        "timeout": 12,
+        "media_timeout": 80,
+    }
     assert healed["basic_config"]["minimal_interval"] == 1440
     assert healed["basic_config"]["hash_history_min"] == 200
     assert healed["basic_config"]["deduplicate_multi_bot"] is True
     assert healed["basic_config"]["tracking_query_params"] == ["utm_source", "ref"]
     assert "download_media_before_send" not in healed["basic_config"]
     assert "unknown_basic" not in healed["basic_config"]
-    assert healed["basic_config"]["download_media_timeout"] == 80
+    assert "media_config" not in healed
     assert healed["route_knowledge"]["source_mode"] == "mirror"
     assert healed["route_knowledge"]["timeout"] == 300
     assert healed["ffmpeg"]["video_transcode"] is False
@@ -237,6 +249,10 @@ def test_heal_astrbot_plugin_config_returns_no_changes_for_clean_config():
         "basic_config": {
             key: value["default"]
             for key, value in schema["basic_config"]["items"].items()
+        },
+        "http_config": {
+            key: value["default"]
+            for key, value in schema["http_config"]["items"].items()
         },
         "route_knowledge": {
             key: value["default"]

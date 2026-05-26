@@ -153,7 +153,7 @@
 ## 对维护者最重要的事实
 
 - 入口分离是硬约束：`main.py` 负责注册与生命周期，`bootstrap.py` 负责组装。
-- 类型化配置模型与运行态设置只保留 `src/infrastructure/config/datamodels.py` 一套；共享常量只保留 `src/shared/constants.py`。
+- 类型化配置模型与运行态设置统一位于 `src/infrastructure/config/models/`：持久化配置模型在 `plugin_config_models.py`，运行态设置在 `runtime_settings.py`，sender 策略兼容在 `sender_strategy_models.py`；`src/infrastructure/config/datamodels.py` 仅作为兼容导出。共享常量只保留 `src/shared/constants.py`。
 - 订阅/用户的继承语义只认 `-100`。
 - `push_history.content` 保存最终可发送文本；`raw_xml` 保留原始 XML。
 - OneBot 的消息顺序当前仍保持“媒体在前，文本与 via 在后”。

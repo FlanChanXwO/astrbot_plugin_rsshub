@@ -181,7 +181,7 @@ class TestConfigurationIntegration:
         config = RsshubPluginConfig.from_astrbot_config(mock_config)
 
         assert config is not None
-        assert config.basic_config.timeout == 30
+        assert config.http_config.timeout == 30
 
 
 class TestLLMToolLifecycle:

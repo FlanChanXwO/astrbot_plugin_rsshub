@@ -372,11 +372,14 @@ async def test_dispatch_sends_via_injected_sender_provider():
     history_repo = AsyncMock()
     history_repo.exists_success_by_scope_and_guid.return_value = False
     history_repo.save.side_effect = lambda history: history
+    user_repo = AsyncMock()
+    user_repo.get_or_create.return_value = User(id="user-1")
 
     dispatcher = NotificationDispatcher(
         subscription_repo=sub_repo,
         push_history_repo=history_repo,
         sender_provider=FakeSenderProvider(sender),
+        user_repo=user_repo,
     )
 
     stats = await dispatcher.dispatch_to_feed_subscribers(
@@ -388,6 +391,7 @@ async def test_dispatch_sends_via_injected_sender_provider():
     )
 
     assert stats == {"success": 1, "failed": 0, "pending": 0, "skipped": 0}
+    user_repo.get_or_create.assert_awaited_once_with("user-1")
     assert len(sender.requests) == 1
     request, context = sender.requests[0]
     assert request.session_id == "telegram:Group:1"
@@ -942,7 +946,7 @@ async def test_dispatch_inherits_effective_options_from_user():
     sub_repo = AsyncMock()
     sub_repo.get_active_by_feed_id.return_value = [sub]
     user_repo = AsyncMock()
-    user_repo.get_by_id.return_value = user
+    user_repo.get_or_create.return_value = user
     history_repo = AsyncMock()
 
     dispatcher = NotificationDispatcher(
@@ -1386,6 +1390,133 @@ async def test_dispatch_pending_retries_marks_successful_retry_success():
 
 
 @pytest.mark.asyncio
+async def test_retry_push_history_once_updates_same_record_on_failure():
+    sender = FakeSender(SendResult(ok=False, transient=True, detail="upload failed"))
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+    )
+    history = PushHistory(
+        id=104,
+        sub_id=1,
+        user_id="user-1",
+        feed_id=10,
+        content="old content",
+        media_urls=["https://example.com/image.jpg"],
+        entry_title="title",
+        entry_link="https://example.com/entry",
+        status="success",
+        retry_count=0,
+        max_retries=3,
+    ).mark_success()
+    sub_repo = AsyncMock()
+    sub_repo.get_by_id.return_value = sub
+    history_repo = AsyncMock()
+    history_repo.get_by_id.return_value = history
+    saved_snapshots = []
+
+    async def save_history(value):
+        saved_snapshots.append((value.id, value.status, value.content))
+        return value
+
+    history_repo.save.side_effect = save_history
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    result = await dispatcher.retry_push_history_once(104)
+
+    assert result["ok"] is False
+    retry_history = result["history"]
+    assert retry_history is history
+    assert retry_history.id == 104
+    assert retry_history.status == "failed"
+    assert retry_history.retry_count == 0
+    assert retry_history.max_retries == 0
+    assert retry_history.fail_reason == "upload failed"
+    assert retry_history.completed_at is not None
+    assert "媒体原始链接:" in retry_history.content
+    assert "https://example.com/image.jpg" in retry_history.content
+    assert len(sender.requests) == 1
+    assert sender.requests[0][0].message == "old content"
+    assert sender.requests[0][0].media == [("image", "https://example.com/image.jpg")]
+    history_repo.get_by_id.assert_awaited_once_with(104)
+    assert history_repo.save.await_count == 2
+    assert saved_snapshots[0] == (104, "retrying", "old content")
+    assert saved_snapshots[1][0] == 104
+    assert saved_snapshots[1][1] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_retry_push_history_once_updates_same_record_on_success():
+    sender = FakeSender()
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+    )
+    history = PushHistory(
+        id=105,
+        sub_id=1,
+        user_id="user-1",
+        feed_id=10,
+        content="retry content\n媒体原始链接:\nhttps://example.com/video.mp4",
+        media_urls=["https://example.com/video.mp4"],
+        entry_title="title",
+        entry_link="https://example.com/entry",
+        status="failed",
+        retry_count=3,
+        max_retries=3,
+        fail_reason="previous failure",
+    )
+
+    sub_repo = AsyncMock()
+    sub_repo.get_by_id.return_value = sub
+    history_repo = AsyncMock()
+    history_repo.get_by_id.return_value = history
+    saved_snapshots = []
+
+    async def save_history(value):
+        saved_snapshots.append((value.id, value.status, value.content))
+        return value
+
+    history_repo.save.side_effect = save_history
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    result = await dispatcher.retry_push_history_once(105)
+
+    assert result["ok"] is True
+    retry_history = result["history"]
+    assert retry_history is history
+    assert retry_history.id == 105
+    assert retry_history.status == "success"
+    assert retry_history.retry_count == 0
+    assert retry_history.max_retries == 0
+    assert retry_history.fail_reason is None
+    assert retry_history.content == "retry content"
+    assert len(sender.requests) == 1
+    assert sender.requests[0][0].message == "retry content"
+    assert sender.requests[0][0].media == [("video", "https://example.com/video.mp4")]
+    history_repo.get_by_id.assert_awaited_once_with(105)
+    assert history_repo.save.await_count == 2
+    assert saved_snapshots[0] == (105, "retrying", "retry content")
+    assert saved_snapshots[1] == (105, "success", "retry content")
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pending_retries_records_recoverable_failure():
     sender = FakeSender(SendResult(ok=False, transient=True, detail="timeout"))
     sub = Subscription(
@@ -1556,10 +1687,12 @@ async def test_dispatch_agent_entry_persists_raw_xml_in_history():
     history_repo = AsyncMock()
     history_repo.exists_success_by_scope_and_guid.return_value = False
     history_repo.save.side_effect = lambda history: history
+    user_repo = AsyncMock()
     dispatcher = NotificationDispatcher(
         subscription_repo=AsyncMock(),
         push_history_repo=history_repo,
         sender_provider=FakeSenderProvider(sender),
+        user_repo=user_repo,
     )
 
     result = await dispatcher.dispatch_agent_entry(
@@ -1576,6 +1709,7 @@ async def test_dispatch_agent_entry_persists_raw_xml_in_history():
     )
 
     assert result["ok"] is True
+    user_repo.get_or_create.assert_awaited_once_with("user-1")
     first_saved = history_repo.save.await_args_list[0].args[0]
     assert first_saved.raw_xml == "<entry><p>Hello</p></entry>"
 

@@ -6,6 +6,9 @@ import {
   getFeedItems,
   refreshFeed,
   refreshFeeds,
+  updateFeed,
+  deleteFeed,
+  deleteFeeds,
   testSubscription,
   batchActivate,
   batchDeactivate,
@@ -22,6 +25,7 @@ import {
   getRouteKbTask,
   deletePushHistory,
   deletePushHistoryBatch,
+  retryPushHistory,
   cleanupPushHistory,
   clearPushHistory,
   getUserDetails,
@@ -39,6 +43,7 @@ import { initTheme } from './js/theme.js';
 
 let toastTimer = null;
 let routeKbPollTimer = null;
+let filterDebounceTimer = null;
 
 function normalizeUserState(state) {
   return Number(state) < 0 ? -1 : 1;
@@ -121,6 +126,50 @@ function buildHandlersFromEditorState(form) {
   return normalizeHandlers(JSON.parse(form.handlers_json || '[]'));
 }
 
+function createTagFilter() {
+  return {
+    values: [],
+    input: '',
+  };
+}
+
+function normalizeTagValues(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+  }
+  const normalized = String(value ?? '').trim();
+  return normalized ? [normalized] : [];
+}
+
+function normalizeTextFilterValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item ?? '').trim()).filter(Boolean).join(' ');
+  }
+  return String(value ?? '').trim();
+}
+
+function splitTagInputValue(value) {
+  return String(value ?? '')
+    .split(/[\n\r\t]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function createInheritedNumberValue(value, fallback) {
+  const number = Number(value);
+  if (number === -100) {
+    return { mode: 'inherit', value: fallback };
+  }
+  return {
+    mode: 'custom',
+    value: Number.isFinite(number) ? number : fallback,
+  };
+}
+
+function inheritedNumberToPayload(field) {
+  return field?.mode === 'inherit' ? -100 : Number(field?.value ?? 0);
+}
+
 function createEmptyEditForm() {
   return {
     id: 0,
@@ -136,6 +185,8 @@ function createEmptyEditForm() {
     state_: true,
     send_mode: -100,
     length_limit: -100,
+    interval_control: createInheritedNumberValue(10, 10),
+    length_limit_control: createInheritedNumberValue(-100, 0),
     display_author: -100,
     display_via: -100,
     display_title: -100,
@@ -162,6 +213,8 @@ function createEditFormFromSub(sub) {
     notify: sub.notify ?? -100,
     send_mode: sub.send_mode ?? -100,
     length_limit: sub.length_limit ?? -100,
+    interval_control: createInheritedNumberValue(sub.interval ?? -100, 10),
+    length_limit_control: createInheritedNumberValue(sub.length_limit ?? -100, 0),
     display_author: sub.display_author ?? -100,
     display_via: sub.display_via ?? -100,
     display_title: sub.display_title ?? -100,
@@ -181,14 +234,24 @@ function createEmptyUserEditForm() {
     notify: -100,
     send_mode: -100,
     length_limit: -100,
+    interval_control: createInheritedNumberValue(-100, 10),
+    length_limit_control: createInheritedNumberValue(-100, 0),
     display_author: -100,
     display_via: -100,
     display_title: -100,
     display_entry_tags: -100,
     style: -100,
     display_media: -100,
-    default_target_session: '',
     handlers_json: '[]',
+  };
+}
+
+function createEmptyFeedEditForm() {
+  return {
+    id: 0,
+    title: '',
+    link: '',
+    state: 1,
   };
 }
 
@@ -279,23 +342,24 @@ function normalizePushHistoryItem(item) {
 
 function createEmptySubscriptionFilters() {
   return {
-    user_id: '',
-    feed_id: '',
-    sub_id: '',
+    user_id: createTagFilter(),
+    feed_id: createTagFilter(),
+    feed_link: createTagFilter(),
+    sub_id: createTagFilter(),
     keyword: '',
   };
 }
 
 function createEmptyUserFilters() {
   return {
-    user_id: '',
+    user_id: createTagFilter(),
     keyword: '',
   };
 }
 
 function createEmptyFeedFilters() {
   return {
-    feed_id: '',
+    feed_id: createTagFilter(),
     keyword: '',
   };
 }
@@ -303,6 +367,7 @@ function createEmptyFeedFilters() {
 function createEmptyPushHistoryFilters() {
   return {
     status: '',
+    feed_link: createTagFilter(),
     keyword: '',
     page: 1,
     pageSize: 20,
@@ -412,6 +477,8 @@ const store = PetiteVue.reactive({
   feedsLoading: false,
   feedEditMode: false,
   selectedFeedIds: [],
+  feedEditPanelVisible: false,
+  feedEditForm: createEmptyFeedEditForm(),
   pluginSettingsLoading: false,
   dataManagementLoading: false,
   dataManagementOverview: createDefaultDataOverview(),
@@ -453,6 +520,8 @@ const store = PetiteVue.reactive({
     show: false,
     title: '',
     message: '',
+    optionLabel: '',
+    optionValue: false,
     okText: '确定',
     okClass: 'btn-danger',
     resolve: null,
@@ -547,12 +616,17 @@ const store = PetiteVue.reactive({
   },
 
   async openSubscriptionsWithFilter(filters = {}) {
-    this.subFilters = {
-      ...createEmptySubscriptionFilters(),
-      ...Object.fromEntries(
-        Object.entries(filters).map(([key, value]) => [key, value == null ? '' : String(value)])
-      ),
-    };
+    const nextFilters = createEmptySubscriptionFilters();
+    for (const [key, value] of Object.entries(filters)) {
+      if (!nextFilters[key]) continue;
+      if (nextFilters[key] && typeof nextFilters[key] === 'object' && Array.isArray(nextFilters[key].values)) {
+        nextFilters[key].values = normalizeTagValues(value);
+        nextFilters[key].input = '';
+      } else {
+        nextFilters[key] = normalizeTextFilterValue(value);
+      }
+    }
+    this.subFilters = nextFilters;
     this.activeTab = 'subs';
     await this.runPending('subs:refresh', () => this.loadData());
   },
@@ -613,6 +687,7 @@ const store = PetiteVue.reactive({
       }
       const result = await getPushHistory({
         status: this.pushHistoryFilter.status,
+        feedLink: this.pushHistoryFilter.feed_link.values,
         keyword: this.pushHistoryFilter.keyword,
         page: this.pushHistoryFilter.page,
         pageSize: this.pushHistoryFilter.pageSize,
@@ -706,6 +781,115 @@ const store = PetiteVue.reactive({
     });
   },
 
+  filterTags(filter) {
+    if (filter && typeof filter === 'object' && Array.isArray(filter.values)) {
+      return normalizeTagValues([...filter.values, filter.input]);
+    }
+    return normalizeTagValues(filter);
+  },
+
+  hasFilterTags(filter) {
+    return this.filterTags(filter).length > 0;
+  },
+
+  textFilterValue(value) {
+    return normalizeTextFilterValue(value);
+  },
+
+  hasTextFilter(value) {
+    return this.textFilterValue(value).length > 0;
+  },
+
+  addFilterTag(groupName, fieldName) {
+    const group = this[groupName];
+    const filter = group?.[fieldName];
+    if (!filter) return;
+    const values = splitTagInputValue(filter.input);
+    if (values.length === 0) return;
+    let changed = false;
+    for (const value of values) {
+      if (!filter.values.includes(value)) {
+        filter.values.push(value);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.scheduleFilterRefresh(groupName);
+    }
+    filter.input = '';
+  },
+
+  handleFilterKeydown(event, groupName, fieldName) {
+    if (event.isComposing) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.addFilterTag(groupName, fieldName);
+      return;
+    }
+    if (event.key === 'Tab') {
+      const filter = this[groupName]?.[fieldName];
+      if (filter && String(filter.input || '').trim()) {
+        event.preventDefault();
+        this.addFilterTag(groupName, fieldName);
+      }
+      return;
+    }
+    if (event.key === 'Backspace') {
+      this.handleFilterBackspace(groupName, fieldName);
+    }
+  },
+
+  handleFilterBlur(groupName, fieldName) {
+    this.addFilterTag(groupName, fieldName);
+  },
+
+  handleFilterPaste(event, groupName, fieldName) {
+    const text = event.clipboardData?.getData('text') || '';
+    if (!/[\n\r\t]/.test(text)) return;
+    event.preventDefault();
+    const filter = this[groupName]?.[fieldName];
+    if (!filter) return;
+    filter.input = [filter.input, text].filter(Boolean).join('\n');
+    this.addFilterTag(groupName, fieldName);
+  },
+
+  removeFilterTag(groupName, fieldName, value) {
+    const filter = this[groupName]?.[fieldName];
+    if (!filter) return;
+    const nextValues = filter.values.filter((item) => item !== value);
+    if (nextValues.length === filter.values.length) return;
+    filter.values = nextValues;
+    this.scheduleFilterRefresh(groupName);
+  },
+
+  handleFilterBackspace(groupName, fieldName) {
+    const filter = this[groupName]?.[fieldName];
+    if (!filter || String(filter.input || '').length > 0 || filter.values.length === 0) return;
+    filter.values.pop();
+    this.scheduleFilterRefresh(groupName);
+  },
+
+  scheduleFilterRefresh(groupName) {
+    if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = setTimeout(async () => {
+      if (groupName === 'subFilters') {
+        await this.runPending('subs:refresh', () => this.loadData());
+      } else if (groupName === 'userFilters') {
+        await this.runPending('users:refresh', () => this.loadUsers());
+      } else if (groupName === 'feedFilters') {
+        await this.runPending('feeds:refresh', () => this.loadFeeds());
+      } else if (groupName === 'pushHistoryFilter') {
+        this.pushHistoryFilter.page = 1;
+        await this.runPending('push-history:refresh', () => this.loadPushHistory());
+      }
+    }, 220);
+  },
+
+  onPushHistoryStatusChanged() {
+    this.pushHistoryFilter.page = 1;
+    this.scheduleFilterRefresh('pushHistoryFilter');
+  },
+
   async applySubscriptionFilters() {
     await this.runPending('subs:refresh', () => this.loadData());
   },
@@ -716,17 +900,24 @@ const store = PetiteVue.reactive({
 
   async clearUserFilters() {
     this.userFilters = createEmptyUserFilters();
-    await this.runPending('users:refresh', () => this.loadUsers());
+    this.scheduleFilterRefresh('userFilters');
   },
 
   hasUserFilters() {
-    return Object.values(this.userFilters).some((value) => String(value || '').trim() !== '');
+    return (
+      this.hasFilterTags(this.userFilters.user_id) ||
+      this.hasTextFilter(this.userFilters.keyword)
+    );
   },
 
   userFilterSummary() {
     const parts = [];
-    if (this.userFilters.user_id) parts.push(`用户: ${this.userFilters.user_id}`);
-    if (this.userFilters.keyword) parts.push(`关键词: ${this.userFilters.keyword}`);
+    if (this.hasFilterTags(this.userFilters.user_id)) {
+      parts.push(`用户: ${this.userFilters.user_id.values.join(' / ')}`);
+    }
+    if (this.hasTextFilter(this.userFilters.keyword)) {
+      parts.push(`关键词: ${this.textFilterValue(this.userFilters.keyword)}`);
+    }
     return parts.join(' / ');
   },
 
@@ -736,53 +927,84 @@ const store = PetiteVue.reactive({
 
   async clearFeedFilters() {
     this.feedFilters = createEmptyFeedFilters();
-    await this.runPending('feeds:refresh', () => this.loadFeeds());
+    this.scheduleFilterRefresh('feedFilters');
   },
 
   hasFeedFilters() {
-    return Object.values(this.feedFilters).some((value) => String(value || '').trim() !== '');
+    return (
+      this.hasFilterTags(this.feedFilters.feed_id) ||
+      this.hasTextFilter(this.feedFilters.keyword)
+    );
   },
 
   feedFilterSummary() {
     const parts = [];
-    if (this.feedFilters.feed_id) parts.push(`Feed: ${this.feedFilters.feed_id}`);
-    if (this.feedFilters.keyword) parts.push(`关键词: ${this.feedFilters.keyword}`);
+    if (this.hasFilterTags(this.feedFilters.feed_id)) {
+      parts.push(`Feed: ${this.feedFilters.feed_id.values.join(' / ')}`);
+    }
+    if (this.hasTextFilter(this.feedFilters.keyword)) {
+      parts.push(`关键词: ${this.textFilterValue(this.feedFilters.keyword)}`);
+    }
     return parts.join(' / ');
   },
 
   async clearSubscriptionFilters() {
     this.subFilters = createEmptySubscriptionFilters();
-    await this.runPending('subs:refresh', () => this.loadData());
+    this.scheduleFilterRefresh('subFilters');
   },
 
   hasSubscriptionFilters() {
-    return Object.values(this.subFilters).some((value) => String(value || '').trim() !== '');
+    return (
+      this.hasFilterTags(this.subFilters.user_id) ||
+      this.hasFilterTags(this.subFilters.feed_id) ||
+      this.hasFilterTags(this.subFilters.feed_link) ||
+      this.hasFilterTags(this.subFilters.sub_id) ||
+      this.hasTextFilter(this.subFilters.keyword)
+    );
   },
 
   hasPushHistoryFilters() {
     return Boolean(
-      String(this.pushHistoryFilter.keyword || '').trim() || String(this.pushHistoryFilter.status || '').trim()
+      this.hasTextFilter(this.pushHistoryFilter.keyword) ||
+        this.hasFilterTags(this.pushHistoryFilter.feed_link) ||
+        String(this.pushHistoryFilter.status || '').trim()
     );
   },
 
   pushHistoryFilterSummary() {
     const parts = [];
-    if (this.pushHistoryFilter.keyword) parts.push(`关键词: ${this.pushHistoryFilter.keyword}`);
+    if (this.hasFilterTags(this.pushHistoryFilter.feed_link)) {
+      parts.push(`Feed 链接: ${this.pushHistoryFilter.feed_link.values.join(' / ')}`);
+    }
+    if (this.hasTextFilter(this.pushHistoryFilter.keyword)) {
+      parts.push(`关键词: ${this.textFilterValue(this.pushHistoryFilter.keyword)}`);
+    }
     if (this.pushHistoryFilter.status) parts.push(`状态: ${this.pushHistoryFilter.status}`);
     return parts.join(' / ');
   },
 
   async clearPushHistoryFilters() {
     this.pushHistoryFilter = createEmptyPushHistoryFilters();
-    await this.runPending('push-history:refresh', () => this.loadPushHistory());
+    this.scheduleFilterRefresh('pushHistoryFilter');
   },
 
   subscriptionFilterSummary() {
     const parts = [];
-    if (this.subFilters.user_id) parts.push(`用户: ${this.subFilters.user_id}`);
-    if (this.subFilters.feed_id) parts.push(`Feed: ${this.subFilters.feed_id}`);
-    if (this.subFilters.sub_id) parts.push(`订阅: ${this.subFilters.sub_id}`);
-    if (this.subFilters.keyword) parts.push(`关键词: ${this.subFilters.keyword}`);
+    if (this.hasFilterTags(this.subFilters.user_id)) {
+      parts.push(`用户: ${this.subFilters.user_id.values.join(' / ')}`);
+    }
+    if (this.hasFilterTags(this.subFilters.feed_id)) {
+      parts.push(`Feed: ${this.subFilters.feed_id.values.join(' / ')}`);
+    }
+    if (this.hasFilterTags(this.subFilters.feed_link)) {
+      parts.push(`Feed 链接: ${this.subFilters.feed_link.values.join(' / ')}`);
+    }
+    if (this.hasFilterTags(this.subFilters.sub_id)) {
+      parts.push(`订阅: ${this.subFilters.sub_id.values.join(' / ')}`);
+    }
+    if (this.hasTextFilter(this.subFilters.keyword)) {
+      parts.push(`关键词: ${this.textFilterValue(this.subFilters.keyword)}`);
+    }
     return parts.join(' / ');
   },
 
@@ -868,18 +1090,23 @@ const store = PetiteVue.reactive({
 
   async batchUnsubscribe() {
     if (this.selectedIds.length === 0) return;
-    const ok = await this.showConfirm(
+    const confirm = await this.showConfirm(
       `确定取消 ${this.selectedIds.length} 个订阅？此操作不可恢复。`,
       '批量取消订阅',
-      '取消订阅'
+      '取消订阅',
+      'btn-danger',
+      { optionLabel: '同时清理对应推送历史' }
     );
-    if (!ok) return;
+    if (!confirm.ok) return;
     const count = this.selectedIds.length;
     await this.runPending('batch:unsubscribe', async () => {
-      await this.runBatchByUser((ids, userId) => batchUnsubscribe(ids, userId));
+      await this.runBatchByUser((ids, userId) =>
+        batchUnsubscribe(ids, userId, confirm.optionChecked)
+      );
       this.selectedIds = [];
       this.showToast(`已取消 ${count} 个订阅`);
       await this.loadData();
+      if (confirm.optionChecked) await this.loadPushHistory();
     }).catch((err) => {
       this.showToast(`批量取消失败: ${err.message}`, 'error');
     });
@@ -945,17 +1172,22 @@ const store = PetiteVue.reactive({
   async deleteSelectedUsers() {
     if (this.selectedUserIds.length === 0) return;
     const count = this.selectedUserIds.length;
-    const ok = await this.showConfirm(
-      `确定删除选中的 ${count} 个用户？此操作会同时删除这些用户的所有订阅，不可恢复。`,
+    const confirm = await this.showConfirm(
+      `确定删除选中的 ${count} 个用户？此操作会同时删除这些用户的所有订阅，不可恢复。推送历史默认保留。`,
       '批量删除用户',
-      '删除'
+      '删除',
+      'btn-danger',
+      { optionLabel: '同时清理对应推送历史' }
     );
-    if (!ok) return;
+    if (!confirm.ok) return;
     await this.runPending('users:delete-batch', async () => {
-      const result = await deleteUsers(this.selectedUserIds);
+      const result = await deleteUsers(this.selectedUserIds, confirm.optionChecked);
       this.selectedUserIds = [];
       this.showToast(result.message || `已删除 ${count} 个用户`);
       await this.loadUsers();
+      await this.loadData();
+      await this.loadFeeds();
+      if (confirm.optionChecked) await this.loadPushHistory();
     }).catch((err) => {
       this.showToast(`批量删除用户失败: ${err.message}`, 'error');
     });
@@ -971,6 +1203,29 @@ const store = PetiteVue.reactive({
       await this.loadFeeds();
     }).catch((err) => {
       this.showToast(`批量刷新 Feed 失败: ${err.message}`, 'error');
+    });
+  },
+
+  async deleteSelectedFeeds() {
+    if (this.selectedFeedIds.length === 0) return;
+    const count = this.selectedFeedIds.length;
+    const confirm = await this.showConfirm(
+      `确定删除选中的 ${count} 个 Feed？此操作将同时删除对应订阅，不可恢复。推送历史默认保留。`,
+      '批量删除 Feed',
+      '删除',
+      'btn-danger',
+      { optionLabel: '同时清理对应推送历史' }
+    );
+    if (!confirm.ok) return;
+    await this.runPending('feeds:delete-batch', async () => {
+      const result = await deleteFeeds(this.selectedFeedIds, confirm.optionChecked);
+      this.selectedFeedIds = [];
+      this.showToast(result.message || `已删除 ${count} 个 Feed`);
+      await this.loadFeeds();
+      await this.loadData();
+      if (confirm.optionChecked) await this.loadPushHistory();
+    }).catch((err) => {
+      this.showToast(`批量删除 Feed 失败: ${err.message}`, 'error');
     });
   },
 
@@ -1072,13 +1327,11 @@ const store = PetiteVue.reactive({
       const options = {};
       if (this.editForm.title !== undefined) options.title = this.editForm.title;
       if (this.editForm.tags !== undefined) options.tags = this.editForm.tags;
-      if (this.editForm.interval !== undefined) options.interval = this.editForm.interval;
+      options.interval = inheritedNumberToPayload(this.editForm.interval_control);
       if (this.editForm.target_session !== undefined) {
         options.target_session = this.editForm.target_session;
       }
-      if (this.editForm.length_limit !== undefined) {
-        options.length_limit = this.editForm.length_limit;
-      }
+      options.length_limit = inheritedNumberToPayload(this.editForm.length_limit_control);
       options.handlers_mode = this.editForm.handlers_mode || 'inherit';
       options.handlers =
         options.handlers_mode === 'override'
@@ -1106,17 +1359,20 @@ const store = PetiteVue.reactive({
   async handleDeleteSub() {
     const id = this.panelMode === 'edit' ? this.editForm.id : this.detailSub.id;
     if (!id) return;
-    const ok = await this.showConfirm(
+    const confirm = await this.showConfirm(
       '确定删除此订阅？此操作不可恢复。',
       '删除订阅',
-      '删除'
+      '删除',
+      'btn-danger',
+      { optionLabel: '同时清理对应推送历史' }
     );
-    if (!ok) return;
+    if (!confirm.ok) return;
     await this.runPending(`sub:delete:${id}`, async () => {
-      await unsubscribe(id, this.currentSubUserId());
+      await unsubscribe(id, this.currentSubUserId(), confirm.optionChecked);
       this.showToast('订阅已删除');
       this.closePanel();
       await this.loadData();
+      if (confirm.optionChecked) await this.loadPushHistory();
     }).catch((err) => {
       this.showToast(`删除失败: ${err.message}`, 'error');
     });
@@ -1140,16 +1396,26 @@ const store = PetiteVue.reactive({
     }, duration);
   },
 
-  showConfirm(message, title = '确认', okText = '确定', okClass = 'btn-danger') {
+  showConfirm(message, title = '确认', okText = '确定', okClass = 'btn-danger', options = {}) {
+    const hasOption = Boolean(options.optionLabel);
     this.dialog.title = title;
     this.dialog.message = message;
     this.dialog.okText = okText;
     this.dialog.okClass = okClass;
+    this.dialog.optionLabel = String(options.optionLabel || '');
+    this.dialog.optionValue = Boolean(options.optionDefault);
     this.dialog.show = true;
     return new Promise((resolve) => {
       this.dialog.resolve = (result) => {
         this.dialog.show = false;
-        resolve(result);
+        if (!hasOption) {
+          resolve(Boolean(result));
+          return;
+        }
+        resolve({
+          ok: Boolean(result),
+          optionChecked: Boolean(result && this.dialog.optionValue),
+        });
       };
     });
   },
@@ -1229,6 +1495,25 @@ const store = PetiteVue.reactive({
     });
   },
 
+  async retryPushHistoryItem(id) {
+    await this.runPending(`push-history:retry:${id}`, async () => {
+      const result = await retryPushHistory(id);
+      const retryError = result.error || result.message || '发送失败';
+      this.showToast(
+        result.ok
+          ? result.message || '重试完成'
+          : `重试失败: ${retryError}`,
+        result.ok ? 'success' : 'error'
+      );
+      this.pushHistoryFilter.page = 1;
+      await this.loadPushHistory();
+    }).catch((err) => {
+      this.showToast(`重试失败: ${err.message}`, 'error');
+      this.pushHistoryFilter.page = 1;
+      return this.loadPushHistory();
+    });
+  },
+
   togglePushHistorySelect(id) {
     const index = this.selectedPushHistoryIds.indexOf(id);
     if (index >= 0) {
@@ -1303,7 +1588,7 @@ const store = PetiteVue.reactive({
       this.showToast(result.message || '已清空推送历史');
       this.selectedPushHistoryIds = [];
       await this.loadPushHistory();
-      await this.loadStats();
+      await this.loadData(false);
     }).catch((err) => {
       this.showToast(`清空失败: ${err.message}`, 'error');
     });
@@ -1353,11 +1638,15 @@ const store = PetiteVue.reactive({
       if (id > 0) this.togglePushHistorySelect(id);
       return;
     }
-    const subId = Number(item?.sub_id || 0);
-    if (!subId) {
+    const feedLink = String(item?.feed_link || '').trim();
+    if (!feedLink) {
+      this.showToast('这条历史记录没有 Feed 链接，无法安全定位相关订阅', 'error');
       return;
     }
-    await this.selectSubscription(subId);
+    const filters = { feed_link: feedLink };
+    const userId = String(item?.user_id || '').trim();
+    if (userId) filters.user_id = userId;
+    await this.openSubscriptionsWithFilter(filters);
   },
 
   openUserEditPanel(user) {
@@ -1365,16 +1654,17 @@ const store = PetiteVue.reactive({
       user_id: user.user_id,
       state: normalizeUserState(user.state ?? 1),
       interval: user.interval ?? -100,
+      interval_control: createInheritedNumberValue(user.interval ?? -100, 10),
       notify: user.notify ?? -100,
       send_mode: user.send_mode ?? -100,
       length_limit: user.length_limit ?? -100,
+      length_limit_control: createInheritedNumberValue(user.length_limit ?? -100, 0),
       display_author: user.display_author ?? -100,
       display_via: user.display_via ?? -100,
       display_title: user.display_title ?? -100,
       display_entry_tags: user.display_entry_tags ?? -100,
       style: user.style ?? -100,
       display_media: user.display_media ?? -100,
-      default_target_session: user.default_target_session || '',
       ...handlersToEditorState(user.handlers),
     };
     this.userEditPanelVisible = true;
@@ -1388,17 +1678,16 @@ const store = PetiteVue.reactive({
     await this.runPending(`user:save:${this.userEditForm.user_id}`, async () => {
       const settings = {
         state: normalizeUserState(this.userEditForm.state),
-        interval: this.userEditForm.interval,
+        interval: inheritedNumberToPayload(this.userEditForm.interval_control),
         notify: this.userEditForm.notify,
         send_mode: this.userEditForm.send_mode,
-        length_limit: this.userEditForm.length_limit,
+        length_limit: inheritedNumberToPayload(this.userEditForm.length_limit_control),
         display_author: this.userEditForm.display_author,
         display_via: this.userEditForm.display_via,
         display_title: this.userEditForm.display_title,
         display_entry_tags: this.userEditForm.display_entry_tags,
         style: this.userEditForm.style,
         display_media: this.userEditForm.display_media,
-        default_target_session: this.userEditForm.default_target_session.trim(),
         handlers: buildHandlersFromEditorState(this.userEditForm),
       };
       await updateUser(this.userEditForm.user_id, settings);
@@ -1411,18 +1700,79 @@ const store = PetiteVue.reactive({
   },
 
   async handleDeleteUser(userId) {
-    const ok = await this.showConfirm(
-      `确定删除用户 ${userId}？此操作将同时删除该用户的所有订阅，不可恢复。`,
+    const confirm = await this.showConfirm(
+      `确定删除用户 ${userId}？此操作将同时删除该用户的所有订阅，不可恢复。推送历史默认保留。`,
       '删除用户',
-      '删除'
+      '删除',
+      'btn-danger',
+      { optionLabel: '同时清理对应推送历史' }
     );
-    if (!ok) return;
+    if (!confirm.ok) return;
     await this.runPending(`user:delete:${userId}`, async () => {
-      await deleteUser(userId);
-      this.showToast('用户已删除');
+      const result = await deleteUser(userId, confirm.optionChecked);
+      this.showToast(result.message || '用户已删除');
       await this.loadUsers();
+      await this.loadData();
+      await this.loadFeeds();
+      if (confirm.optionChecked) await this.loadPushHistory();
     }).catch((err) => {
       this.showToast(`删除失败: ${err.message}`, 'error');
+    });
+  },
+
+  openFeedEditPanel(feed) {
+    this.feedEditForm = {
+      id: Number(feed?.id || 0),
+      title: String(feed?.title || ''),
+      link: String(feed?.link || ''),
+      state: Number(feed?.state ?? 1),
+    };
+    this.feedEditPanelVisible = true;
+  },
+
+  closeFeedEditPanel() {
+    this.feedEditPanelVisible = false;
+  },
+
+  async handleSaveFeedEdit() {
+    const feedId = Number(this.feedEditForm.id || 0);
+    if (!feedId) return;
+    await this.runPending(`feed:save:${feedId}`, async () => {
+      const options = {
+        title: String(this.feedEditForm.title || '').trim(),
+        link: String(this.feedEditForm.link || '').trim(),
+        state: Number(this.feedEditForm.state || 0),
+      };
+      const result = await updateFeed(feedId, options);
+      this.showToast(result.message || 'Feed 已更新');
+      this.closeFeedEditPanel();
+      await this.loadFeeds();
+      await this.loadData(false);
+    }).catch((err) => {
+      this.showToast(`更新 Feed 失败: ${err.message}`, 'error');
+    });
+  },
+
+  async handleDeleteFeed(feedId) {
+    const id = Number(feedId || 0);
+    if (!id) return;
+    const confirm = await this.showConfirm(
+      `确定删除 Feed ${id}？此操作将同时删除对应订阅，不可恢复。推送历史默认保留。`,
+      '删除 Feed',
+      '删除',
+      'btn-danger',
+      { optionLabel: '同时清理对应推送历史' }
+    );
+    if (!confirm.ok) return;
+    await this.runPending(`feed:delete:${id}`, async () => {
+      const result = await deleteFeed(id, confirm.optionChecked);
+      this.showToast(result.message || 'Feed 已删除');
+      this.closeFeedEditPanel();
+      await this.loadFeeds();
+      await this.loadData();
+      if (confirm.optionChecked) await this.loadPushHistory();
+    }).catch((err) => {
+      this.showToast(`删除 Feed 失败: ${err.message}`, 'error');
     });
   },
 
@@ -1478,6 +1828,12 @@ const store = PetiteVue.reactive({
     return prettyJson(value);
   },
 
+  userSubscriptionCountText(user) {
+    const total = Number(user?.subscription_count ?? 0) || 0;
+    const active = Number(user?.active_subscription_count ?? total) || 0;
+    return active !== total ? `${active} / ${total}` : String(total);
+  },
+
   async handleClearCache() {
     const ok = await this.showConfirm(
       '确定清理插件缓存目录？这会删除媒体缓存与临时转换产物。',
@@ -1529,7 +1885,8 @@ const store = PetiteVue.reactive({
   currentSubUserId() {
     const subUserId =
       this.panelMode === 'edit' ? this.editForm.user_id : this.detailSub.user_id;
-    return subUserId || this.subFilters.user_id || undefined;
+    const filterUserIds = this.filterTags(this.subFilters.user_id);
+    return subUserId || filterUserIds[0] || undefined;
   },
 
   selectedSubsByUser() {
@@ -1537,7 +1894,8 @@ const store = PetiteVue.reactive({
     return this.filteredSubs
       .filter((sub) => selected.has(sub.id))
       .reduce((groups, sub) => {
-        const userId = sub.user_id || this.subFilters.user_id || undefined;
+        const filterUserIds = this.filterTags(this.subFilters.user_id);
+        const userId = sub.user_id || filterUserIds[0] || undefined;
         const key = userId || '';
         if (!groups[key]) groups[key] = { userId, ids: [] };
         groups[key].ids.push(sub.id);

@@ -6,6 +6,9 @@ import pytest
 from astrbot_plugin_rsshub.src.application.commands.export_subscriptions_cmd import (
     ExportSubscriptionsCommand,
 )
+from astrbot_plugin_rsshub.src.application.commands.import_subscriptions_cmd import (
+    ImportSubscriptionsCommand,
+)
 from astrbot_plugin_rsshub.src.application.dto.subscription_export_record import (
     SubscriptionExportRecord,
     build_subscription_export_record,
@@ -154,7 +157,7 @@ class TestTOMLRoundtrip:
             "style": 3,
             "tags": "alerts,news",
             "title": "Configured",
-            "handlers": '[{"id":"builtin.ai_transform.default","type":"builtin","name":"ai_transform","status":1,"config":{"prompt":"总结为三条要点"}}]',
+            "handlers": '[{"id":"builtin.ai_transform.default","type":"builtin","name":"ai_transform","status":1,"config":{"prompt":"总结为三条要点","scope":"plaintext"}}]',
             "handlers_mode": "override",
         }
 
@@ -404,6 +407,50 @@ class TestExportCommand:
 
         assert result.success is False
         assert "feed repository" in result.message
+
+
+class TestImportCommand:
+    @pytest.mark.asyncio
+    async def test_import_ensures_user_before_saving_subscription(self) -> None:
+        class SubscriptionRepo:
+            async def get_by_user_and_feed(
+                self, user_id: str, feed_id: int
+            ) -> Subscription | None:
+                assert user_id == "user-001"
+                assert feed_id == 1
+                return None
+
+            async def save(self, subscription: Subscription) -> Subscription:
+                subscription.id = 7
+                return subscription
+
+        class FeedRepo:
+            async def get_by_link(self, link: str) -> Feed | None:
+                assert link == "https://example.com/feed.xml"
+                return Feed(id=1, link=link, title="Example Feed")
+
+        class UserRepo:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def get_or_create(self, user_id: str):
+                self.calls.append(user_id)
+                return None
+
+        user_repo = UserRepo()
+        command = ImportSubscriptionsCommand(
+            subscription_repo=SubscriptionRepo(),
+            feed_repo=FeedRepo(),
+            user_repo=user_repo,
+        )
+
+        result = await command.execute(
+            "[[subscriptions]]\nlink='https://example.com/feed.xml'\n",
+            user_id=" user-001 ",
+        )
+
+        assert result.success is True
+        assert user_repo.calls == ["user-001"]
 
 
 def test_subscription_model_dump_does_not_include_feed_relation() -> None:

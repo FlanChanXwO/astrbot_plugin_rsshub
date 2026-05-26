@@ -8,6 +8,11 @@ from astrbot_plugin_rsshub.src.application.services.agent_xml_push_service impor
     AgentXmlPushService,
     AgentXmlValidationError,
 )
+from astrbot_plugin_rsshub.src.shared.constants import (
+    SEND_MODE_LINK_ONLY,
+    STYLE_ORIGINAL,
+    STYLE_RSSRT,
+)
 
 
 @pytest.mark.asyncio
@@ -111,6 +116,70 @@ async def test_agent_xml_push_service_dispatches_with_explicit_guid():
     assert call["source_key"] == "agent:test"
     assert call["raw_xml"] == "<entry><p>World</p></entry>"
     assert call["target"].target_session == "telegram:Group:1"
+
+
+@pytest.mark.asyncio
+async def test_agent_xml_push_service_display_media_false_clears_dispatch_media():
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_agent_entry.return_value = {
+        "ok": True,
+        "deduplicated": False,
+        "stats": {"success": 1, "failed": 0, "pending": 0},
+        "history_id": 12,
+    }
+    service = AgentXmlPushService(notification_dispatcher=dispatcher)
+
+    result = await service.push_entry(
+        user_id="user-1",
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        source_key="agent:test",
+        title="Hello",
+        xml="<entry><p>World</p><img src='https://example.com/a.png'/></entry>",
+        display_media=False,
+        style="rssrt",
+    )
+
+    assert result["ok"] is True
+    call = dispatcher.dispatch_agent_entry.await_args.kwargs
+    assert call["media_urls"] == []
+    assert call["media_items"] == []
+    assert call["layout"] == []
+    assert call["style"] == STYLE_RSSRT
+    assert result["preview"]["media_urls"] == ["https://example.com/a.png"]
+
+
+@pytest.mark.asyncio
+async def test_agent_xml_push_service_link_only_clears_media_and_converts_modes():
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_agent_entry.return_value = {
+        "ok": True,
+        "deduplicated": False,
+        "stats": {"success": 1, "failed": 0, "pending": 0},
+        "history_id": 13,
+    }
+    service = AgentXmlPushService(notification_dispatcher=dispatcher)
+
+    result = await service.push_entry(
+        user_id="user-1",
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        source_key="agent:test",
+        title="Hello",
+        xml="<entry><p>World</p><img src='https://example.com/a.png'/></entry>",
+        link="https://example.com/post",
+        send_mode="link_only",
+        style="original",
+    )
+
+    assert result["ok"] is True
+    call = dispatcher.dispatch_agent_entry.await_args.kwargs
+    assert call["content"] == "Hello\nhttps://example.com/post"
+    assert call["media_urls"] == []
+    assert call["media_items"] == []
+    assert call["layout"] == []
+    assert call["send_mode"] == SEND_MODE_LINK_ONLY
+    assert call["style"] == STYLE_ORIGINAL
 
 
 @pytest.mark.asyncio

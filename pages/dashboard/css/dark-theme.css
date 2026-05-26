@@ -221,3 +221,10 @@
 .dark-mode .confirm-dialog-content p {
   color: var(--text-secondary);
 }
+
+[data-theme="dark"] .confirm-option,
+.dark-mode .confirm-option {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}

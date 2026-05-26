@@ -276,6 +276,12 @@ class NotificationDispatcher:
     def _feed_source_key(feed_id: int, sub_id: int | None) -> str:
         return f"feed:{feed_id}:sub:{sub_id or 0}"
 
+    async def _ensure_user(self, user_id: str | None) -> Any | None:
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id or self._user_repo is None:
+            return None
+        return await self._user_repo.get_or_create(normalized_user_id)
+
     @staticmethod
     def _normalize_send_mode_value(value: Any) -> int:
         try:
@@ -614,11 +620,7 @@ class NotificationDispatcher:
         # 2. 为每个订阅解析最终 payload；handler skip 在此阶段直接落审计记录。
         for sub in subscriptions:
             try:
-                user = (
-                    await self._user_repo.get_by_id(sub.user_id)
-                    if self._user_repo is not None
-                    else None
-                )
+                user = await self._ensure_user(sub.user_id)
                 processed_entry = raw_entry
                 handler_trace: list[dict[str, Any]] | None = None
                 handler_allowed = True
@@ -920,6 +922,8 @@ class NotificationDispatcher:
         media_items: list[tuple[str, str]] | None = None,
         entry_guid: str,
         layout: list[LayoutFragment] | None = None,
+        send_mode: int | None = SEND_MODE_AUTO,
+        style: int = 0,
     ) -> dict[str, Any]:
         """Dispatch one agent-originated push while preserving history and retries."""
         normalized_media = normalize_media_items(
@@ -930,6 +934,7 @@ class NotificationDispatcher:
         target_session = str(target.target_session or "").strip()
         if not target_session:
             return {"ok": False, "error": "No target session", "deduplicated": False}
+        await self._ensure_user(target.user_id)
 
         already_sent = await self._push_history_repo.exists_success_by_scope_and_guid(
             source_type="agent",
@@ -980,7 +985,8 @@ class NotificationDispatcher:
             entry_link=entry_link,
             feed_id=None,
             sub_id=None,
-            send_mode=SEND_MODE_AUTO,
+            send_mode=send_mode,
+            style=style,
         )
 
         stats = {"success": 0, "failed": 0, "pending": 0}
@@ -1316,6 +1322,125 @@ class NotificationDispatcher:
             stats["skipped"],
         )
         return stats
+
+    async def retry_push_history_once(self, history_id: int) -> dict[str, Any]:
+        """手动重试单条推送历史，并更新原历史行。"""
+        history = await self._push_history_repo.get_by_id(history_id)
+        if history is None:
+            return {"ok": False, "error": "Push history not found"}
+
+        history.content = strip_appended_media_links_from_text(
+            history.content,
+            media_urls=history.media_urls,
+        )
+        history.retry_count = 0
+        history.max_retries = 0
+        history.fail_reason = None
+        history.completed_at = None
+        history.mark_retrying()
+        history = await self._push_history_repo.save(history)
+
+        try:
+            target = await self._target_from_history(
+                history,
+                allow_stored_feed_target=True,
+            )
+            if target is None:
+                error_msg = "Subscription not available"
+                history.mark_failed(error_msg)
+                history.content = append_media_links_to_text(
+                    history.content,
+                    media_urls=history.media_urls,
+                )
+                history.completed_at = history.updated_at
+                await self._push_history_repo.save(history)
+                return {"ok": False, "error": error_msg, "history": history}
+
+            result = await self.send_to_session(
+                target=target,
+                content=strip_appended_media_links_from_text(
+                    history.content,
+                    media_urls=history.media_urls,
+                ),
+                media_urls=history.media_urls,
+                job_description=f"manual retry history={history.id}",
+                channel_title=history.feed_title,
+                channel_link=history.feed_link,
+                entry_title=history.entry_title,
+                entry_link=history.entry_link,
+                feed_id=history.feed_id,
+                sub_id=history.sub_id,
+                send_mode=(SEND_MODE_AUTO if history.source_type == "agent" else None),
+            )
+
+            error_msg = result.get("error", "")
+            if result["ok"]:
+                history.content = strip_appended_media_links_from_text(
+                    history.content,
+                    media_urls=history.media_urls,
+                )
+                history.mark_success()
+                await self._push_history_repo.save(history)
+                return {"ok": True, "message": "重试发送成功", "history": history}
+
+            if result.get("cancelled"):
+                history.mark_stopped(
+                    result.get("error", "Stopped by System or Command")
+                )
+            else:
+                history.mark_failed(error_msg)
+                history.completed_at = history.updated_at
+                history.content = append_media_links_to_text(
+                    history.content,
+                    media_urls=history.media_urls,
+                )
+                if is_unrecoverable_error(error_msg):
+                    history.max_retries = 0
+            await self._push_history_repo.save(history)
+            return {
+                "ok": False,
+                "error": history.fail_reason or error_msg or "Retry failed",
+                "history": history,
+            }
+        except Exception as e:
+            logger.error("手动重试推送 %s 失败: %s", history.id, e)
+            history.mark_failed(str(e))
+            history.completed_at = history.updated_at
+            history.content = append_media_links_to_text(
+                history.content,
+                media_urls=history.media_urls,
+            )
+            await self._push_history_repo.save(history)
+            return {"ok": False, "error": str(e), "history": history}
+
+    async def _target_from_history(
+        self,
+        history: PushHistory,
+        *,
+        allow_stored_feed_target: bool,
+    ) -> SendTarget | None:
+        if history.source_type == "agent" or allow_stored_feed_target:
+            if history.platform_name and history.target_session:
+                return SendTarget(
+                    user_id=history.user_id,
+                    platform_name=history.platform_name,
+                    target_session=history.target_session,
+                    sub_id=history.sub_id if history.source_type != "agent" else None,
+                )
+
+        if history.source_type == "agent":
+            return SendTarget(
+                user_id=history.user_id,
+                platform_name=history.platform_name,
+                target_session=history.target_session,
+                sub_id=None,
+            )
+
+        sub = await self._subscription_repo.get_by_id(int(history.sub_id or 0))
+        if not sub or sub.state != 1:
+            logger.debug("订阅 %s 不存在或已禁用，跳过重试", history.sub_id)
+            return None
+        return self._target_from_subscription(sub)
 
     async def get_push_stats(self) -> dict[str, int]:
         """

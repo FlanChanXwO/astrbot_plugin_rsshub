@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from sqlalchemy import delete
 from sqlmodel import asc, or_, select
 
 from ...domain.entities.handlers import dump_handlers, handlers_json
@@ -68,6 +69,7 @@ class SubscriptionRepositoryImpl:
         *,
         user_ids: list[str] | None = None,
         feed_ids: list[int] | None = None,
+        feed_links: list[str] | None = None,
         sub_ids: list[int] | None = None,
         keywords: list[str] | None = None,
     ) -> list[Subscription]:
@@ -78,7 +80,7 @@ class SubscriptionRepositoryImpl:
                 FeedORM, FeedORM.id == SubORM.feed_id, isouter=True
             )
             has_filters = any(
-                values for values in (user_ids, feed_ids, sub_ids, keywords)
+                values for values in (user_ids, feed_ids, feed_links, sub_ids, keywords)
             )
 
             if not has_filters:
@@ -88,6 +90,8 @@ class SubscriptionRepositoryImpl:
                 stmt = stmt.where(SubORM.user_id.in_(user_ids))
             if feed_ids:
                 stmt = stmt.where(SubORM.feed_id.in_(feed_ids))
+            if feed_links:
+                stmt = stmt.where(FeedORM.link.in_(feed_links))
             if sub_ids:
                 stmt = stmt.where(SubORM.id.in_(sub_ids))
             if keywords:
@@ -158,6 +162,19 @@ class SubscriptionRepositoryImpl:
             if count > 0:
                 await session.commit()
             return count
+
+    async def delete_all_by_feed_ids(self, feed_ids: list[int]) -> int:
+        """删除指定 Feed 的所有订阅。"""
+        ids = sorted({int(feed_id) for feed_id in feed_ids if int(feed_id) > 0})
+        if not ids:
+            return 0
+
+        db = get_database()
+        async with db.get_session() as session:
+            stmt = delete(SubORM).where(SubORM.feed_id.in_(ids))
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def update_options(
         self, sub_id: int, user_id: str, **kwargs

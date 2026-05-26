@@ -69,6 +69,7 @@ class SubscriptionRepository(Protocol):
         *,
         user_ids: list[str] | None = None,
         feed_ids: list[int] | None = None,
+        feed_links: list[str] | None = None,
         sub_ids: list[int] | None = None,
         keywords: list[str] | None = None,
     ) -> list[Subscription]:
@@ -78,6 +79,7 @@ class SubscriptionRepository(Protocol):
         Args:
             user_ids: 精确匹配用户 ID，任一命中即可
             feed_ids: 精确匹配 Feed ID，任一命中即可
+            feed_links: 精确匹配 Feed 链接，任一命中即可
             sub_ids: 精确匹配订阅 ID，任一命中即可
             keywords: 标题/Feed/标签/用户 ID 模糊匹配关键词，任一命中即可
 
@@ -125,6 +127,18 @@ class SubscriptionRepository(Protocol):
 
         Args:
             user_id: 用户唯一标识
+
+        Returns:
+            删除的订阅数量
+        """
+        ...
+
+    async def delete_all_by_feed_ids(self, feed_ids: list[int]) -> int:
+        """
+        删除指定 Feed 的所有订阅。
+
+        Args:
+            feed_ids: Feed ID 列表
 
         Returns:
             删除的订阅数量

@@ -27,6 +27,7 @@ from .migrations import (
     cleanup_legacy_translation_tables,
     ensure_profile_schema,
     ensure_push_history_schema,
+    ensure_user_rows,
     run_migrations,
 )
 
@@ -94,6 +95,7 @@ class DatabaseManager:
             await cleanup_legacy_translation_tables(conn)
             await ensure_profile_schema(conn)
             await ensure_push_history_schema(conn)
+            await ensure_user_rows(conn)
 
         logger.info("RSS 数据库初始化完成: %s", db_path)
 

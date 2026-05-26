@@ -9,10 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from quart import Response, jsonify, request
 
@@ -36,6 +36,7 @@ from ..application.commands.unsubscribe_feed_cmd import UnsubscribeFeedCommand
 from ..application.commands.update_subscription_cmd import UpdateSubscriptionCommand
 from ..application.queries.get_feed_items_query import GetFeedItemsQuery
 from ..application.services.feed_polling_service import FeedPollingService
+from ..application.services.notification_dispatcher import NotificationDispatcher
 from ..application.services.route_knowledge_service import (
     RouteKnowledgeSyncService,
 )
@@ -81,6 +82,7 @@ class WebApiHandler:
         sub_repo: SubscriptionRepository,
         user_repo: UserRepository,
         push_history_repo: PushHistoryRepository,
+        notification_dispatcher: NotificationDispatcher | None = None,
         route_knowledge_service: RouteKnowledgeSyncService | None = None,
         config: RsshubPluginConfig | None = None,
         raw_config: AstrBotConfig | None = None,
@@ -105,6 +107,7 @@ class WebApiHandler:
         self._sub_repo = sub_repo
         self._user_repo = user_repo
         self._push_history_repo = push_history_repo
+        self._notification_dispatcher = notification_dispatcher
         self._route_knowledge_service = route_knowledge_service
         self._config = config
         self._raw_config = raw_config
@@ -129,6 +132,8 @@ class WebApiHandler:
             ),
             ("GET", "/feeds/items", self.handle_feed_items, "获取 Feed 条目"),
             ("POST", "/feeds/refresh", self.handle_refresh_feed, "刷新 Feed"),
+            ("POST", "/feeds/update", self.handle_update_feed, "更新 Feed"),
+            ("POST", "/feeds/delete", self.handle_delete_feeds, "删除 Feed"),
             ("GET", "/settings", self.handle_get_settings, "获取用户设置"),
             ("POST", "/settings", self.handle_set_settings, "更新用户设置"),
             (
@@ -209,6 +214,12 @@ class WebApiHandler:
                 "/push-history/delete",
                 self.handle_delete_push_history,
                 "删除推送历史",
+            ),
+            (
+                "POST",
+                "/push-history/retry",
+                self.handle_retry_push_history,
+                "重试推送历史",
             ),
             (
                 "POST",
@@ -319,14 +330,16 @@ class WebApiHandler:
 
     async def handle_list_subscriptions(self):
         """列出所有订阅（含 Feed 信息）"""
-        user_ids = _split_multi_values(request.args.get("user_id", ""))
-        feed_ids = _split_multi_int_values(request.args.get("feed_id", ""))
-        sub_ids = _split_multi_int_values(request.args.get("sub_id", ""))
-        keywords = _split_multi_values(request.args.get("keyword", ""))
+        user_ids = _query_values("user_id")
+        feed_ids = _query_int_values("feed_id")
+        feed_links = _query_values("feed_link")
+        sub_ids = _query_int_values("sub_id")
+        keywords = _query_values("keyword")
 
         subs = await self._sub_repo.list_for_dashboard(
             user_ids=user_ids or None,
             feed_ids=feed_ids or None,
+            feed_links=feed_links or None,
             sub_ids=sub_ids or None,
             keywords=keywords or None,
         )
@@ -388,11 +401,83 @@ class WebApiHandler:
             {"ok": True, "items": list(user_map.values()), "total": len(user_map)}
         )
 
+    @staticmethod
+    def _matches_keywords(keywords: list[str], haystacks: list[Any]) -> bool:
+        normalized_keywords = [
+            str(keyword or "").strip().casefold()
+            for keyword in keywords
+            if str(keyword or "").strip()
+        ]
+        if not normalized_keywords:
+            return True
+        normalized_haystacks = [
+            str(haystack or "").casefold() for haystack in haystacks
+        ]
+        return any(
+            keyword in haystack
+            for keyword in normalized_keywords
+            for haystack in normalized_haystacks
+        )
+
     async def handle_user_details(self):
         """列出所有用户详情（从 UserRepository）"""
-        user_ids = _split_multi_values(request.args.get("user_id", ""))
-        keywords = _split_multi_values(request.args.get("keyword", ""))
+        user_ids = _query_values("user_id")
+        keywords = _query_values("keyword")
         users = await self._user_repo.get_all(limit=1000)
+        subscription_counts: dict[str, dict[str, int]] = {}
+        all_user_ids = [str(u.id) for u in users if str(getattr(u, "id", "")).strip()]
+        subscriptions = []
+        if all_user_ids:
+            subscriptions = await self._sub_repo.list_for_dashboard(
+                user_ids=all_user_ids
+            )
+            for sub in subscriptions:
+                user_id = str(sub.user_id or "").strip()
+                if not user_id:
+                    continue
+                counts = subscription_counts.setdefault(
+                    user_id, {"subscription_count": 0, "active_subscription_count": 0}
+                )
+                counts["subscription_count"] += 1
+                if sub.state == 1:
+                    counts["active_subscription_count"] += 1
+        feed_ids = (
+            {
+                int(getattr(sub, "feed_id", 0) or 0)
+                for sub in subscriptions
+                if int(getattr(sub, "feed_id", 0) or 0) > 0
+            }
+            if all_user_ids
+            else set()
+        )
+        feeds_by_id: dict[int, Any] = {}
+        for feed_id in feed_ids:
+            feed = await self._feed_repo.get_by_id(feed_id)
+            if feed:
+                feeds_by_id[feed_id] = feed
+
+        user_haystacks: dict[str, list[Any]] = {}
+        if all_user_ids:
+            for sub in subscriptions:
+                user_id = str(getattr(sub, "user_id", "") or "").strip()
+                if not user_id:
+                    continue
+                haystacks = user_haystacks.setdefault(user_id, [])
+                haystacks.extend(
+                    [
+                        getattr(sub, "id", ""),
+                        getattr(sub, "title", ""),
+                        getattr(sub, "tags", ""),
+                    ]
+                )
+                feed = feeds_by_id.get(int(getattr(sub, "feed_id", 0) or 0))
+                if feed:
+                    haystacks.extend(
+                        [
+                            getattr(feed, "title", ""),
+                            getattr(feed, "link", ""),
+                        ]
+                    )
         items = []
         for u in users:
             if user_ids and u.id not in user_ids:
@@ -401,12 +486,9 @@ class WebApiHandler:
                 haystacks = [
                     str(u.id or ""),
                     str(getattr(u, "default_target_session", "") or ""),
+                    *user_haystacks.get(str(u.id), []),
                 ]
-                if not any(
-                    keyword.lower() in haystack.lower()
-                    for keyword in keywords
-                    for haystack in haystacks
-                ):
+                if not self._matches_keywords(keywords, haystacks):
                     continue
             items.append(
                 {
@@ -424,6 +506,12 @@ class WebApiHandler:
                     "style": u.style,
                     "display_media": u.display_media,
                     "default_target_session": u.default_target_session,
+                    "subscription_count": subscription_counts.get(u.id, {}).get(
+                        "subscription_count", 0
+                    ),
+                    "active_subscription_count": subscription_counts.get(u.id, {}).get(
+                        "active_subscription_count", 0
+                    ),
                     "created_at": u.created_at.isoformat() if u.created_at else None,
                     "updated_at": u.updated_at.isoformat() if u.updated_at else None,
                 }
@@ -464,10 +552,19 @@ class WebApiHandler:
         if not user_ids:
             return jsonify({"ok": False, "error": "user_id 或 user_ids 不能为空"})
 
+        delete_push_history = bool(data.get("delete_push_history")) if data else False
         removed_count = 0
+        deleted_subscriptions = 0
+        deleted_push_history = 0
         for user_id in user_ids:
-            await self._sub_repo.delete_all_by_user(user_id)
-            if await self._user_repo.delete(user_id):
+            sub_deleted = await self._sub_repo.delete_all_by_user(user_id)
+            history_deleted = 0
+            if delete_push_history:
+                history_deleted = await self._push_history_repo.delete_by_user(user_id)
+            user_deleted = await self._user_repo.delete(user_id)
+            deleted_subscriptions += int(sub_deleted or 0)
+            deleted_push_history += int(history_deleted or 0)
+            if user_deleted or sub_deleted or history_deleted:
                 removed_count += 1
 
         if removed_count > 0:
@@ -477,6 +574,8 @@ class WebApiHandler:
                 {
                     "ok": True,
                     "removed_count": removed_count,
+                    "deleted_subscriptions": deleted_subscriptions,
+                    "deleted_push_history": deleted_push_history,
                     "message": f"已删除 {removed_count} 个用户"
                     if len(user_ids) > 1
                     else f"用户 {user_ids[0]} 已删除",
@@ -490,8 +589,8 @@ class WebApiHandler:
 
     async def handle_feeds(self):
         """列出所有 Feed 源及其订阅统计"""
-        feed_ids = _split_multi_int_values(request.args.get("feed_id", ""))
-        keywords = _split_multi_values(request.args.get("keyword", ""))
+        feed_ids = _query_int_values("feed_id")
+        keywords = _query_values("keyword")
         feeds = await self._feed_repo.get_all()
         subs = await self._sub_repo.get_all_active()
         sub_counts: dict[int, int] = {}
@@ -505,11 +604,7 @@ class WebApiHandler:
                 continue
             if keywords:
                 haystacks = [str(f.id or ""), str(f.title or ""), str(f.link or "")]
-                if not any(
-                    keyword.lower() in haystack.lower()
-                    for keyword in keywords
-                    for haystack in haystacks
-                ):
+                if not self._matches_keywords(keywords, haystacks):
                     continue
             items.append(
                 {
@@ -525,6 +620,97 @@ class WebApiHandler:
                 }
             )
         return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_delete_feeds(self):
+        """删除 Feed，并级联删除对应订阅。"""
+        data = await request.get_json()
+        feed_ids: list[int] = []
+        if data:
+            if isinstance(data.get("feed_ids"), list):
+                feed_ids = [int(item) for item in data["feed_ids"] if str(item).strip()]
+            elif data.get("feed_id"):
+                feed_ids = [int(data.get("feed_id", 0))]
+
+        feed_ids = sorted({feed_id for feed_id in feed_ids if feed_id > 0})
+        if not feed_ids:
+            return jsonify({"ok": False, "error": "feed_id 或 feed_ids 不能为空"})
+
+        delete_push_history = bool(data.get("delete_push_history")) if data else False
+        deleted_subscriptions = await self._sub_repo.delete_all_by_feed_ids(feed_ids)
+        deleted_push_history = 0
+        if delete_push_history:
+            deleted_push_history = await self._push_history_repo.delete_by_feed_ids(
+                feed_ids
+            )
+        removed_count = await self._feed_repo.delete_many(feed_ids)
+
+        if removed_count > 0 or deleted_subscriptions > 0 or deleted_push_history > 0:
+            self._bump_counter()
+            asyncio.create_task(self._broadcast({"event": "data_changed"}))
+
+        return jsonify(
+            {
+                "ok": removed_count > 0,
+                "removed_count": removed_count,
+                "deleted_subscriptions": int(deleted_subscriptions or 0),
+                "deleted_push_history": int(deleted_push_history or 0),
+                "message": f"已删除 {removed_count} 个 Feed"
+                if removed_count > 0
+                else "没有匹配的 Feed 被删除",
+            }
+        )
+
+    async def handle_update_feed(self):
+        """更新 Feed 基本信息。"""
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify({"ok": False, "error": "请求体不能为空"})
+
+        try:
+            feed_id = int(data.get("feed_id") or 0)
+        except (TypeError, ValueError):
+            feed_id = 0
+        if feed_id <= 0:
+            return jsonify({"ok": False, "error": "feed_id 不能为空"})
+
+        feed = await self._feed_repo.get_by_id(feed_id)
+        if feed is None:
+            return jsonify({"ok": False, "error": "Feed 不存在"})
+
+        options = data.get("options") if isinstance(data.get("options"), dict) else {}
+        if "title" in options:
+            title = str(options.get("title") or "").strip()
+            feed.title = title[:1024] if title else feed.link
+        if "link" in options:
+            link = str(options.get("link") or "").strip()
+            if len(link) > 4096:
+                return jsonify({"ok": False, "error": "Feed 链接过长"})
+            parsed = urlparse(link)
+            if parsed.scheme not in ("http", "https"):
+                return jsonify({"ok": False, "error": "Feed 链接必须使用 http/https"})
+            if link != feed.link:
+                existing = await self._feed_repo.get_by_link(link)
+                if existing is not None and existing.id != feed_id:
+                    return jsonify({"ok": False, "error": "Feed 链接已存在"})
+            feed.link = link
+        if "state" in options:
+            try:
+                state = int(options.get("state"))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "Feed 状态无效"})
+            feed.state = 1 if state == 1 else 0
+
+        feed.updated_at = datetime.now(timezone.utc)
+        saved = await self._feed_repo.save(feed)
+        self._bump_counter()
+        asyncio.create_task(self._broadcast({"event": "data_changed"}))
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Feed 已更新",
+                "data": {"id": saved.id},
+            }
+        )
 
     # ─── 订阅管理 ─────────────────────────────────────────────
 
@@ -584,9 +770,20 @@ class WebApiHandler:
         result = await self._unsubscribe_cmd.execute(
             sub_id=int(sub_id), user_id=user_id
         )
+        deleted_push_history = 0
+        if result.success and bool((data or {}).get("delete_push_history")):
+            deleted_push_history = await self._push_history_repo.delete_by_sub_ids(
+                [int(sub_id)]
+            )
         self._bump_counter()
         asyncio.create_task(self._broadcast({"event": "data_changed"}))
-        return jsonify({"ok": result.success, "message": result.message})
+        return jsonify(
+            {
+                "ok": result.success,
+                "message": result.message,
+                "deleted_push_history": deleted_push_history,
+            }
+        )
 
     async def handle_update_subscription(self):
         """更新订阅选项"""
@@ -946,9 +1143,20 @@ class WebApiHandler:
             return jsonify({"ok": False, "error": "sub_ids 不能为空"})
 
         result = await self._batch_unsub_cmd.execute(sub_ids=sub_ids, user_id=user_id)
+        deleted_push_history = 0
+        if result.success and bool((data or {}).get("delete_push_history")):
+            deleted_push_history = await self._push_history_repo.delete_by_sub_ids(
+                [int(sub_id) for sub_id in sub_ids if str(sub_id).strip()]
+            )
         self._bump_counter()
         asyncio.create_task(self._broadcast({"event": "data_changed"}))
-        return jsonify({"ok": result.success, "message": result.message})
+        return jsonify(
+            {
+                "ok": result.success,
+                "message": result.message,
+                "deleted_push_history": deleted_push_history,
+            }
+        )
 
     # ─── 导出 / 统计 ──────────────────────────────────────────
 
@@ -1198,7 +1406,8 @@ class WebApiHandler:
         status = request.args.get("status")
         user_id = request.args.get("user_id")
         target_session = request.args.get("target_session")
-        keywords = _split_multi_values(request.args.get("keyword", ""))
+        keywords = _query_values("keyword")
+        keywords.extend(_query_values("feed_link"))
         page = request.args.get("page", 1, type=int)
         page_size = request.args.get("page_size", 20, type=int)
         offset = (page - 1) * page_size
@@ -1316,6 +1525,37 @@ class WebApiHandler:
             }
         )
 
+    async def handle_retry_push_history(self):
+        """基于单条推送历史重发，并把结果写回原记录。"""
+        if self._notification_dispatcher is None:
+            return jsonify({"ok": False, "error": "notification dispatcher unavailable"})
+
+        data = await request.get_json()
+        history_id = int(data.get("history_id", 0)) if data else 0
+        if history_id <= 0:
+            return jsonify({"ok": False, "error": "history_id 不能为空"})
+
+        result = await self._notification_dispatcher.retry_push_history_once(history_id)
+        self._bump_counter()
+        asyncio.create_task(self._broadcast({"event": "data_changed"}))
+        history = result.get("history")
+        return jsonify(
+            {
+                "ok": bool(result.get("ok")),
+                "message": result.get("message") or "重试已执行",
+                "error": result.get("error") or "",
+                "source_history_id": history_id,
+                "history_id": getattr(history, "id", None) if history else None,
+                "status": getattr(history, "status", None) if history else None,
+                "updated_at": history.updated_at.isoformat()
+                if history and history.updated_at
+                else None,
+                "completed_at": history.completed_at.isoformat()
+                if history and history.completed_at
+                else None,
+            }
+        )
+
     async def handle_cleanup_push_history(self):
         """清理旧推送历史"""
         data = await request.get_json()
@@ -1368,24 +1608,39 @@ def _dump_dataclass_like(value: Any) -> dict[str, Any]:
     return _convert(value)
 
 
-def _split_multi_values(raw: str) -> list[str]:
-    text = str(raw or "").replace("，", ",")
-    values = []
-    for chunk in text.replace("\n", ",").split(","):
-        value = chunk.strip()
-        if value:
-            values.append(value)
-    return values
+def _query_values(name: str) -> list[str]:
+    values: list[str] = []
+    for raw in [*request.args.getlist(name), *request.args.getlist(f"{name}[]")]:
+        values.extend(_coerce_query_values(raw))
+    return list(dict.fromkeys(values))
 
 
-def _split_multi_int_values(raw: str) -> list[int]:
-    values = []
-    for value in _split_multi_values(raw):
+def _coerce_query_values(raw: Any) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return [text]
+        if isinstance(parsed, list):
+            return [
+                str(item).strip()
+                for item in parsed
+                if item is not None and str(item).strip()
+            ]
+    return [text]
+
+
+def _query_int_values(name: str) -> list[int]:
+    values: list[int] = []
+    for value in _query_values(name):
         try:
             values.append(int(value))
-        except ValueError:
+        except (TypeError, ValueError):
             continue
-    return values
+    return list(dict.fromkeys(values))
 
 
 def _ensure_directory(path: Path) -> Path:

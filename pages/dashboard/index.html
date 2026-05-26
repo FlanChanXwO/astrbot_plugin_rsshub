@@ -35,19 +35,16 @@
     </div>
 
     <div class="action-bar" v-if="activeTab === 'subs'">
-      <input class="search-input" type="text" v-model="subFilters.user_id" placeholder="用户 ID（可多值）" />
-      <input class="search-input" type="text" v-model="subFilters.feed_id" placeholder="Feed ID（可多值）" />
-      <input class="search-input" type="text" v-model="subFilters.sub_id" placeholder="订阅 ID（可多值）" />
-      <input class="search-input" type="text" v-model="subFilters.keyword" placeholder="关键词（可多值）" />
-      <button class="btn btn-secondary" :class="{ 'is-loading': isPending('subs:refresh') }" :disabled="isPending('subs:refresh')" @click="applySubscriptionFilters()">应用筛选</button>
+      <div class="tag-filter"><div class="tag-filter-label">用户 ID</div><div class="tag-filter-box"><span v-for="tag in subFilters.user_id.values" :key="tag" class="filter-tag">{{ tag }}<button type="button" @click="removeFilterTag('subFilters', 'user_id', tag)">×</button></span><input type="text" v-model="subFilters.user_id.input" placeholder="输入后回车" @keydown="handleFilterKeydown($event, 'subFilters', 'user_id')" @blur="handleFilterBlur('subFilters', 'user_id')" @paste="handleFilterPaste($event, 'subFilters', 'user_id')" /></div></div>
+      <div class="tag-filter"><div class="tag-filter-label">Feed ID</div><div class="tag-filter-box"><span v-for="tag in subFilters.feed_id.values" :key="tag" class="filter-tag">{{ tag }}<button type="button" @click="removeFilterTag('subFilters', 'feed_id', tag)">×</button></span><input type="text" v-model="subFilters.feed_id.input" placeholder="输入后回车" @keydown="handleFilterKeydown($event, 'subFilters', 'feed_id')" @blur="handleFilterBlur('subFilters', 'feed_id')" @paste="handleFilterPaste($event, 'subFilters', 'feed_id')" /></div></div>
+      <div class="tag-filter tag-filter-wide"><div class="tag-filter-label">Feed URL</div><div class="tag-filter-box"><span v-for="tag in subFilters.feed_link.values" :key="tag" class="filter-tag">{{ tag }}<button type="button" @click="removeFilterTag('subFilters', 'feed_link', tag)">×</button></span><input type="text" v-model="subFilters.feed_link.input" placeholder="输入后回车" @keydown="handleFilterKeydown($event, 'subFilters', 'feed_link')" @blur="handleFilterBlur('subFilters', 'feed_link')" @paste="handleFilterPaste($event, 'subFilters', 'feed_link')" /></div></div>
+      <div class="tag-filter"><div class="tag-filter-label">订阅 ID</div><div class="tag-filter-box"><span v-for="tag in subFilters.sub_id.values" :key="tag" class="filter-tag">{{ tag }}<button type="button" @click="removeFilterTag('subFilters', 'sub_id', tag)">×</button></span><input type="text" v-model="subFilters.sub_id.input" placeholder="输入后回车" @keydown="handleFilterKeydown($event, 'subFilters', 'sub_id')" @blur="handleFilterBlur('subFilters', 'sub_id')" @paste="handleFilterPaste($event, 'subFilters', 'sub_id')" /></div></div>
+      <div class="text-filter"><div class="filter-field-label">关键词</div><input class="filter-text-input" type="text" v-model="subFilters.keyword" placeholder="输入关键词" @input="scheduleFilterRefresh('subFilters')" /></div>
       <button class="btn btn-secondary" @click="clearSubscriptionFilters()" :disabled="isPending('subs:refresh') || !hasSubscriptionFilters()">清空筛选</button>
       <button class="btn" :class="editMode ? 'btn-primary' : 'btn-secondary'" @click="toggleEditMode()">
         {{ editMode ? '完成编辑' : '批量操作' }}
       </button>
       <button class="btn btn-icon" :class="{ 'is-loading': isPending('subs:refresh') }" :disabled="isPending('subs:refresh')" @click="runPending('subs:refresh', () => loadData())" title="刷新">⟳</button>
-    </div>
-    <div v-if="activeTab === 'subs'" style="margin-bottom:12px;font-size:12px;color:#94a3b8;">
-      多值筛选支持使用英文逗号、中文逗号或换行分隔；同字段内命中任一值即可。
     </div>
     <div v-if="activeTab === 'subs' && hasSubscriptionFilters()" style="margin-bottom:12px;font-size:13px;color:#64748b;">
       当前筛选: <strong>{{ subscriptionFilterSummary() }}</strong>
@@ -62,17 +59,13 @@
     </div>
 
     <div class="action-bar" v-if="activeTab === 'users'">
-      <input class="search-input" type="text" v-model="userFilters.user_id" placeholder="用户 ID（可多值）" />
-      <input class="search-input" type="text" v-model="userFilters.keyword" placeholder="关键词（可多值）" />
-      <button class="btn btn-secondary" :class="{ 'is-loading': isPending('users:refresh') }" :disabled="isPending('users:refresh')" @click="applyUserFilters()">应用筛选</button>
+      <div class="tag-filter"><div class="tag-filter-label">用户 ID</div><div class="tag-filter-box"><span v-for="tag in userFilters.user_id.values" :key="tag" class="filter-tag">{{ tag }}<button type="button" @click="removeFilterTag('userFilters', 'user_id', tag)">×</button></span><input type="text" v-model="userFilters.user_id.input" placeholder="输入后回车" @keydown="handleFilterKeydown($event, 'userFilters', 'user_id')" @blur="handleFilterBlur('userFilters', 'user_id')" @paste="handleFilterPaste($event, 'userFilters', 'user_id')" /></div></div>
+      <div class="text-filter"><div class="filter-field-label">关键词</div><input class="filter-text-input" type="text" v-model="userFilters.keyword" placeholder="输入关键词" @input="scheduleFilterRefresh('userFilters')" /></div>
       <button class="btn btn-secondary" @click="clearUserFilters()" :disabled="isPending('users:refresh') || !hasUserFilters()">清空筛选</button>
       <button class="btn" :class="userEditMode ? 'btn-primary' : 'btn-secondary'" @click="toggleUserEditMode()">
         {{ userEditMode ? '完成编辑' : '批量操作' }}
       </button>
       <button class="btn btn-icon" :class="{ 'is-loading': isPending('users:refresh') }" :disabled="isPending('users:refresh')" @click="runPending('users:refresh', () => loadUsers())" title="刷新">⟳</button>
-    </div>
-    <div v-if="activeTab === 'users'" style="margin-bottom:12px;font-size:12px;color:#94a3b8;">
-      多值筛选支持使用英文逗号、中文逗号或换行分隔；同字段内命中任一值即可。
     </div>
     <div v-if="activeTab === 'users' && hasUserFilters()" style="margin-bottom:12px;font-size:13px;color:#64748b;">
       当前筛选: <strong>{{ userFilterSummary() }}</strong>
@@ -84,17 +77,13 @@
     </div>
 
     <div class="action-bar" v-if="activeTab === 'feeds'">
-      <input class="search-input" type="text" v-model="feedFilters.feed_id" placeholder="Feed ID（可多值）" />
-      <input class="search-input" type="text" v-model="feedFilters.keyword" placeholder="关键词（可多值）" />
-      <button class="btn btn-secondary" :class="{ 'is-loading': isPending('feeds:refresh') }" :disabled="isPending('feeds:refresh')" @click="applyFeedFilters()">应用筛选</button>
+      <div class="tag-filter"><div class="tag-filter-label">Feed ID</div><div class="tag-filter-box"><span v-for="tag in feedFilters.feed_id.values" :key="tag" class="filter-tag">{{ tag }}<button type="button" @click="removeFilterTag('feedFilters', 'feed_id', tag)">×</button></span><input type="text" v-model="feedFilters.feed_id.input" placeholder="输入后回车" @keydown="handleFilterKeydown($event, 'feedFilters', 'feed_id')" @blur="handleFilterBlur('feedFilters', 'feed_id')" @paste="handleFilterPaste($event, 'feedFilters', 'feed_id')" /></div></div>
+      <div class="text-filter"><div class="filter-field-label">关键词</div><input class="filter-text-input" type="text" v-model="feedFilters.keyword" placeholder="输入关键词" @input="scheduleFilterRefresh('feedFilters')" /></div>
       <button class="btn btn-secondary" @click="clearFeedFilters()" :disabled="isPending('feeds:refresh') || !hasFeedFilters()">清空筛选</button>
       <button class="btn" :class="feedEditMode ? 'btn-primary' : 'btn-secondary'" @click="toggleFeedEditMode()">
         {{ feedEditMode ? '完成编辑' : '批量操作' }}
       </button>
       <button class="btn btn-icon" :class="{ 'is-loading': isPending('feeds:refresh') }" :disabled="isPending('feeds:refresh')" @click="runPending('feeds:refresh', () => loadFeeds())" title="刷新">⟳</button>
-    </div>
-    <div v-if="activeTab === 'feeds'" style="margin-bottom:12px;font-size:12px;color:#94a3b8;">
-      多值筛选支持使用英文逗号、中文逗号或换行分隔；同字段内命中任一值即可。
     </div>
     <div v-if="activeTab === 'feeds' && hasFeedFilters()" style="margin-bottom:12px;font-size:13px;color:#64748b;">
       当前筛选: <strong>{{ feedFilterSummary() }}</strong>
@@ -103,27 +92,25 @@
     <div class="batch-toolbar" :class="{ visible: feedEditMode && selectedFeedIds.length > 0 }">
       <span class="count">已选 {{ selectedFeedIds.length }} 项</span>
       <button class="btn btn-primary btn-small" :class="{ 'is-loading': isPending('feeds:refresh-batch') }" :disabled="isPending('feeds:refresh-batch')" @click="refreshSelectedFeeds()">批量刷新</button>
+      <button class="btn btn-danger btn-small" :class="{ 'is-loading': isPending('feeds:delete-batch') }" :disabled="isPending('feeds:delete-batch')" @click="deleteSelectedFeeds()">批量删除</button>
     </div>
 
     <div class="action-bar push-history-action-bar" v-if="activeTab === 'push-history'">
-      <input class="search-input" type="text" v-model="pushHistoryFilter.keyword" placeholder="关键词或 ID（可多值）" />
-      <select class="select-input" v-model="pushHistoryFilter.status" @change="pushHistoryFilter.page = 1; loadPushHistory()">
+      <div class="tag-filter tag-filter-wide"><div class="tag-filter-label">Feed URL</div><div class="tag-filter-box"><span v-for="tag in pushHistoryFilter.feed_link.values" :key="tag" class="filter-tag">{{ tag }}<button type="button" @click="removeFilterTag('pushHistoryFilter', 'feed_link', tag)">×</button></span><input type="text" v-model="pushHistoryFilter.feed_link.input" placeholder="输入后回车" @keydown="handleFilterKeydown($event, 'pushHistoryFilter', 'feed_link')" @blur="handleFilterBlur('pushHistoryFilter', 'feed_link')" @paste="handleFilterPaste($event, 'pushHistoryFilter', 'feed_link')" /></div></div>
+      <div class="text-filter text-filter-wide"><div class="filter-field-label">关键词或 ID</div><input class="filter-text-input" type="text" v-model="pushHistoryFilter.keyword" placeholder="输入关键词或 ID" @input="scheduleFilterRefresh('pushHistoryFilter')" /></div>
+      <select class="select-input" v-model="pushHistoryFilter.status" @change="onPushHistoryStatusChanged()">
         <option value="">全部状态</option>
         <option value="pending">待推送</option>
         <option value="success">成功</option>
         <option value="failed">失败</option>
         <option value="stopped">已停止</option>
       </select>
-      <button class="btn btn-secondary" :class="{ 'is-loading': isPending('push-history:refresh') }" :disabled="isPending('push-history:refresh')" @click="runPending('push-history:refresh', () => loadPushHistory())">应用筛选</button>
       <button class="btn btn-secondary" :disabled="isPending('push-history:refresh') || !hasPushHistoryFilters()" @click="clearPushHistoryFilters()">清空筛选</button>
       <button class="btn" :class="pushHistoryEditMode ? 'btn-primary' : 'btn-secondary'" @click="togglePushHistoryEditMode()">
         {{ pushHistoryEditMode ? '完成编辑' : '批量操作' }}
       </button>
       <button class="btn btn-secondary" @click="openPushHistorySettingsPanel()">清理设置</button>
       <button class="btn btn-icon" :class="{ 'is-loading': isPending('push-history:refresh') }" :disabled="isPending('push-history:refresh')" @click="runPending('push-history:refresh', () => loadPushHistory())" title="刷新">⟳</button>
-    </div>
-    <div v-if="activeTab === 'push-history'" style="margin-bottom:12px;font-size:12px;color:#94a3b8;">
-      多值筛选支持使用英文逗号、中文逗号或换行分隔；同字段内命中任一值即可。
     </div>
     <div v-if="activeTab === 'push-history' && hasPushHistoryFilters()" style="margin-bottom:12px;font-size:13px;color:#64748b;">
       当前筛选: <strong>{{ pushHistoryFilterSummary() }}</strong>
@@ -189,14 +176,13 @@
           <div v-if="usersLoading" class="empty-state"><p>加载中...</p></div>
           <div v-else-if="users.length === 0" class="empty-state"><p>暂无用户数据</p></div>
           <table class="sub-table users-table" v-else>
-            <thead><tr><th v-if="userEditMode" class="col-chk"><input type="checkbox" :checked="areAllUsersSelected()" @click.stop @change="toggleAllUserSelection()" /></th><th class="col-user">用户 ID</th><th class="col-status">状态</th><th class="col-interval">订阅数</th><th class="col-session">默认推送目标</th><th class="col-actions">操作</th></tr></thead>
+            <thead><tr><th v-if="userEditMode" class="col-chk"><input type="checkbox" :checked="areAllUsersSelected()" @click.stop @change="toggleAllUserSelection()" /></th><th class="col-user">用户 ID</th><th class="col-status">状态</th><th class="col-interval">订阅数</th><th class="col-actions">操作</th></tr></thead>
             <tbody>
               <tr v-for="u in users" :key="u.user_id" :class="{ selected: selectedUserIds.includes(u.user_id) }" @click="userEditMode ? toggleUserSelection(u.user_id) : selectUser(u.user_id)">
                 <td v-if="userEditMode" class="col-chk"><input type="checkbox" :checked="selectedUserIds.includes(u.user_id)" @click.stop="toggleUserSelection(u.user_id)" /></td>
                 <td class="col-user cell-mono" data-label="用户" :title="u.user_id">{{ u.user_id }}</td>
                 <td class="col-status" data-label="状态"><span class="status-badge" :class="u.state >= 0 ? 'active' : 'inactive'">{{ formatUserState(u.state) }}</span></td>
-                <td class="col-interval" data-label="订阅数">-</td>
-                <td class="col-session cell-mono" data-label="默认推送目标" :title="u.default_target_session">{{ u.default_target_session || '-' }}</td>
+                <td class="col-interval" data-label="订阅数">{{ userSubscriptionCountText(u) }}</td>
                 <td class="col-actions" data-label="操作">
                   <div class="action-cell">
                     <button class="btn btn-text btn-action" :class="{ 'is-loading': isPending(`user:panel-edit:${u.user_id}`) }" :disabled="isPending(`user:panel-edit:${u.user_id}`)" @click.stop="openUserEditPanel(u)">编辑</button>
@@ -225,7 +211,7 @@
                 <td class="col-feed" data-label="Feed"><div class="feed-title">{{ f.title || '未知' }}</div><div class="feed-url" :title="f.link">{{ f.link || '' }}</div></td>
                 <td class="col-interval" data-label="订阅数">{{ f.subscription_count }}</td>
                 <td class="col-status" data-label="状态"><span class="status-dot" :class="f.state === 1 ? 'active' : 'inactive'"></span> {{ f.state === 1 ? '启用' : '停用' }}</td>
-                <td class="col-actions" data-label="操作"><div class="action-cell"><button class="btn btn-text btn-action" :class="{ 'is-loading': isPending(`feed:refresh:${f.id}`) }" :disabled="isPending(`feed:refresh:${f.id}`)" @click.stop="handleRefreshDetail(f.id)">刷新</button></div></td>
+                <td class="col-actions" data-label="操作"><div class="action-cell"><button class="btn btn-text btn-action" :class="{ 'is-loading': isPending(`feed:save:${f.id}`) }" :disabled="isPending(`feed:save:${f.id}`)" @click.stop="openFeedEditPanel(f)">编辑</button><button class="btn btn-text btn-action" :class="{ 'is-loading': isPending(`feed:refresh:${f.id}`) }" :disabled="isPending(`feed:refresh:${f.id}`)" @click.stop="handleRefreshDetail(f.id)">刷新</button><button class="btn btn-text btn-action danger" :class="{ 'is-loading': isPending(`feed:delete:${f.id}`) }" :disabled="isPending(`feed:delete:${f.id}`)" @click.stop="handleDeleteFeed(f.id)">删除</button></div></td>
               </tr>
             </tbody>
           </table>
@@ -394,6 +380,7 @@
                 <td class="col-actions" data-label="操作">
                   <div class="action-cell">
                     <button class="btn btn-text btn-action" @click.stop="openPushHistoryDetail(h)">详情</button>
+                    <button class="btn btn-text btn-action" :class="{ 'is-loading': isPending(`push-history:retry:${h.id}`) }" :disabled="isPending(`push-history:retry:${h.id}`)" @click.stop="retryPushHistoryItem(h.id)">重试</button>
                     <button class="btn btn-text btn-action danger" :class="{ 'is-loading': isPending(`push-history:delete:${h.id}`) }" :disabled="isPending(`push-history:delete:${h.id}`)" @click.stop="deletePushHistoryItem(h.id)">删除</button>
                   </div>
                 </td>
@@ -592,7 +579,13 @@
         </div>
         <div class="form-group">
           <label>刷新间隔（分钟）</label>
-          <div class="input-wrapper"><input type="number" v-model.number="editForm.interval" min="-100" max="1440" /></div>
+          <div class="inherit-control">
+            <select class="select-input" v-model="editForm.interval_control.mode">
+              <option value="inherit">继承</option>
+              <option value="custom">自定义</option>
+            </select>
+            <div v-if="editForm.interval_control.mode === 'custom'" class="input-wrapper"><input type="number" v-model.number="editForm.interval_control.value" min="1" max="1440" /></div>
+          </div>
         </div>
         <div class="setting-row">
           <span class="setting-label">状态</span>
@@ -603,7 +596,7 @@
         <h4>显示选项</h4>
         <div class="setting-row"><span class="setting-label">发送模式</span><select class="select-input" v-model.number="editForm.send_mode"><option :value="-100">继承</option><option :value="-1">仅链接</option><option :value="0">自动</option><option :value="1">直接发送</option></select></div>
         <div class="setting-row"><span class="setting-label">通知</span><select class="select-input" v-model.number="editForm.notify"><option :value="-100">继承</option><option :value="0">禁用</option><option :value="1">启用</option></select></div>
-        <div class="setting-row"><span class="setting-label">内容长度限制</span><div class="input-wrapper" style="max-width:120px;"><input type="number" v-model.number="editForm.length_limit" min="0" max="10000" /></div></div>
+        <div class="setting-row"><span class="setting-label">内容长度限制</span><div class="inherit-control"><select class="select-input" v-model="editForm.length_limit_control.mode"><option value="inherit">继承</option><option value="custom">自定义</option></select><div v-if="editForm.length_limit_control.mode === 'custom'" class="input-wrapper"><input type="number" v-model.number="editForm.length_limit_control.value" min="0" max="10000" /></div></div></div>
         <div class="setting-row"><span class="setting-label">显示作者</span><select class="select-input" v-model.number="editForm.display_author"><option :value="-100">继承</option><option :value="-1">禁用</option><option :value="0">自动</option><option :value="1">强制</option></select></div>
         <div class="setting-row"><span class="setting-label">显示来源</span><select class="select-input" v-model.number="editForm.display_via"><option :value="-100">继承</option><option :value="-2">完全禁用</option><option :value="-1">仅链接</option><option :value="0">自动</option><option :value="1">强制</option></select></div>
         <div class="setting-row"><span class="setting-label">显示标题</span><select class="select-input" v-model.number="editForm.display_title"><option :value="-100">继承</option><option :value="-1">禁用</option><option :value="0">自动</option><option :value="1">强制</option></select></div>
@@ -746,10 +739,6 @@
         <div class="detail-row"><span class="detail-label">用户 ID</span><span class="detail-value">{{ userEditForm.user_id }}</span></div>
         <div class="setting-row"><span class="setting-label">用户状态</span><select class="select-input" v-model.number="userEditForm.state"><option :value="-1">已封禁</option><option :value="1">用户</option></select></div>
         <div class="form-group">
-          <label>默认推送目标</label>
-          <div class="input-wrapper"><input type="text" v-model="userEditForm.default_target_session" placeholder="unified_msg_origin" /></div>
-        </div>
-        <div class="form-group">
           <label>内容处理链</label>
           <div class="handler-editor">
             <div class="handler-json">
@@ -761,10 +750,10 @@
       </div>
       <div class="panel-section">
         <h4>推送设置</h4>
-        <div class="setting-row"><span class="setting-label">推送间隔（分钟）</span><div class="input-wrapper" style="max-width:120px;"><input type="number" v-model.number="userEditForm.interval" min="-100" max="1440" /></div></div>
+        <div class="setting-row"><span class="setting-label">推送间隔（分钟）</span><div class="inherit-control"><select class="select-input" v-model="userEditForm.interval_control.mode"><option value="inherit">继承</option><option value="custom">自定义</option></select><div v-if="userEditForm.interval_control.mode === 'custom'" class="input-wrapper"><input type="number" v-model.number="userEditForm.interval_control.value" min="1" max="1440" /></div></div></div>
         <div class="setting-row"><span class="setting-label">通知</span><select class="select-input" v-model.number="userEditForm.notify"><option :value="-100">继承</option><option :value="0">禁用</option><option :value="1">启用</option></select></div>
         <div class="setting-row"><span class="setting-label">发送模式</span><select class="select-input" v-model.number="userEditForm.send_mode"><option :value="-100">继承</option><option :value="-1">仅链接</option><option :value="0">自动</option><option :value="1">直接发送</option></select></div>
-        <div class="setting-row"><span class="setting-label">内容长度限制</span><div class="input-wrapper" style="max-width:120px;"><input type="number" v-model.number="userEditForm.length_limit" min="0" max="10000" /></div></div>
+        <div class="setting-row"><span class="setting-label">内容长度限制</span><div class="inherit-control"><select class="select-input" v-model="userEditForm.length_limit_control.mode"><option value="inherit">继承</option><option value="custom">自定义</option></select><div v-if="userEditForm.length_limit_control.mode === 'custom'" class="input-wrapper"><input type="number" v-model.number="userEditForm.length_limit_control.value" min="0" max="10000" /></div></div></div>
       </div>
       <div class="panel-section">
         <h4>显示选项</h4>
@@ -785,6 +774,36 @@
     </form>
   </section>
 
+  <div class="panel-overlay" :class="{ visible: feedEditPanelVisible }" @click="closeFeedEditPanel()"></div>
+  <section class="edit-panel" :class="{ 'panel-visible': feedEditPanelVisible }">
+    <div class="panel-header">
+      <h3>编辑 Feed</h3>
+      <div class="panel-actions"><button class="btn btn-icon" @click="closeFeedEditPanel()">×</button></div>
+    </div>
+    <form class="form" @submit.prevent="handleSaveFeedEdit()">
+      <div class="panel-section">
+        <h4>基本信息</h4>
+        <div class="detail-row"><span class="detail-label">Feed ID</span><span class="detail-value">{{ feedEditForm.id }}</span></div>
+        <div class="form-group">
+          <label>标题</label>
+          <div class="input-wrapper"><input type="text" v-model="feedEditForm.title" placeholder="Feed 标题" /></div>
+        </div>
+        <div class="form-group">
+          <label>链接</label>
+          <div class="input-wrapper"><input type="text" v-model="feedEditForm.link" placeholder="https://..." /></div>
+        </div>
+        <div class="setting-row"><span class="setting-label">状态</span><select class="select-input" v-model.number="feedEditForm.state"><option :value="1">启用</option><option :value="0">停用</option></select></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-danger" :class="{ 'is-loading': isPending(`feed:delete:${feedEditForm.id}`) }" :disabled="isPending(`feed:delete:${feedEditForm.id}`)" @click="handleDeleteFeed(feedEditForm.id)">删除 Feed</button>
+        <div class="center-actions">
+          <button type="button" class="btn btn-text" @click="closeFeedEditPanel()">取消</button>
+          <button type="submit" class="btn btn-primary" :class="{ 'is-loading': isPending(`feed:save:${feedEditForm.id}`) }" :disabled="isPending(`feed:save:${feedEditForm.id}`)">{{ isPending(`feed:save:${feedEditForm.id}`) ? '保存中...' : '保存修改' }}</button>
+        </div>
+      </div>
+    </form>
+  </section>
+
   <div class="toast" :class="[toast.type, { show: toast.show }]" v-if="toast.show">{{ toast.message }}</div>
 
   <div class="confirm-dialog" :class="{ visible: dialog.show }" v-if="dialog.show" style="display:flex;">
@@ -792,6 +811,10 @@
     <div class="confirm-dialog-content">
       <h4>{{ dialog.title }}</h4>
       <p>{{ dialog.message }}</p>
+      <label v-if="dialog.optionLabel" class="confirm-option">
+        <input type="checkbox" v-model="dialog.optionValue" />
+        <span>{{ dialog.optionLabel }}</span>
+      </label>
       <div class="confirm-dialog-actions">
         <button type="button" class="btn btn-secondary" @click="dialog.resolve(false)">取消</button>
         <button type="button" class="btn" :class="dialog.okClass" @click="dialog.resolve(true)">{{ dialog.okText }}</button>

@@ -9,6 +9,7 @@ from astrbot_plugin_rsshub.src.infrastructure.persistence.migrations import (
     cleanup_legacy_translation_tables,
     ensure_profile_schema,
     ensure_push_history_schema,
+    ensure_user_rows,
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.models import SubORM
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -103,6 +104,174 @@ async def test_cleanup_legacy_translation_tables_drops_existing_tables():
     executed_sql = "\n".join(sql for sql, _ in conn.executed)
     assert "DROP TABLE IF EXISTS rsshub_translation_cache" in executed_sql
     assert "DROP TABLE IF EXISTS rsshub_translate_history" in executed_sql
+
+
+@pytest.mark.asyncio
+async def test_ensure_user_rows_backfills_orphan_subscription_and_history_users():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE rsshub_user (
+                id VARCHAR PRIMARY KEY,
+                state INTEGER NOT NULL DEFAULT 1,
+                interval INTEGER NOT NULL DEFAULT -100,
+                notify INTEGER NOT NULL DEFAULT -100,
+                send_mode INTEGER NOT NULL DEFAULT -100,
+                handlers TEXT NOT NULL DEFAULT '[]',
+                length_limit INTEGER NOT NULL DEFAULT -100,
+                display_author INTEGER NOT NULL DEFAULT -100,
+                display_via INTEGER NOT NULL DEFAULT -100,
+                display_title INTEGER NOT NULL DEFAULT -100,
+                display_entry_tags INTEGER NOT NULL DEFAULT -100,
+                style INTEGER NOT NULL DEFAULT -100,
+                display_media INTEGER NOT NULL DEFAULT -100,
+                default_target_session TEXT,
+                needs_binding_notice INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE rsshub_sub (
+                id INTEGER PRIMARY KEY,
+                user_id VARCHAR NOT NULL
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE rsshub_push_history (
+                id INTEGER PRIMARY KEY,
+                user_id VARCHAR
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO rsshub_sub (id, user_id) VALUES (1, 'user-sub'), (2, '')"
+        )
+        await conn.exec_driver_sql(
+            """
+            INSERT INTO rsshub_push_history (id, user_id)
+            VALUES (1, 'user-history'), (2, 'user-sub'), (3, NULL)
+            """
+        )
+
+        inserted = await ensure_user_rows(conn)
+        inserted_again = await ensure_user_rows(conn)
+        rows = (
+            await conn.exec_driver_sql("SELECT id, state FROM rsshub_user ORDER BY id")
+        ).fetchall()
+
+    assert inserted == 2
+    assert inserted_again == 0
+    assert rows == [("user-history", 1), ("user-sub", 1)]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_user_rows_backfills_when_user_table_lacks_sql_defaults():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE rsshub_user (
+                id VARCHAR PRIMARY KEY,
+                state INTEGER NOT NULL,
+                interval INTEGER NOT NULL,
+                notify INTEGER NOT NULL,
+                send_mode INTEGER NOT NULL,
+                handlers VARCHAR NOT NULL,
+                length_limit INTEGER NOT NULL,
+                display_author INTEGER NOT NULL,
+                display_via INTEGER NOT NULL,
+                display_title INTEGER NOT NULL,
+                display_entry_tags INTEGER NOT NULL,
+                style INTEGER NOT NULL,
+                display_media INTEGER NOT NULL,
+                default_target_session VARCHAR(255),
+                needs_binding_notice INTEGER NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE rsshub_sub (
+                id INTEGER PRIMARY KEY,
+                user_id VARCHAR NOT NULL
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE rsshub_push_history (
+                id INTEGER PRIMARY KEY,
+                user_id VARCHAR
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO rsshub_sub (id, user_id) VALUES (1, 'legacy-user')"
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO rsshub_push_history (id, user_id) VALUES (1, 'legacy-user')"
+        )
+
+        inserted = await ensure_user_rows(conn)
+        inserted_again = await ensure_user_rows(conn)
+        rows = (
+            await conn.exec_driver_sql(
+                """
+                SELECT
+                    id,
+                    state,
+                    interval,
+                    notify,
+                    send_mode,
+                    handlers,
+                    length_limit,
+                    display_author,
+                    display_via,
+                    display_title,
+                    display_entry_tags,
+                    style,
+                    display_media,
+                    needs_binding_notice,
+                    created_at IS NOT NULL,
+                    updated_at IS NOT NULL
+                FROM rsshub_user
+                ORDER BY id
+                """
+            )
+        ).fetchall()
+
+    assert inserted == 1
+    assert inserted_again == 0
+    assert rows == [
+        (
+            "legacy-user",
+            1,
+            -100,
+            -100,
+            -100,
+            "[]",
+            -100,
+            -100,
+            -100,
+            -100,
+            -100,
+            -100,
+            -100,
+            0,
+            1,
+            1,
+        )
+    ]
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

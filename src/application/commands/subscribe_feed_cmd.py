@@ -9,6 +9,7 @@ from ...domain.entities.handlers import parse_handlers_input
 from ...domain.entities.subscription import SUPPORTED_HANDLERS_MODES
 from ...domain.repositories.feed_repository import FeedRepository
 from ...domain.repositories.subscription_repository import SubscriptionRepository
+from ...domain.repositories.user_repository import UserRepository
 from ...domain.value_objects.feed_url import FeedUrl
 from ...infrastructure.config import FeedFetchSettings, validate_interval_value
 from ...infrastructure.utils import get_logger
@@ -60,11 +61,13 @@ class SubscribeFeedCommand:
         feed_repo: FeedRepository,
         fetch_settings: FeedFetchSettings | None = None,
         fetcher_factory: FeedFetcherFactory | None = None,
+        user_repo: UserRepository | None = None,
     ):
         self._subscription_repo = subscription_repo
         self._feed_repo = feed_repo
         self._fetch_settings = fetch_settings or FeedFetchSettings()
         self._fetcher_factory = fetcher_factory
+        self._user_repo = user_repo
 
     async def execute(
         self,
@@ -168,6 +171,11 @@ class SubscribeFeedCommand:
             )
 
         title = web_feed.rss_d.feed.get("title", url)
+
+        normalized_user_id = str(user_id or "").strip()
+        if self._user_repo is not None and normalized_user_id:
+            await self._user_repo.get_or_create(normalized_user_id)
+            user_id = normalized_user_id
 
         # 查找或创建 Feed
         feed = await self._feed_repo.get_by_link(normalized_url)

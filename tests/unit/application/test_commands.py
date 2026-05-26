@@ -292,6 +292,51 @@ class TestSubscribeFeedCommand:
         assert result.success is True
         sub_repo.update_options.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_subscribe_ensures_user_before_saving_subscription(self):
+        from astrbot_plugin_rsshub.src.application.commands.subscribe_feed_cmd import (
+            SubscribeFeedCommand,
+        )
+        from astrbot_plugin_rsshub.src.domain.entities.feed import Feed
+        from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
+
+        fetcher = AsyncMock()
+        fetcher.fetch.return_value = MagicMock(
+            error=None,
+            rss_d=MagicMock(feed={"title": "Test Feed"}),
+        )
+        fetcher.close = AsyncMock()
+        feed_repo = MagicMock()
+        feed_repo.get_by_link = AsyncMock(return_value=None)
+        feed_repo.save = AsyncMock(
+            return_value=Feed(
+                id=1, link="https://example.com/rss.xml", title="Test Feed"
+            )
+        )
+        sub_repo = MagicMock()
+        sub_repo.get_by_user_and_feed = AsyncMock(return_value=None)
+        sub_repo.save = AsyncMock(
+            return_value=Subscription(id=1, user_id="user123", feed_id=1)
+        )
+        user_repo = MagicMock()
+        user_repo.get_or_create = AsyncMock()
+
+        cmd = SubscribeFeedCommand(
+            subscription_repo=sub_repo,
+            feed_repo=feed_repo,
+            fetcher_factory=MagicMock(return_value=fetcher),
+            user_repo=user_repo,
+        )
+
+        result = await cmd.execute(
+            url="https://example.com/rss.xml",
+            user_id=" user123 ",
+        )
+
+        assert result.success is True
+        user_repo.get_or_create.assert_awaited_once_with("user123")
+        sub_repo.get_by_user_and_feed.assert_awaited_once_with("user123", 1)
+
 
 class TestUnsubscribeFeedCommand:
     """测试取消订阅命令"""

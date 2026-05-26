@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-项目目前处于 v2.0.0 收口阶段，已经完成的重点包括：
+项目已经完成 v2.0.0 后的核心收口，当前重点转向处理器内部通信与后续扩展运行时边界。已完成的重点包括：
 
 - 命令语义回归收口
 - `link_preview` 全量移除
@@ -22,19 +22,20 @@
 ### 处理器生态
 
 - 当前仅展示和执行内置 handler
-- Plugin Pages 中的“安装处理器”入口暂时禁用
+- 内置处理器已经接入当前 handler runtime
+- 下一步重点是处理器内部通信契约、上下文、trace 和错误模型
 - external handler 数据可保存/展示，但运行时不执行
 
 ### 更长期的演进
 
-依据 [`PLAN.md`](../PLAN.md)，后续仍可能继续推进：
+依据 [`PLAN.md`](../PLAN.md)，后续计划已经收敛到 Stage 3：
 
-- 平台无关组件契约
-- 独立 extension runtime
-- registry 安装流
-- 更强的 AI formatter / transform 能力
+- 稳定 `HandlerRequest` / `HandlerResult` / `HandlerTraceEvent`
+- 迁移内置 `ai_filter` / `ai_transform` 到统一消息契约
+- 为外部处理器 JSON-safe payload 和 RPC 边界做预备
+- Registry、完整 Extension Runtime、作者辅助 skill 暂缓到通信契约稳定之后
 
-`PLAN.md` 是长期方案草案；真正实施时以当时的 issue、PR 和变更说明为准。
+`PLAN.md` 是当前后续草案；真正实施时以当时的 issue、PR 和变更说明为准。
 
 ## 建议的文档维护策略
 

@@ -139,6 +139,8 @@ AI tool `rss_push_xml_entry` 不依赖 `sub_id`。它直接：
 3. 构建推送 history
 4. 调用 sender
 
+它只开放安全排版参数：`style`、`send_mode`、`display_media`、`display_title`、`display_author`、`display_via`、`display_entry_tags`、`length_limit`；不开放 `handlers`，避免即时推送注入处理链。
+
 适合“没有订阅但要即时推送”的 agent 场景。
 
 ## 模块关系图
@@ -188,6 +190,8 @@ flowchart TD
 - 用户默认配置
 - handlers 链
 - 推送历史自动清理范围
+
+`rsshub_user` 是插件用户事实表。任何写入订阅或推送历史的入口都必须确保对应 `user_id` 存在；启动期数据库自愈也会扫描订阅和推送历史引用，补齐旧库缺失的用户行。Dashboard 删除用户会删除该用户订阅，推送历史默认保留，只有显式选择时才删除历史。
 
 详见 [`handlers.md`](./handlers.md) 与 [`knowledge.md`](./knowledge.md) 中的状态管理部分。
 

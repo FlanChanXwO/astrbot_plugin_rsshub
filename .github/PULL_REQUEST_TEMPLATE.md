@@ -14,23 +14,6 @@
 <!--Please paste screenshots, GIFs, or test logs here as evidence of executing the "Verification Steps" to prove this change is effective.-->
 <!--请粘贴截图、GIF 或测试日志，作为执行“验证步骤”的证据，证明此改动有效。-->
 
----
-
-### Verification Steps / 验证步骤
-
-```powershell
-uv run ruff format data/plugins/astrbot_plugin_rsshub
-uv run ruff check data/plugins/astrbot_plugin_rsshub
-```
-
-(可选) 语法检查：
-
-```powershell
-uv run python -m py_compile data/plugins/astrbot_plugin_rsshub/main.py
-```
-
----
-
 ### Checklist / 检查清单
 
 <!--If merged, your code will serve tens of thousands of users! Please double-check the following items before submitting.-->
@@ -42,8 +25,8 @@ uv run python -m py_compile data/plugins/astrbot_plugin_rsshub/main.py
 - [ ] 👀 My changes have been well-tested, **and "Verification Steps" and "Screenshots" have been provided above**.
   / 我的更改经过了良好的测试，**并已在上方提供了“验证步骤”和“运行截图”**。
 
-- [ ] 🤓 I have ensured that no new dependencies are introduced, OR if new dependencies are introduced, they have been added to the appropriate locations in `requirements.txt` and `pyproject.toml`.
-  / 我确保没有引入新依赖库，或者引入了新依赖库的同时将其添加到 `requirements.txt` 和 `pyproject.toml` 文件相应位置。
+- [ ] 🤓 I have ensured that no new dependencies are introduced, OR if new dependencies are introduced, they have been added to the appropriate locations in `requirements.txt`.
+  / 我确保没有引入新依赖库，或者引入了新依赖库的同时将其添加到 `requirements.txt` 文件相应位置。
 
 - [ ] 😮 My changes do not introduce malicious code.
   / 我的更改没有引入恶意代码。

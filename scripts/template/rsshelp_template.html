@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>RSSHub 插件命令帮助</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@700&family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet"/>
+    <style>{{ inline_css }}</style>
+</head>
+<body>
+<div class="card">
+    <!-- Header -->
+    <div class="header">
+        {{ rsslogo_svg | safe }}
+        <div>
+            <div class="header-title">RSSHub for <span>AstrBot</span> 命令帮助</div>
+            <div class="header-sub">预生成静态帮助图 · 命令说明来自插件入口定义</div>
+        </div>
+    </div>
+
+    <!-- Command groups -->
+    <div class="body">
+        {% for group in groups %}
+        <div class="group">
+            <div class="group-title">
+                {% if group.title == '订阅管理' %}
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                    <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"
+                          stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                    <path d="M2 10h20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                {% elif group.title == '配置命令' %}
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                    <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"
+                          stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                {% elif group.title == '管理员' %}
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 15a5 5 0 1 0 0-10 5 5 0 0 0 0 10z" stroke="currentColor" stroke-width="2"
+                          stroke-linejoin="round"/>
+                    <path d="M19 21l-3-3-3 3M5 3l3 3 3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                          stroke-linejoin="round"/>
+                </svg>
+                {% elif group.title == '其他命令' %}
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+                    <path d="M8 12h8M12 8v8" stroke="currentColor" stroke-width="2"
+                          stroke-linecap="round"/>
+                </svg>
+                {% endif %}
+                {{ group.title }}
+            </div>
+
+            {% for cmd in group.commands %}
+            <div class="cmd cmd-{{ cmd.type | replace('_', '-') }}">
+                <div class="cmd-name-row">
+                    <span class="cmd-name">{{ cmd.display_command }}</span>
+                    {% if cmd.type == 'group' %}
+                    <span class="cmd-kind">命令组</span>
+                    {% elif cmd.type == 'group_command' %}
+                    <span class="cmd-kind">子命令</span>
+                    {% endif %}
+                    {% if cmd.display_aliases %}
+                    <span class="cmd-aliases">
+              {% for a in cmd.display_aliases %}
+              <span class="alias-tag">{{ a }}</span>
+              {% endfor %}
+            </span>
+                    {% endif %}
+                </div>
+                <div class="cmd-desc">{{ cmd.summary }}</div>
+                {% if cmd.usage %}
+                <div class="cmd-detail">
+                    <span class="cmd-detail-label">用法</span>
+                    <span class="cmd-detail-text">{{ cmd.usage | join(' · ') }}</span>
+                </div>
+                {% endif %}
+                {% if cmd.examples %}
+                <div class="cmd-detail">
+                    <span class="cmd-detail-label">示例</span>
+                    <span class="cmd-detail-text">{{ cmd.examples | join(' · ') }}</span>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <svg class="footer-icon github-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.65 7.65 0 0 1 8 3.86c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        <span class="footer-text">FlanChanXwO/astrbot_plugin_rsshub</span>
+    </div>
+</div>
+</body>
+</html>

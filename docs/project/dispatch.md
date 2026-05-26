@@ -25,6 +25,26 @@
 
 所以 dispatcher 的存在，本质上是在“条目生成”和“平台发送”之间插入一个可靠控制层。
 
+## 主流程图
+
+这张图描述单个 entry 对单个订阅目标的核心分发路径。批量订阅分发只是重复执行这条链路，并通过会话队列保证同一 session 串行。
+
+```mermaid
+flowchart TD
+  A["标准化 entry"] --> B["解析 subscription / user / global 生效配置"]
+  B --> C["创建 pending push_history"]
+  C --> D["执行 ContentHandlerRuntime"]
+  D --> E{"handler 是否允许发送"}
+  E -->|"allow=false"| F["写 skipped history"]
+  E -->|"allow=true 或增强失败放行"| G["格式化最终文本与媒体"]
+  G --> H["进入 SessionPushQueue"]
+  H --> I["调用平台 sender"]
+  I --> J{"发送结果"}
+  J -->|"成功"| K["更新 success history"]
+  J -->|"可重试失败"| L["保留失败上下文并进入自动重试策略"]
+  J -->|"不可恢复失败"| M["更新 failed history"]
+```
+
 ## 生效配置算法
 
 配置解析遵循：
@@ -68,6 +88,7 @@
 - `failed_queue_capacity=0` 时，自动失败重试队列关闭，但失败发送仍然要写入 `push_history`
 - `failed_queue_max_retries` 只限制自动重试次数，不影响失败历史保留
 - 自动重试上限耗尽后，记录继续作为失败历史保留，供 Dashboard、人工补发和审计查看
+- Dashboard 推送历史的单条「重试」会复用原记录保存的文本、媒体 URL、目标会话和来源信息重新发送，并把本次结果写回同一条 `push_history` 记录；人工重试不会占用自动重试次数。列表按最近活动时间排序，所以重试后的记录会回到顶部。
 
 ### 为什么先写 history 再发
 

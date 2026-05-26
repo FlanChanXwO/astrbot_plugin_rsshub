@@ -5,6 +5,7 @@ from .batch_deactivate_cmd import BatchDeactivateCommand
 from .batch_unsubscribe_cmd import BatchUnsubscribeCommand
 from .export_subscriptions_cmd import ExportSubscriptionsCommand
 from .get_user_settings_cmd import GetUserSettingsCommand
+from .help_image_cmd import HelpImageCommand
 from .import_subscriptions_cmd import ImportSubscriptionsCommand
 from .set_user_settings_cmd import SetUserSettingsCommand
 from .sub_state_cmd import SubStateCommand
@@ -19,6 +20,7 @@ __all__ = [
     "BatchUnsubscribeCommand",
     "ExportSubscriptionsCommand",
     "GetUserSettingsCommand",
+    "HelpImageCommand",
     "ImportSubscriptionsCommand",
     "SetUserSettingsCommand",
     "SubStateCommand",

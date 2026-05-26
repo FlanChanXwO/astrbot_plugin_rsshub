@@ -22,6 +22,38 @@ handler 的本质是“可配置、可排序、可审计的内容处理步骤”
 
 所以 runtime 层的价值，是把“处理链”本身变成一等对象。
 
+## 执行流程图
+
+Handler runtime 的关键不是“有哪些 handler”，而是配置如何解析、执行如何串联、失败如何回到主链路。
+
+```mermaid
+flowchart TD
+  A["subscription + user + entry"] --> B{"handlers_mode"}
+  B -->|"disabled"| C["跳过处理链"]
+  B -->|"override"| D["使用订阅 handlers"]
+  B -->|"inherit"| E["使用用户 handlers"]
+  B -->|"legacy / dirty value"| F["兼容归一化"]
+  D --> G["按配置顺序执行"]
+  E --> G
+  F --> G
+  G --> H{"当前 handler 类型"}
+  H -->|"ai_filter"| I["Provider JSON 判定 allow / reason"]
+  H -->|"ai_transform plaintext"| J["改写 title / summary / content"]
+  H -->|"ai_transform xml"| K["改写 raw_xml 并自检"]
+  I --> L{"allow=false"}
+  L -->|"是"| M["返回 skipped 语义"]
+  L -->|"否"| N["继续下一个 handler"]
+  J --> N
+  K --> O{"XML 校验与重解析成功"}
+  O -->|"是"| N
+  O -->|"否"| P["记录 trace 并回退原 entry"]
+  P --> N
+  N --> Q{"还有 handler"}
+  Q -->|"是"| G
+  Q -->|"否"| R["返回处理后的 entry + trace"]
+  C --> R
+```
+
 ## handler 解析算法
 
 核心输入：

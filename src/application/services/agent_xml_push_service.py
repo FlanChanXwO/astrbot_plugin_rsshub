@@ -388,7 +388,9 @@ class AgentXmlPushService:
             dispatch_media_items = []
             dispatch_layout = []
         if options.send_mode == SEND_MODE_LINK_ONLY:
-            content = _build_link_only_content(title=title, link=str(link or "").strip())
+            content = _build_link_only_content(
+                title=title, link=str(link or "").strip()
+            )
             dispatch_media_urls = []
             dispatch_media_items = []
             dispatch_layout = []

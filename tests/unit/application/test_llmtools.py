@@ -146,8 +146,7 @@ async def test_llm_tool_rss_subscribe_supports_url_targets():
     assert result == "成功订阅 2 个 RSS 源"
     assert deps["subscribe_cmd"].execute.await_count == 2
     assert [
-        call.kwargs["url"]
-        for call in deps["subscribe_cmd"].execute.await_args_list
+        call.kwargs["url"] for call in deps["subscribe_cmd"].execute.await_args_list
     ] == [
         "https://example.com/rss.xml",
         "https://example.com/atom.xml",
@@ -177,8 +176,7 @@ async def test_llm_tool_rss_subscribe_supports_uri_targets_with_default_base_url
     assert result == "成功订阅 2 个 RSS 源"
     assert deps["subscribe_cmd"].execute.await_count == 2
     assert [
-        call.kwargs["url"]
-        for call in deps["subscribe_cmd"].execute.await_args_list
+        call.kwargs["url"] for call in deps["subscribe_cmd"].execute.await_args_list
     ] == [
         "https://rss.example.com/twitter/user/dynamic/123",
         "https://rss.example.com/pixiv/search/碧蓝档案",
@@ -214,8 +212,7 @@ async def test_llm_tool_rss_subscribe_mixed_targets_deduplicate_in_order():
 
     assert deps["subscribe_cmd"].execute.await_count == 2
     assert [
-        call.kwargs["url"]
-        for call in deps["subscribe_cmd"].execute.await_args_list
+        call.kwargs["url"] for call in deps["subscribe_cmd"].execute.await_args_list
     ] == [
         "https://example.com/rss.xml",
         "https://rss.example.com/twitter/user/dynamic/123",

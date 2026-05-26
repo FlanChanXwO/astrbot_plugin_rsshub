@@ -1528,7 +1528,9 @@ class WebApiHandler:
     async def handle_retry_push_history(self):
         """基于单条推送历史重发，并把结果写回原记录。"""
         if self._notification_dispatcher is None:
-            return jsonify({"ok": False, "error": "notification dispatcher unavailable"})
+            return jsonify(
+                {"ok": False, "error": "notification dispatcher unavailable"}
+            )
 
         data = await request.get_json()
         history_id = int(data.get("history_id", 0)) if data else 0

@@ -22,6 +22,7 @@ from ....shared.constants import (
 from ...pipeline import MessageComponent, MessageFormatter
 from ...utils import get_logger
 from ...utils.lock import locked
+from ...utils.media_type_detector import detect_media_file
 from .types import MessageContext, PreparedMedia, SendRequest, SendResult
 
 if TYPE_CHECKING:
@@ -172,7 +173,8 @@ class DefaultMessageSender:
                 return transcoded_path
         except Exception as ex:
             logger.warning(
-                "Video transcode failed, using original media: path=%s, err=%s",
+                "prepare_transcode_video: Video transcode failed, using original "
+                "media: path=%s, err=%s",
                 media_path,
                 ex,
             )
@@ -188,6 +190,29 @@ class DefaultMessageSender:
         if MAX_SEND_ERROR_DETAIL_LENGTH <= 3:
             return text[:MAX_SEND_ERROR_DETAIL_LENGTH]
         return text[: MAX_SEND_ERROR_DETAIL_LENGTH - 3] + "..."
+
+    @classmethod
+    def _stage_error_detail(cls, stage: str, detail: str | None) -> str:
+        normalized_stage = str(stage or "").strip()
+        normalized_detail = str(detail or "").strip() or "send_failed"
+        if not normalized_stage:
+            return cls._normalize_error_detail(normalized_detail)
+        prefix = f"{normalized_stage}:"
+        if normalized_detail.startswith(prefix):
+            return cls._normalize_error_detail(normalized_detail)
+        return cls._normalize_error_detail(f"{prefix} {normalized_detail}")
+
+    @classmethod
+    def _result_with_stage(cls, result: SendResult, stage: str) -> SendResult:
+        if result.ok:
+            return result
+        return SendResult(
+            ok=False,
+            needs_rebind=result.needs_rebind,
+            transient=result.transient,
+            detail=cls._stage_error_detail(stage, result.detail),
+            http_status=result.http_status,
+        )
 
     async def prepare_media(
         self,
@@ -235,11 +260,20 @@ class DefaultMessageSender:
                 )
                 if media_type == "video":
                     local_path = await self._maybe_transcode_video_to_mp4(local_path)
+                detection = detect_media_file(local_path)
+                effective_media_type = (
+                    detection.media_type
+                    if detection.media_type in {"image", "video", "audio"}
+                    else media_type
+                )
                 prepared.append(
                     PreparedMedia(
-                        media_type=media_type,
+                        media_type=effective_media_type,
                         original_url=media_url,
                         local_path=local_path,
+                        detected_mime=detection.mime,
+                        detected_suffix=detection.suffix,
+                        detection_source=detection.source,
                     )
                 )
             except Exception as ex:
@@ -251,7 +285,8 @@ class DefaultMessageSender:
                     )
                 )
                 logger.warning(
-                    "Prepare media failed: type=%s, url=%s, err=%s",
+                    "prepare_media: Prepare media failed: stage=download_or_validation, "
+                    "type=%s, url=%s, err=%s",
                     media_type,
                     media_url,
                     ex,
@@ -381,8 +416,12 @@ class DefaultMessageSender:
     def _merge_send_failure(
         failures: list[SendResult],
         result: SendResult,
+        *,
+        stage: str | None = None,
     ) -> None:
         if not result.ok:
+            if stage:
+                result = DefaultMessageSender._result_with_stage(result, stage)
             failures.append(result)
 
     def _partial_send_result(self, failures: list[SendResult]) -> SendResult:
@@ -406,6 +445,7 @@ class DefaultMessageSender:
         components: list[MessageComponent],
         *,
         default_text: str = "",
+        use_markdown: bool | None = None,
     ) -> SendResult:
         media_components = [
             component for component in components if self._is_media_component(component)
@@ -421,10 +461,18 @@ class DefaultMessageSender:
             chain = self._component_to_chain(component)
             if not chain:
                 continue
-            result = await self._send_chain(session_id, chain)
+            result = await self._send_chain(
+                session_id,
+                chain,
+                use_markdown=use_markdown,
+            )
             if not result.ok:
                 self._record_failed_url(failed_urls, component)
-                self._merge_send_failure(failures, result)
+                self._merge_send_failure(
+                    failures,
+                    result,
+                    stage=f"send_{component.media_type or component.kind}",
+                )
 
         text = "\n".join(
             component.text for component in text_components if component.text
@@ -436,8 +484,12 @@ class DefaultMessageSender:
         if text:
             from astrbot.api.message_components import Plain
 
-            result = await self._send_chain(session_id, [Plain(text)])
-            self._merge_send_failure(failures, result)
+            result = await self._send_chain(
+                session_id,
+                [Plain(text)],
+                use_markdown=use_markdown,
+            )
+            self._merge_send_failure(failures, result, stage="send_text")
         elif not media_components:
             return SendResult(ok=False, detail="empty_message")
 
@@ -450,6 +502,7 @@ class DefaultMessageSender:
         *,
         combine_image_text: bool,
         default_text: str = "",
+        use_markdown: bool | None = None,
     ) -> SendResult:
         failures: list[SendResult] = []
         failed_urls: list[str] = []
@@ -462,11 +515,19 @@ class DefaultMessageSender:
             if not chain:
                 return
             sent_any = True
-            result = await self._send_chain(session_id, chain)
+            result = await self._send_chain(
+                session_id,
+                chain,
+                use_markdown=use_markdown,
+            )
             if not result.ok:
                 if self._is_media_component(component):
                     self._record_failed_url(failed_urls, component)
-                self._merge_send_failure(failures, result)
+                self._merge_send_failure(
+                    failures,
+                    result,
+                    stage=f"send_{component.media_type or component.kind}",
+                )
 
         async def flush_pending_image() -> None:
             nonlocal pending_image
@@ -494,10 +555,18 @@ class DefaultMessageSender:
                 pending_image = None
                 if chain:
                     sent_any = True
-                    result = await self._send_chain(session_id, chain)
+                    result = await self._send_chain(
+                        session_id,
+                        chain,
+                        use_markdown=use_markdown,
+                    )
                     if not result.ok:
                         self._record_failed_url(failed_urls, paired_image)
-                        self._merge_send_failure(failures, result)
+                        self._merge_send_failure(
+                            failures,
+                            result,
+                            stage="send_image_text",
+                        )
                 continue
 
             await flush_pending_image()
@@ -507,16 +576,28 @@ class DefaultMessageSender:
         if not sent_any and default_text:
             from astrbot.api.message_components import Plain
 
-            result = await self._send_chain(session_id, [Plain(default_text)])
-            self._merge_send_failure(failures, result)
+            result = await self._send_chain(
+                session_id,
+                [Plain(default_text)],
+                use_markdown=use_markdown,
+            )
+            self._merge_send_failure(failures, result, stage="send_text")
         elif not sent_any:
             return SendResult(ok=False, detail="empty_message")
         return self._partial_send_result(failures)
 
     @locked("'global_web'")
-    async def _send_chain(self, session_id: str, chain: list) -> SendResult:
+    async def _send_chain(
+        self,
+        session_id: str,
+        chain: list,
+        *,
+        use_markdown: bool | None = None,
+    ) -> SendResult:
         """发送消息链（使用全局网络锁）"""
         message_chain = MessageChain(chain=chain)
+        if use_markdown is not None:
+            message_chain.use_markdown(use_markdown)
 
         try:
             sent = await StarTools.send_message(session_id, message_chain)
@@ -526,7 +607,12 @@ class DefaultMessageSender:
             else:
                 logger.warning("Message send returned False: session=%s", session_id)
                 return SendResult(
-                    ok=False, needs_rebind=True, detail="platform_or_session"
+                    ok=False,
+                    needs_rebind=True,
+                    detail=self._stage_error_detail(
+                        "platform_send",
+                        "platform_or_session",
+                    ),
                 )
         except Exception as ex:
             logger.error(
@@ -538,7 +624,7 @@ class DefaultMessageSender:
             return SendResult(
                 ok=False,
                 transient=True,
-                detail=self._normalize_error_detail(str(ex)),
+                detail=self._stage_error_detail("platform_send", str(ex)),
             )
 
     async def send_to_user(
@@ -579,7 +665,7 @@ class DefaultMessageSender:
             return SendResult(
                 ok=False,
                 transient=self._is_transient_network_error(err),
-                detail=self._normalize_error_detail(str(err)),
+                detail=self._stage_error_detail("send_to_user", str(err)),
             )
 
     async def send_to_group(

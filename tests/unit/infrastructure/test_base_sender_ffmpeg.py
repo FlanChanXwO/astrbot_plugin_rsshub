@@ -42,8 +42,29 @@ def _reset_sender_behavior():
     )
 
 
+@pytest.fixture
+def fake_detector(monkeypatch):
+    def configure(*, media_type: str = "video", suffix: str = ".webm"):
+        from astrbot_plugin_rsshub.src.infrastructure.utils.media_type_detector import (
+            MediaTypeDetection,
+        )
+
+        monkeypatch.setattr(
+            "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.base_sender.detect_media_file",
+            lambda _path: MediaTypeDetection(
+                media_type=media_type,
+                suffix=suffix,
+                mime=f"{media_type}/{suffix.lstrip('.')}",
+                source="test",
+            ),
+        )
+
+    configure()
+    return configure
+
+
 @pytest.mark.asyncio
-async def test_prepare_media_passes_gif_transcode_config(monkeypatch):
+async def test_prepare_media_passes_gif_transcode_config(monkeypatch, fake_detector):
     monkeypatch.setattr(
         "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
         _FakeDownloader,
@@ -66,6 +87,7 @@ async def test_prepare_media_passes_gif_transcode_config(monkeypatch):
             "url": "https://example.com/gif-video.webm",
             "timeout_seconds": 9,
             "proxy": "http://proxy.local",
+            "media_type": "video",
             "try_convert_gif": True,
             "gif_transcode_timeout": 77,
         }
@@ -73,7 +95,7 @@ async def test_prepare_media_passes_gif_transcode_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prepare_media_applies_video_transcode_config(monkeypatch):
+async def test_prepare_media_applies_video_transcode_config(monkeypatch, fake_detector):
     monkeypatch.setattr(
         "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
         _FakeDownloader,
@@ -115,7 +137,7 @@ async def test_prepare_media_applies_video_transcode_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prepare_media_always_downloads_media(monkeypatch):
+async def test_prepare_media_always_downloads_media(monkeypatch, fake_detector):
     monkeypatch.setattr(
         "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
         _FakeDownloader,
@@ -133,7 +155,31 @@ async def test_prepare_media_always_downloads_media(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prepare_effective_media_falls_back_to_runtime_proxy(monkeypatch):
+async def test_prepare_media_corrects_type_from_downloaded_file(
+    monkeypatch,
+    fake_detector,
+):
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
+        _FakeDownloader,
+    )
+    _FakeDownloader.path = Path("/tmp/actual.mp4")
+    fake_detector(media_type="video", suffix=".mp4")
+
+    prepared = await DefaultMessageSender().prepare_media(
+        [("image", "https://example.com/opaque")]
+    )
+
+    assert prepared[0].media_type == "video"
+    assert prepared[0].detected_suffix == ".mp4"
+    assert prepared[0].detection_source == "test"
+
+
+@pytest.mark.asyncio
+async def test_prepare_effective_media_falls_back_to_runtime_proxy(
+    monkeypatch,
+    fake_detector,
+):
     monkeypatch.setattr(
         "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
         _FakeDownloader,

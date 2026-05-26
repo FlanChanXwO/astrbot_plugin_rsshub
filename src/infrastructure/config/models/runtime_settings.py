@@ -5,16 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ....shared.constants import (
-    MEDIA_CACHE_GC_GRACE_SECONDS,
-    MEDIA_CACHE_GC_INTERVAL_SECONDS,
-    MEDIA_CACHE_TTL_SECONDS,
-    MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
-    MEDIA_MIN_VALID_BYTES,
     ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
+    QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
     TELEGRAM_PHOTO_MAX_BYTES,
 )
+
+_DEFAULT_MEDIA_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -23,7 +21,8 @@ class PlatformStrategySettings:
 
     enable_telegraph: bool = False
     telegraph_token: str = ""
-    prefer_local_video: bool = False
+    prefer_local_video: bool | None = None
+    markdown_mode: str = QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,7 @@ class BasicSettings:
     deduplicate_multi_bot: bool = True
     history_entry_limit: int = 0
     download_media_before_send: bool = True
-    download_media_timeout: int = 30
+    download_media_timeout: int = _DEFAULT_MEDIA_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -48,7 +47,7 @@ class HttpSettings:
 
     proxy: str = ""
     timeout: int = 30
-    media_timeout: int = MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+    media_timeout: int = _DEFAULT_MEDIA_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -117,17 +116,20 @@ class SenderStrategySettings:
     aiocqhttp_settings: PlatformStrategySettings = field(
         default_factory=PlatformStrategySettings
     )
+    qq_official_settings: PlatformStrategySettings = field(
+        default_factory=PlatformStrategySettings
+    )
 
 
 @dataclass(frozen=True)
 class MediaSettings:
     """Media download, cache and platform threshold settings."""
 
-    download_media_timeout: int = MEDIA_DOWNLOAD_TIMEOUT_SECONDS
-    cache_ttl_seconds: int = MEDIA_CACHE_TTL_SECONDS
-    cache_gc_interval_seconds: int = MEDIA_CACHE_GC_INTERVAL_SECONDS
-    cache_gc_grace_seconds: int = MEDIA_CACHE_GC_GRACE_SECONDS
-    min_valid_bytes: int = MEDIA_MIN_VALID_BYTES
+    download_media_timeout: int = _DEFAULT_MEDIA_TIMEOUT_SECONDS
+    cache_ttl_seconds: int = 15 * 60
+    cache_gc_interval_seconds: int = 5 * 60
+    cache_gc_grace_seconds: int = 10 * 60
+    min_valid_bytes: int = 1
     telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES
     onebot_prefer_local_video_default: bool = ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT
     qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT

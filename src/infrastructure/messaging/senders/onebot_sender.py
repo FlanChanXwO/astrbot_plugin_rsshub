@@ -39,13 +39,10 @@ class OneBotMessageSender(DefaultMessageSender):
     @classmethod
     def _prefer_local_video(cls, context: MessageContext | None) -> bool:
         strategy = getattr(context, "sender_strategy", None) if context else None
-        return bool(
-            cls._strategy_value(
-                strategy,
-                "prefer_local_video",
-                cls._get_onebot_prefer_local_video_default(),
-            )
-        )
+        value = cls._strategy_value(strategy, "prefer_local_video", None)
+        if value is None:
+            return cls._get_onebot_prefer_local_video_default()
+        return bool(value)
 
     async def send_to_user(
         self,

@@ -101,7 +101,7 @@ async def test_qq_official_plain_text_uses_single_send(monkeypatch):
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -119,12 +119,116 @@ async def test_qq_official_plain_text_uses_single_send(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_qq_official_sends_multimedia_as_files_before_text(monkeypatch):
+async def test_qq_official_markdown_force_keeps_active_push_plain(monkeypatch):
+    _patch_components(monkeypatch)
+    sender = QQOfficialMessageSender()
+    calls: list[dict] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(kwargs)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(session_id="default:UserMessage:1", message="**entry**"),
+        context=MessageContext(
+            platform_name="qq_official",
+            sender_strategy={"markdown_mode": "force"},
+        ),
+    )
+
+    assert result.ok is True
+    assert calls == [{"use_markdown": False}]
+
+
+@pytest.mark.asyncio
+async def test_qq_official_markdown_plain_sets_message_chain_flag_false(monkeypatch):
+    _patch_components(monkeypatch)
+    sender = QQOfficialMessageSender()
+    calls: list[dict] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(kwargs)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(session_id="default:UserMessage:1", message="entry text"),
+        context=MessageContext(
+            platform_name="qq_official",
+            sender_strategy={"markdown_mode": "plain"},
+        ),
+    )
+
+    assert result.ok is True
+    assert calls == [{"use_markdown": False}]
+
+
+@pytest.mark.asyncio
+async def test_qq_official_markdown_auto_keeps_active_push_plain(monkeypatch):
+    _patch_components(monkeypatch)
+    sender = QQOfficialMessageSender()
+    calls: list[dict] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(kwargs)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(session_id="default:UserMessage:1", message="**entry**"),
+        context=MessageContext(
+            platform_name="qq_official",
+            sender_strategy={"markdown_mode": "auto"},
+        ),
+    )
+
+    assert result.ok is True
+    assert calls == [{"use_markdown": False}]
+
+
+@pytest.mark.asyncio
+async def test_qq_official_multimedia_default_sends_media_components_then_text(
+    monkeypatch,
+):
     _patch_components(monkeypatch)
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        _request(),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is True
+    assert [type(chain[0]) for chain in calls] == [_Image, _Video, _Plain]
+    assert calls[0][0].file == "/tmp/1.jpg"
+    assert calls[1][0].file == "/tmp/2.mp4"
+    assert calls[-1][0].text == "entry text"
+
+
+@pytest.mark.asyncio
+async def test_qq_official_multimedia_exceeding_threshold_degrades_to_files_then_text(
+    monkeypatch,
+):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_media_threshold=1,
+        qq_official_degrade_strategy="file_then_link",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -148,7 +252,7 @@ async def test_qq_official_single_image_and_text_share_one_chain(monkeypatch):
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -177,12 +281,202 @@ async def test_qq_official_single_image_and_text_share_one_chain(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_qq_official_original_style_pairs_image_with_following_text(monkeypatch):
+async def test_qq_official_single_video_sends_video_before_text(monkeypatch):
     _patch_components(monkeypatch)
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/2.mp4",
+                    local_path=Path("/tmp/2.mp4"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is True
+    assert [type(chain[0]) for chain in calls] == [_Video, _Plain]
+    assert calls[0][0].file == "/tmp/2.mp4"
+    assert calls[1][0].text == "entry text"
+    assert not any(isinstance(chain[0], _File) for chain in calls)
+
+
+@pytest.mark.asyncio
+async def test_qq_official_single_video_from_media_download_uses_video(monkeypatch):
+    _patch_components(monkeypatch)
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_prepare_media(media, timeout=30, proxy=""):
+        assert media == [("video", "https://example.com/2.mp4")]
+        return [
+            PreparedMedia(
+                media_type="video",
+                original_url="https://example.com/2.mp4",
+                local_path=Path("/tmp/2.mp4"),
+            )
+        ]
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "prepare_media", fake_prepare_media)
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            media=[("video", "https://example.com/2.mp4")],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is True
+    assert [type(chain[0]) for chain in calls] == [_Video, _Plain]
+    assert calls[0][0].file == "/tmp/2.mp4"
+    assert not any(isinstance(chain[0], _File) for chain in calls)
+
+
+@pytest.mark.asyncio
+async def test_qq_official_single_video_failure_tries_file_then_link(monkeypatch):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_degrade_strategy="file_then_link",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        if isinstance(chain[0], _Video):
+            return SendResult(ok=False, transient=True, detail="video failed")
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/2.mp4",
+                    local_path=Path("/tmp/2.mp4"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is False
+    assert result.transient is True
+    assert "partial send" in result.detail
+    assert [type(chain[0]) for chain in calls] == [_Video, _File, _Plain]
+    assert calls[1][0].file == "/tmp/2.mp4"
+    assert calls[2][0].text == "entry text"
+    assert "媒体原始链接:" not in calls[2][0].text
+
+
+@pytest.mark.asyncio
+async def test_qq_official_single_video_failure_can_link_only(monkeypatch):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_degrade_strategy="link_only",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        if isinstance(chain[0], _Video):
+            return SendResult(ok=False, transient=True, detail="video failed")
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/2.mp4",
+                    local_path=Path("/tmp/2.mp4"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is False
+    assert "partial send" in result.detail
+    assert [type(chain[0]) for chain in calls] == [_Video, _Plain]
+    assert "媒体原始链接:" in calls[-1][0].text
+    assert "https://example.com/2.mp4" in calls[-1][0].text
+
+
+@pytest.mark.asyncio
+async def test_qq_official_single_video_failure_can_fail_without_fallback(
+    monkeypatch,
+):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_degrade_strategy="fail",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        return SendResult(ok=False, transient=False, detail="video rejected")
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/2.mp4",
+                    local_path=Path("/tmp/2.mp4"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is False
+    assert result.detail == "send_video: video rejected"
+    assert [type(chain[0]) for chain in calls] == [_Video]
+
+
+@pytest.mark.asyncio
+async def test_qq_official_original_style_pairs_image_with_following_text(monkeypatch):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(qq_official_media_threshold=0)
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -221,14 +515,68 @@ async def test_qq_official_original_style_pairs_image_with_following_text(monkey
 
 
 @pytest.mark.asyncio
+async def test_qq_official_original_style_single_video_uses_video_then_fallback(
+    monkeypatch,
+):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_degrade_strategy="file_then_link",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        if isinstance(chain[0], _Video):
+            return SendResult(ok=False, transient=True, detail="video failed")
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="fallback",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/2.mp4",
+                    local_path=Path("/tmp/2.mp4"),
+                )
+            ],
+            layout=[
+                LayoutFragment(
+                    kind="video",
+                    media_type="video",
+                    url="https://example.com/2.mp4",
+                ),
+                LayoutFragment(kind="text", text="caption"),
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official", style=2),
+    )
+
+    assert result.ok is False
+    assert "partial send" in result.detail
+    assert [type(chain[0]) for chain in calls] == [_Video, _File, _Plain]
+    assert calls[0][0].file == "/tmp/2.mp4"
+    assert calls[1][0].file == "/tmp/2.mp4"
+    assert calls[2][0].text == "caption"
+
+
+@pytest.mark.asyncio
 async def test_qq_official_file_degrade_failure_continues_and_appends_url(
     monkeypatch,
 ):
     _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_media_threshold=1,
+        qq_official_degrade_strategy="file_then_link",
+    )
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         if isinstance(chain[0], _File) and chain[0].file == "/tmp/1.jpg":
             return SendResult(ok=False, transient=True, detail="file failed")
@@ -259,7 +607,7 @@ async def test_qq_official_single_image_failure_tries_file_then_link(monkeypatch
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         if isinstance(chain[0], _Image):
             return SendResult(ok=False, transient=True, detail="image failed")
@@ -300,7 +648,7 @@ async def test_qq_official_single_image_failure_can_fail_without_link_fallback(
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=False, transient=False, detail="image rejected")
 
@@ -322,7 +670,7 @@ async def test_qq_official_single_image_failure_can_fail_without_link_fallback(
     )
 
     assert result.ok is False
-    assert result.detail == "image rejected"
+    assert result.detail == "send_image_text: image rejected"
     assert len(calls) == 1
 
 
@@ -336,7 +684,7 @@ async def test_qq_official_media_threshold_link_only_degrade(monkeypatch):
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -356,12 +704,71 @@ async def test_qq_official_media_threshold_link_only_degrade(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_qq_official_original_style_multimedia_threshold_still_degrades(
+    monkeypatch,
+):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_media_threshold=1,
+        qq_official_degrade_strategy="file_then_link",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="fallback",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="image",
+                    original_url="https://example.com/1.jpg",
+                    local_path=Path("/tmp/1.jpg"),
+                ),
+                PreparedMedia(
+                    media_type="video",
+                    original_url="https://example.com/2.mp4",
+                    local_path=Path("/tmp/2.mp4"),
+                ),
+            ],
+            layout=[
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url="https://example.com/1.jpg",
+                ),
+                LayoutFragment(kind="text", text="caption 1"),
+                LayoutFragment(
+                    kind="video",
+                    media_type="video",
+                    url="https://example.com/2.mp4",
+                ),
+                LayoutFragment(kind="text", text="caption 2"),
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official", style=2),
+    )
+
+    assert result.ok is True
+    assert [type(chain[0]) for chain in calls] == [_File, _File, _Plain]
+    assert calls[0][0].file == "/tmp/1.jpg"
+    assert calls[1][0].file == "/tmp/2.mp4"
+    assert calls[-1][0].text == "caption 1\ncaption 2"
+
+
+@pytest.mark.asyncio
 async def test_weixin_oc_plain_text_uses_single_send(monkeypatch):
     _patch_components(monkeypatch)
     sender = WeixinOCMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -384,7 +791,7 @@ async def test_weixin_oc_sends_single_image_and_text_as_two_messages(monkeypatch
     sender = WeixinOCMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -415,7 +822,7 @@ async def test_weixin_oc_multimedia_is_sent_one_by_one(monkeypatch):
     sender = WeixinOCMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -438,7 +845,7 @@ async def test_weixin_oc_original_style_preserves_order_without_combining(monkey
     sender = WeixinOCMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -473,7 +880,7 @@ async def test_weixin_oc_partial_media_failure_continues_and_appends_url(monkeyp
     sender = WeixinOCMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         if isinstance(chain[0], _Video):
             return SendResult(ok=False, needs_rebind=True, detail="video failed")
@@ -506,7 +913,7 @@ async def test_telegram_large_local_image_is_sent_as_file(monkeypatch, tmp_path)
     sender = TelegramMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -548,7 +955,7 @@ async def test_telegram_telegraph_uses_entry_title_and_plain_url(monkeypatch):
     sender = TelegramMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -606,7 +1013,7 @@ async def test_qq_official_gif_from_video_counts_as_single_image_with_text(monke
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -641,7 +1048,7 @@ async def test_qq_official_original_style_gif_from_layout_matches_prepared(monke
     sender = QQOfficialMessageSender()
     calls: list[list] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 
@@ -696,7 +1103,7 @@ async def test_qq_official_original_style_gif_from_downloaded_media(monkeypatch)
             )
         ]
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
         return SendResult(ok=True)
 

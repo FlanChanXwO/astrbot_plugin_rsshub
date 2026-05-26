@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from ....shared.constants import (
     PLATFORM_QQ_OFFICIAL,
     PLATFORM_STRATEGY_TEMPLATE_KEYS,
+    QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
+    QQ_OFFICIAL_MARKDOWN_MODE_OPTIONS,
     SENDER_STRATEGY_ENABLED_PLATFORMS,
 )
 
@@ -22,8 +24,13 @@ class PlatformSenderStrategyConfig(BaseModel):
 
     enable_telegraph: bool = Field(default=False, description="启用 Telegraph 自动分流")
     telegraph_token: str = Field(default="", description="Telegraph access token")
-    prefer_local_video: bool = Field(
-        default=False, description="是否优先使用本地视频文件"
+    prefer_local_video: bool | None = Field(
+        default=None,
+        description="是否优先使用本地视频文件；未配置时使用运行时默认值",
+    )
+    markdown_mode: str = Field(
+        default=QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
+        description="QQ 官方 Markdown 发送模式",
     )
 
     @classmethod
@@ -35,6 +42,9 @@ class PlatformSenderStrategyConfig(BaseModel):
         if not isinstance(data, dict):
             return cls()
         clean_data = {k: v for k, v in data.items() if k != "__template_key"}
+        mode = str(clean_data.get("markdown_mode") or QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT)
+        if mode not in QQ_OFFICIAL_MARKDOWN_MODE_OPTIONS:
+            clean_data["markdown_mode"] = QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT
         return cls.model_validate({**cls().model_dump(), **clean_data})
 
     def to_template_item(
@@ -79,6 +89,9 @@ class SenderStrategiesConfig(BaseModel):
     aiocqhttp_settings: PlatformSenderStrategyConfig = Field(
         default_factory=PlatformSenderStrategyConfig, alias="aiocqhttp_config"
     )
+    qq_official_settings: PlatformSenderStrategyConfig = Field(
+        default_factory=PlatformSenderStrategyConfig, alias="qq_official_config"
+    )
 
     @classmethod
     def from_config(cls, data: Any) -> SenderStrategiesConfig:
@@ -112,6 +125,14 @@ class SenderStrategiesConfig(BaseModel):
             )
             if aiocqhttp_source is None:
                 aiocqhttp_source = data.get("aiocqhttp") or data.get("aiocqhttp_config")
+            qq_official_source = _first_strategy_template(
+                platform_strategies,
+                _PLATFORM_STRATEGY_TEMPLATE_KEYS["qq_official"],
+            )
+            if qq_official_source is None:
+                qq_official_source = data.get("qq_official") or data.get(
+                    "qq_official_config"
+                )
             return cls.model_validate(
                 {
                     **known_values,
@@ -121,6 +142,9 @@ class SenderStrategiesConfig(BaseModel):
                     ),
                     "aiocqhttp_config": PlatformSenderStrategyConfig.from_dict(
                         aiocqhttp_source
+                    ),
+                    "qq_official_config": PlatformSenderStrategyConfig.from_dict(
+                        qq_official_source
                     ),
                 }
             )
@@ -156,6 +180,10 @@ class SenderStrategiesConfig(BaseModel):
                 self.aiocqhttp_settings.to_template_item(
                     _PLATFORM_STRATEGY_TEMPLATE_KEYS["aiocqhttp"],
                     include_fields={"prefer_local_video"},
+                ),
+                self.qq_official_settings.to_template_item(
+                    _PLATFORM_STRATEGY_TEMPLATE_KEYS["qq_official"],
+                    include_fields={"markdown_mode"},
                 ),
             )
             if item is not None

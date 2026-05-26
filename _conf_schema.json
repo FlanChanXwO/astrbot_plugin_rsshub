@@ -6,8 +6,8 @@
     "items": {
       "rsshub_base_url": {
         "type": "string",
-        "description": "默认 RSSHub 域名",
-        "hint": "用于相对路由拼接的默认域名",
+        "description": "默认订阅域名",
+        "hint": "用于相对路由拼接的默认域名，当使用uri方式订阅时生效",
         "default": "https://rsshub.app"
       },
       "minimal_interval": {
@@ -147,11 +147,130 @@
         "type": "int",
         "description": "媒体下载超时（秒）",
         "hint": "媒体预下载、m3u8/HLS 合并与 FFmpeg 下载的最大等待时间",
-        "default": 30,
+        "default": 300,
         "slider": {
           "min": 1,
           "max": 1800,
           "step": 1
+        }
+      }
+    }
+  },
+   "ffmpeg": {
+    "type": "object",
+    "description": "FFmpeg 配置",
+    "hint": "控制视频转码和 GIF 转换的底层策略",
+    "items": {
+      "video_transcode": {
+        "type": "bool",
+        "description": "视频发送前自动转码",
+        "hint": "发送视频前是否自动转码为兼容 MP4",
+        "default": false
+      },
+      "video_transcode_timeout": {
+        "type": "int",
+        "description": "视频转码超时（秒）",
+        "hint": "视频转码的最大允许时间",
+        "default": 120,
+        "slider": {
+          "min": 10,
+          "max": 1800,
+          "step": 10
+        }
+      },
+      "gif_transcode": {
+        "type": "bool",
+        "description": "无声视频自动转 GIF",
+        "hint": "无声视频是否自动转 GIF",
+        "default": false
+      },
+      "gif_transcode_timeout": {
+        "type": "int",
+        "description": "GIF转换超时（秒）",
+        "hint": "视频转 GIF 的最大允许时间",
+        "default": 60,
+        "slider": {
+          "min": 10,
+          "max": 1800,
+          "step": 10
+        }
+      }
+    }
+  },
+    "sender_strategies": {
+    "type": "object",
+    "description": "平台发送策略配置",
+    "hint": "选择启用专用发送策略的平台；未选择的平台使用默认发送器。平台策略使用一个统一模板列表按需添加，模板类型可不同；同类模板当前只读取第一条。",
+    "items": {
+      "enabled_platforms": {
+        "type": "list",
+        "description": "启用的平台发送策略",
+        "hint": "选择需要启用专用发送策略的平台；未选择的平台使用默认发送器",
+        "default": [
+          "telegram",
+          "aiocqhttp",
+          "qq_official"
+        ],
+        "options": [
+          "telegram",
+          "aiocqhttp",
+          "qq_official"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "platform_strategies": {
+        "type": "template_list",
+        "description": "平台策略模板",
+        "hint": "按需添加 Telegram / OneBot / QQ 官方策略模板；同类模板当前只读取第一条，多条同类模板会被忽略。",
+        "default": [],
+        "templates": {
+          "telegram_strategy": {
+            "name": "Telegram 策略",
+            "hint": "Telegraph 自动分流策略",
+            "items": {
+              "enable_telegraph": {
+                "type": "bool",
+                "description": "启用 Telegraph 自动分流",
+                "default": false
+              },
+              "telegraph_token": {
+                "type": "string",
+                "description": "Telegraph Access Token",
+                "default": ""
+              }
+            }
+          },
+          "onebot_strategy": {
+            "name": "OneBot 策略",
+            "hint": "OneBot 视频来源策略",
+            "items": {
+              "prefer_local_video": {
+                "type": "bool",
+                "description": "优先本地视频",
+                "hint": "默认开启，避免 OneBot / NapCat 端自行拉取远程视频失败；关闭后普通视频会优先使用原始 URL",
+                "default": true
+              }
+            }
+          },
+          "qq_official_strategy": {
+            "name": "QQ 官方策略",
+            "hint": "QQ 官方 Markdown 发送策略",
+            "items": {
+              "markdown_mode": {
+                "type": "string",
+                "description": "Markdown 发送模式",
+                "hint": "auto 跟随平台默认；force 强制 Markdown；plain 强制纯文本",
+                "default": "auto",
+                "options": [
+                  "auto",
+                  "force",
+                  "plain"
+                ]
+              }
+            }
+          }
         }
       }
     }
@@ -265,47 +384,6 @@
       }
     }
   },
-  "ffmpeg": {
-    "type": "object",
-    "description": "FFmpeg 配置",
-    "hint": "控制视频转码和 GIF 转换的底层策略",
-    "items": {
-      "video_transcode": {
-        "type": "bool",
-        "description": "视频发送前自动转码",
-        "hint": "发送视频前是否自动转码为兼容 MP4",
-        "default": false
-      },
-      "video_transcode_timeout": {
-        "type": "int",
-        "description": "视频转码超时（秒）",
-        "hint": "视频转码的最大允许时间",
-        "default": 120,
-        "slider": {
-          "min": 10,
-          "max": 1800,
-          "step": 10
-        }
-      },
-      "gif_transcode": {
-        "type": "bool",
-        "description": "无声视频自动转 GIF",
-        "hint": "无声视频是否自动转 GIF",
-        "default": false
-      },
-      "gif_transcode_timeout": {
-        "type": "int",
-        "description": "GIF转换超时（秒）",
-        "hint": "视频转 GIF 的最大允许时间",
-        "default": 60,
-        "slider": {
-          "min": 10,
-          "max": 1800,
-          "step": 10
-        }
-      }
-    }
-  },
   "content_handlers": {
     "type": "object",
     "description": "内容处理器全局 AI 配置",
@@ -324,67 +402,6 @@
         "_special": "select_persona",
         "hint": "可选；选择后仅把该人格 system prompt 注入内置 AI handler，不改变会话人格",
         "default": ""
-      }
-    }
-  },
-  "sender_strategies": {
-    "type": "object",
-    "description": "平台发送策略配置",
-    "hint": "选择启用专用发送策略的平台；未选择的平台使用默认发送器。平台策略使用一个统一模板列表按需添加，模板类型可不同；同类模板当前只读取第一条。",
-    "items": {
-      "enabled_platforms": {
-        "type": "list",
-        "description": "启用的平台发送策略",
-        "hint": "选择需要启用专用发送策略的平台；未选择的平台使用默认发送器",
-        "default": [
-          "telegram",
-          "aiocqhttp",
-          "qq_official"
-        ],
-        "options": [
-          "telegram",
-          "aiocqhttp",
-          "qq_official"
-        ],
-        "items": {
-          "type": "string"
-        }
-      },
-      "platform_strategies": {
-        "type": "template_list",
-        "description": "平台策略模板",
-        "hint": "按需添加 Telegram / OneBot 策略模板；同类模板当前只读取第一条，多条同类模板会被忽略。",
-        "default": [],
-        "templates": {
-          "telegram_strategy": {
-            "name": "Telegram 策略",
-            "hint": "Telegraph 自动分流策略",
-            "items": {
-              "enable_telegraph": {
-                "type": "bool",
-                "description": "启用 Telegraph 自动分流",
-                "default": false
-              },
-              "telegraph_token": {
-                "type": "string",
-                "description": "Telegraph Access Token",
-                "default": ""
-              }
-            }
-          },
-          "onebot_strategy": {
-            "name": "OneBot 策略",
-            "hint": "OneBot 视频来源策略",
-            "items": {
-              "prefer_local_video": {
-                "type": "bool",
-                "description": "优先本地视频",
-                "hint": "默认关闭，避免 NapCat 对本地 mp4 路径识别失败",
-                "default": false
-              }
-            }
-          }
-        }
       }
     }
   }

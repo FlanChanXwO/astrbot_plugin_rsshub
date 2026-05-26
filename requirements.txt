@@ -13,6 +13,7 @@ matplotlib>=3.9.4
 jinja2>=3.1.6
 pillow>=11.3.0
 playwright>=1.52.0
+filetype>=1.2.0
 
 # 网络代理支持
 aiohttp-socks>=0.10.1

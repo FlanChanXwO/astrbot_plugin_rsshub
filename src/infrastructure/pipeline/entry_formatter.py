@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 
 from ...application.services.html_parser import HTMLParser
+
+
+class EntryOutputFormat(str, Enum):
+    """Output text format for platform-specific rendering."""
+
+    PLAIN = "plain"
+    MARKDOWN = "markdown"
 
 
 @dataclass(frozen=True)
@@ -43,8 +51,10 @@ class EntryTextFormatter:
         self,
         entry: EntryFormatInput,
         options: EffectivePushOptions | None = None,
+        output_format: EntryOutputFormat | str = EntryOutputFormat.PLAIN,
     ) -> str:
         options = options or EffectivePushOptions()
+        output_format = EntryOutputFormat(output_format)
         body = await self.clean_text(entry.content or entry.summary or "")
         title = await self.clean_text(entry.title)
         author = await self.clean_text(entry.author)
@@ -62,12 +72,25 @@ class EntryTextFormatter:
             lines.append(title)
         if body:
             lines.append(body)
+        tags = ""
         if options.display_entry_tags and entry.tags:
             tags = " ".join(
                 f"#{tag.strip().lstrip('#')}" for tag in entry.tags if tag.strip()
             )
             if tags:
                 lines.append(tags)
+
+        if output_format is EntryOutputFormat.MARKDOWN:
+            return self._format_markdown(
+                title=title,
+                body=body,
+                tags=tags,
+                link=link,
+                feed_title=feed_title,
+                feed_link=feed_link,
+                author=author,
+                options=options,
+            )
 
         content = "\n\n".join(part for part in lines if part)
         via_suffix = self._build_via_suffix(
@@ -143,6 +166,85 @@ class EntryTextFormatter:
                 parts.append(f"author: {author}")
 
         return " ".join(parts)
+
+    @classmethod
+    def _format_markdown(
+        cls,
+        *,
+        title: str,
+        body: str,
+        tags: str,
+        link: str,
+        feed_title: str,
+        feed_link: str,
+        author: str,
+        options: EffectivePushOptions,
+    ) -> str:
+        lines: list[str] = []
+        if options.display_title != -1 and title:
+            lines.append(f"**{cls._escape_markdown_text(title)}**")
+        if body:
+            lines.append(cls._escape_markdown_text(body))
+        if tags:
+            lines.append(cls._escape_markdown_text(tags))
+
+        content = "\n\n".join(part for part in lines if part)
+        via_suffix = cls._build_markdown_via_suffix(
+            link=link,
+            feed_title=feed_title,
+            feed_link=feed_link,
+            author=author,
+            options=options,
+        )
+        if via_suffix:
+            return f"{content}\n\n{via_suffix}" if content else via_suffix
+        return content
+
+    @classmethod
+    def _build_markdown_via_suffix(
+        cls,
+        *,
+        link: str,
+        feed_title: str,
+        feed_link: str,
+        author: str,
+        options: EffectivePushOptions,
+    ) -> str:
+        if options.display_via == -2:
+            return ""
+
+        source = feed_title or feed_link
+        if options.display_via == -1:
+            source = ""
+
+        parts: list[str] = []
+        link_text = cls._escape_markdown_text(link)
+        source_text = cls._escape_markdown_text(source)
+        if link and source:
+            parts.append(
+                f"via [{link_text}]({cls._escape_markdown_url(link)}) | {source_text}"
+            )
+        elif link:
+            parts.append(f"via [{link_text}]({cls._escape_markdown_url(link)})")
+        elif source:
+            parts.append(source_text)
+
+        if options.display_author != -1 and author:
+            author_text = cls._escape_markdown_text(author)
+            if parts:
+                parts[-1] += f" (author: {author_text})"
+            else:
+                parts.append(f"author: {author_text}")
+
+        return " ".join(parts)
+
+    @staticmethod
+    def _escape_markdown_text(value: str) -> str:
+        return re.sub(r"([\\`*_{}\[\]])", r"\\\1", value or "")
+
+    @staticmethod
+    def _escape_markdown_url(value: str) -> str:
+        return (value or "").replace("\\", "\\\\").replace(")", "%29")
 
 
 def normalize_plain_text(value: str) -> str:

@@ -104,4 +104,6 @@ def _resolve_platform_strategy(
         return sender_strategies.telegram_settings
     if normalized in {"aiocqhttp", "onebot", "onebot11", "onebotv11"}:
         return sender_strategies.aiocqhttp_settings
+    if normalized in {"qq_official", "qqofficial", "qq"}:
+        return sender_strategies.qq_official_settings
     return None

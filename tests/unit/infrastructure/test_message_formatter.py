@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from astrbot_plugin_rsshub.src.application.services.html_parser import HTMLParser
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
@@ -8,12 +10,12 @@ from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
 from astrbot_plugin_rsshub.src.infrastructure.pipeline import (
     EffectivePushOptions,
     EntryFormatInput,
+    EntryOutputFormat,
     EntryTextFormatter,
     MessageChainFormatter,
     MessageComponentSorter,
     MessageFormatter,
 )
-from pathlib import Path
 
 from astrbot.api.message_components import Plain
 
@@ -195,6 +197,30 @@ async def test_entry_text_formatter_decodes_entity_escaped_html():
 
 
 @pytest.mark.asyncio
+async def test_entry_text_formatter_can_render_lightweight_markdown():
+    formatter = EntryTextFormatter()
+
+    text = await formatter.format_entry(
+        EntryFormatInput(
+            title="Title *with* brackets [x]",
+            content="Body with **literal** markdown",
+            link="https://example.com/post",
+            author="Author_Name",
+            feed_title="Feed",
+            tags=("tag-one", "tag_two"),
+        ),
+        EffectivePushOptions(display_entry_tags=True),
+        output_format=EntryOutputFormat.MARKDOWN,
+    )
+
+    assert text.startswith("**Title \\*with\\* brackets \\[x\\]**")
+    assert "Body with \\*\\*literal\\*\\* markdown" in text
+    assert "#tag-one #tag\\_two" in text
+    assert "via [https://example.com/post](https://example.com/post) | Feed" in text
+    assert "(author: Author\\_Name)" in text
+
+
+@pytest.mark.asyncio
 async def test_entry_text_formatter_omits_empty_via_suffix():
     formatter = EntryTextFormatter()
 
@@ -330,8 +356,6 @@ def test_formatter_build_components_gif_conversion():
         failed_urls=[],
         platform="",
     )
-    media_items = [
-        (c.kind, c.media_type, c.file) for c in components if c.kind == "media"
-    ]
+    media_items = [(c.kind, c.media_type, c.file) for c in components if c.kind == "media"]
     assert media_items == [("media", "image", "/tmp/video.gif")]
     assert all(c.text == "hello" for c in components if c.kind == "text")

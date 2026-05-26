@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ....shared.constants import TELEGRAM_PHOTO_MAX_BYTES
 from ...config import get_config_manager
 from ...pipeline import MessageFormatter
 from ...utils import get_logger
@@ -21,7 +20,6 @@ if TYPE_CHECKING:
     pass
 
 logger = get_logger()
-_TELEGRAM_PHOTO_MAX_BYTES = TELEGRAM_PHOTO_MAX_BYTES
 
 
 class TelegramMessageSender(DefaultMessageSender):

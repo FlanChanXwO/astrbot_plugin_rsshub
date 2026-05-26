@@ -29,6 +29,12 @@ from .media_dispatch import (
     MediaDispatchInfo,
     MediaDispatchResolver,
 )
+from .media_type_detector import (
+    MediaTypeDetection,
+    detect_media_bytes,
+    detect_media_file,
+    detect_media_hint,
+)
 from .normalizer import (
     normalize_config_positive_int,
     normalize_identifier,
@@ -75,6 +81,10 @@ __all__ = [
     # Media Dispatch
     "MediaDispatchInfo",
     "MediaDispatchResolver",
+    "MediaTypeDetection",
+    "detect_media_bytes",
+    "detect_media_file",
+    "detect_media_hint",
     # Normalizer
     "normalize_text",
     "normalize_identifier",

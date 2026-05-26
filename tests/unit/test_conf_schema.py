@@ -154,9 +154,22 @@ def test_conf_schema_exposes_single_platform_strategy_template_list():
     templates = platform_strategies["templates"]
     telegram_items = templates["telegram_strategy"]["items"]
     onebot_items = templates["onebot_strategy"]["items"]
+    qq_official_items = templates["qq_official_strategy"]["items"]
     assert telegram_items["enable_telegraph"]["type"] == "bool"
     assert telegram_items["telegraph_token"]["type"] == "string"
     assert "prefer_local_video" not in telegram_items
+    assert "markdown_mode" not in telegram_items
     assert "enable_telegraph" not in onebot_items
     assert "telegraph_token" not in onebot_items
+    assert "markdown_mode" not in onebot_items
     assert onebot_items["prefer_local_video"]["type"] == "bool"
+    assert onebot_items["prefer_local_video"]["default"] is True
+    assert qq_official_items["markdown_mode"]["type"] == "string"
+    assert qq_official_items["markdown_mode"]["default"] == "auto"
+    assert qq_official_items["markdown_mode"]["options"] == [
+        "auto",
+        "force",
+        "plain",
+    ]
+    assert "enable_telegraph" not in qq_official_items
+    assert "prefer_local_video" not in qq_official_items

@@ -5,17 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from ...shared.constants import (
-    MEDIA_CACHE_GC_GRACE_SECONDS,
-    MEDIA_CACHE_GC_INTERVAL_SECONDS,
-    MEDIA_CACHE_TTL_SECONDS,
-    MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
-    MEDIA_MIN_VALID_BYTES,
     ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
     PLATFORM_ONEBOT,
     PLATFORM_QQ_OFFICIAL,
     PLATFORM_STRATEGY_TEMPLATE_KEYS,
     PLATFORM_TELEGRAM,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
+    QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
+    QQ_OFFICIAL_MARKDOWN_MODE_OPTIONS,
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
     SENDER_STRATEGY_ENABLED_PLATFORMS,
     TELEGRAM_PHOTO_MAX_BYTES,
@@ -36,6 +33,8 @@ from .models import (
     SubscriptionDefaults,
 )
 
+_DEFAULT_MEDIA_TIMEOUT_SECONDS = 300
+
 
 def _get_value(source: Any, key: str, default: Any = None) -> Any:
     if source is None:
@@ -43,6 +42,12 @@ def _get_value(source: Any, key: str, default: Any = None) -> Any:
     if isinstance(source, dict):
         return source.get(key, default)
     return getattr(source, key, default)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _normalize_proxy_url(value: Any) -> str:
@@ -135,21 +140,44 @@ def _build_sender_strategy_settings(value: Any) -> SenderStrategySettings:
             _get_value(value, "aiocqhttp_settings", None)
             or _get_value(value, "aiocqhttp_config", None)
         )
+    qq_official_source = _first_strategy_template(
+        platform_strategies,
+        _PLATFORM_STRATEGY_TEMPLATE_KEYS["qq_official"],
+    )
+    if not isinstance(qq_official_source, dict):
+        qq_official_source = _first_template_item(_get_value(value, "qq_official", None))
+    if not isinstance(qq_official_source, dict):
+        qq_official_source = _first_template_item(
+            _get_value(value, "qq_official_settings", None)
+            or _get_value(value, "qq_official_config", None)
+        )
+    markdown_mode = str(
+        _get_value(
+            qq_official_source,
+            "markdown_mode",
+            QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
+        )
+        or QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT
+    )
+    if markdown_mode not in QQ_OFFICIAL_MARKDOWN_MODE_OPTIONS:
+        markdown_mode = QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT
     telegram_config = PlatformStrategySettings(
         enable_telegraph=bool(_get_value(telegram_source, "enable_telegraph", False)),
         telegraph_token=str(_get_value(telegram_source, "telegraph_token", "") or ""),
     )
     aiocqhttp_config = PlatformStrategySettings(
-        prefer_local_video=bool(
-            _get_value(aiocqhttp_source, "prefer_local_video", False)
+        prefer_local_video=_optional_bool(
+            _get_value(aiocqhttp_source, "prefer_local_video", None)
         ),
     )
+    qq_official_config = PlatformStrategySettings(markdown_mode=markdown_mode)
     if enabled is not None:
         enabled = {item for item in enabled if item in _SENDER_STRATEGY_KEYS}
         return SenderStrategySettings(
             **{key: key in enabled for key in _SENDER_STRATEGY_KEYS},
             telegram_settings=telegram_config,
             aiocqhttp_settings=aiocqhttp_config,
+            qq_official_settings=qq_official_config,
         )
     return SenderStrategySettings(
         telegram=bool(_get_value(value, PLATFORM_TELEGRAM, True)),
@@ -157,6 +185,7 @@ def _build_sender_strategy_settings(value: Any) -> SenderStrategySettings:
         qq_official=bool(_get_value(value, PLATFORM_QQ_OFFICIAL, True)),
         telegram_settings=telegram_config,
         aiocqhttp_settings=aiocqhttp_config,
+        qq_official_settings=qq_official_config,
     )
 
 
@@ -207,12 +236,12 @@ def build_application_settings(config: Any) -> ApplicationSettings:
                         _get_value(
                             config,
                             "download_media_timeout",
-                            MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+                            _DEFAULT_MEDIA_TIMEOUT_SECONDS,
                         ),
                     ),
                 ),
             )
-            or MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+            or _DEFAULT_MEDIA_TIMEOUT_SECONDS
         ),
     )
     basic = BasicSettings(
@@ -276,10 +305,6 @@ def build_application_settings(config: Any) -> ApplicationSettings:
     )
     media_config = MediaSettings(
         download_media_timeout=http.media_timeout,
-        cache_ttl_seconds=MEDIA_CACHE_TTL_SECONDS,
-        cache_gc_interval_seconds=MEDIA_CACHE_GC_INTERVAL_SECONDS,
-        cache_gc_grace_seconds=MEDIA_CACHE_GC_GRACE_SECONDS,
-        min_valid_bytes=MEDIA_MIN_VALID_BYTES,
         telegram_photo_max_bytes=TELEGRAM_PHOTO_MAX_BYTES,
         onebot_prefer_local_video_default=ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
         qq_official_media_threshold=QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,

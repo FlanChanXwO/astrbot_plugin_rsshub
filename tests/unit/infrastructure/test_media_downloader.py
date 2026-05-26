@@ -41,7 +41,10 @@ def test_media_downloader_guesses_suffix_from_wrapped_format_query():
 
 
 def test_media_downloader_guesses_suffix_from_content_type():
-    assert MediaDownloader._suffix_from_content_type("image/jpeg; charset=binary") == ".jpg"
+    assert (
+        MediaDownloader._suffix_from_content_type("image/jpeg; charset=binary")
+        == ".jpg"
+    )
 
 
 @pytest.mark.asyncio
@@ -403,7 +406,9 @@ async def test_media_downloader_m3u8_tries_wrapped_and_inner_url(
     async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
         return True
 
-    monkeypatch.setattr(FFmpegTool, "has_valid_video_stream", fake_has_valid_video_stream)
+    monkeypatch.setattr(
+        FFmpegTool, "has_valid_video_stream", fake_has_valid_video_stream
+    )
 
     downloader = MediaDownloader(cache_dir=tmp_path)
     path = await downloader.get_or_download(url=wrapped_url)

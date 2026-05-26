@@ -356,6 +356,8 @@ def test_formatter_build_components_gif_conversion():
         failed_urls=[],
         platform="",
     )
-    media_items = [(c.kind, c.media_type, c.file) for c in components if c.kind == "media"]
+    media_items = [
+        (c.kind, c.media_type, c.file) for c in components if c.kind == "media"
+    ]
     assert media_items == [("media", "image", "/tmp/video.gif")]
     assert all(c.text == "hello" for c in components if c.kind == "text")

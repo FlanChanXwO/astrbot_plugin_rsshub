@@ -318,7 +318,9 @@ class RsshubPluginConfig(BaseModel):
                 "media_timeout", basic_cfg.pop("download_media_timeout")
             )
         if "download_media_timeout" in media_cfg:
-            http_cfg.setdefault("media_timeout", media_cfg.get("download_media_timeout"))
+            http_cfg.setdefault(
+                "media_timeout", media_cfg.get("download_media_timeout")
+            )
 
         global_cfg = astrbot_config.get("global_config", {})
         ffmpeg_cfg = astrbot_config.get("ffmpeg", {})

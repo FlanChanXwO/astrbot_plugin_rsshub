@@ -145,7 +145,9 @@ def _build_sender_strategy_settings(value: Any) -> SenderStrategySettings:
         _PLATFORM_STRATEGY_TEMPLATE_KEYS["qq_official"],
     )
     if not isinstance(qq_official_source, dict):
-        qq_official_source = _first_template_item(_get_value(value, "qq_official", None))
+        qq_official_source = _first_template_item(
+            _get_value(value, "qq_official", None)
+        )
     if not isinstance(qq_official_source, dict):
         qq_official_source = _first_template_item(
             _get_value(value, "qq_official_settings", None)

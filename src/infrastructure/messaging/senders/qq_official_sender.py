@@ -263,7 +263,9 @@ class QQOfficialMessageSender(DefaultMessageSender):
         use_markdown: bool | None = None,
     ) -> SendResult:
         image_component = next(
-            item for item in components if item.kind == "media" and item.media_type == "image"
+            item
+            for item in components
+            if item.kind == "media" and item.media_type == "image"
         )
         strategy = self._get_qq_official_degrade_strategy()
         if strategy == QQ_OFFICIAL_DEGRADE_STRATEGY_FAIL:
@@ -430,11 +432,7 @@ class QQOfficialMessageSender(DefaultMessageSender):
         strategy = getattr(context, "sender_strategy", None)
         mode = str(
             getattr(strategy, "markdown_mode", "")
-            or (
-                strategy.get("markdown_mode", "")
-                if isinstance(strategy, dict)
-                else ""
-            )
+            or (strategy.get("markdown_mode", "") if isinstance(strategy, dict) else "")
             or QQ_OFFICIAL_MARKDOWN_MODE_AUTO
         )
         if mode not in QQ_OFFICIAL_MARKDOWN_MODE_OPTIONS:

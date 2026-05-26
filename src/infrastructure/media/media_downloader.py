@@ -102,11 +102,7 @@ class MediaDownloader:
     @staticmethod
     def _suffix_from_format_value(value: str) -> str:
         media_format = (
-            unquote(str(value or ""))
-            .strip()
-            .lower()
-            .lstrip(".")
-            .split("&", 1)[0]
+            unquote(str(value or "")).strip().lower().lstrip(".").split("&", 1)[0]
         )
         return _MEDIA_FORMAT_SUFFIXES.get(media_format, "")
 

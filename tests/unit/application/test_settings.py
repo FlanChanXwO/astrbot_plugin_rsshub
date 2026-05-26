@@ -529,7 +529,7 @@ def test_config_save_writes_non_default_sender_strategy_to_unified_template_list
                     {
                         "__template_key": "qq_official_strategy",
                         "markdown_mode": "force",
-                    }
+                    },
                 ],
             }
         }
@@ -547,7 +547,7 @@ def test_config_save_writes_non_default_sender_strategy_to_unified_template_list
         {
             "__template_key": "qq_official_strategy",
             "markdown_mode": "force",
-        }
+        },
     ]
 
 

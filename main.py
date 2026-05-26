@@ -3,45 +3,25 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import File
+from astrbot.api.message_components import File, Image
 from astrbot.api.star import Context, Star
 
-try:
-    from astrbot.core.star.filter import GreedyStr
-except Exception:  # pragma: no cover - fallback for test/mocking env
-    GreedyStr = str
-
-from astrbot.api.message_components import Image
-
 from .bootstrap import PluginDeps, PluginRuntime, create_plugin_runtime
+from .src.application.commands import HelpImageCommand
+from .src.application.commands.import_subscriptions_cmd import IMPORT_UPLOAD_WAIT_SECONDS
 from .src.application.llmtools import LLM_TOOL_NAMES, build_llm_tools
 from .src.application.services.session_push_queue import SessionPushQueue
 from .src.infrastructure.config import ApplicationSettings
 from .src.infrastructure.schedule import RSSScheduler
 from .src.infrastructure.utils import get_logger
 from .src.interfaces import WebApiHandler
+from .src.interfaces.astrbot_compat import GreedyStr, all_message_event_filter
 from .src.interfaces import handlers as _h
 
 logger = get_logger()
-
-_HELP_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "help" / "rsshelp.png"
-_IMPORT_WAIT_SECONDS = 5 * 60
-_event_message_type = getattr(filter, "event_message_type", None)
-_event_message_type_all = getattr(
-    getattr(filter, "EventMessageType", None), "ALL", None
-)
-
-
-def _noop_event_message_type(*_args, **_kwargs):
-    return lambda fn: fn
-
-
-if not callable(_event_message_type):
-    _event_message_type = _noop_event_message_type
 
 
 class RSSHubPlugin(Star):
@@ -134,7 +114,7 @@ class RSSHubPlugin(Star):
         if result.get("plain"):
             yield event.plain_result(result["plain"])
 
-    @filter.command("unsub")
+    @filter.command("unsub", alias={"取消订阅"})
     async def unsub_feed(self, event: AstrMessageEvent, args: GreedyStr = ""):
         """取消订阅（支持 ID/URL 批量）。
 
@@ -162,7 +142,7 @@ class RSSHubPlugin(Star):
         if result.get("plain"):
             yield event.plain_result(result["plain"])
 
-    @filter.command("sub_stop", alias={"停止RSS", "停止推送"})
+    @filter.command("sub_stop", alias={"rss_stop", "停止RSS", "停止推送"})
     async def stop_rss_job(self, event: AstrMessageEvent, args: GreedyStr = ""):
         """停止当前会话推送任务。
 
@@ -320,12 +300,12 @@ class RSSHubPlugin(Star):
         if result.get("wait_import"):
             self._prune_pending_imports()
             self._pending_imports[self._import_wait_key(event)] = (
-                time.time() + _IMPORT_WAIT_SECONDS
+                time.time() + IMPORT_UPLOAD_WAIT_SECONDS
             )
         if result.get("plain"):
             yield event.plain_result(result["plain"])
 
-    @_event_message_type(_event_message_type_all)
+    @all_message_event_filter(filter)
     async def import_upload_listener(self, event: AstrMessageEvent):
         """处理 /sub_import 空参数后的文件上传。"""
         self._prune_pending_imports()
@@ -385,13 +365,14 @@ class RSSHubPlugin(Star):
     @filter.command("rsshelp", alias={"RSS帮助", "rss帮助"})
     async def rsshelp(self, event: AstrMessageEvent):
         """查看 RSSHub 命令帮助图片。"""
-        if _HELP_IMAGE_PATH.exists():
-            yield event.chain_result([Image(file=str(_HELP_IMAGE_PATH.resolve()))])
+        help_image_path = HelpImageCommand().execute(self.context)
+        if help_image_path.exists():
+            yield event.chain_result([Image(file=str(help_image_path.resolve()))])
             return
         yield event.plain_result("没有找到帮助图片")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rsshub_kb_init")
+    @filter.command("rsshub_kb_init", alias={"rss知识库初始化", "RSS知识库初始化"})
     async def rsshub_kb_init(self, event: AstrMessageEvent):
         """初始化 RSSHub Routes 知识库。"""
         result = await _h.handle_rsshub_kb_init(self._deps)
@@ -399,7 +380,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rsshub_kb_sync")
+    @filter.command("rsshub_kb_sync", alias={"rss知识库同步", "RSS知识库同步"})
     async def rsshub_kb_sync(self, event: AstrMessageEvent):
         """启动 RSSHub Routes 知识库同步任务。"""
         result = await _h.handle_rsshub_kb_sync(self._deps)
@@ -407,7 +388,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rsshub_kb_status")
+    @filter.command("rsshub_kb_status", alias={"rss知识库同步状态", "RSS知识库同步状态"})
     async def rsshub_kb_status(self, event: AstrMessageEvent):
         """查看 RSSHub Routes 知识库状态。"""
         result = await _h.handle_rsshub_kb_status(self._deps)
@@ -415,7 +396,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rsshub_kb_task")
+    @filter.command("rsshub_kb_task", alias={"rss知识库近期同步任务", "RSS知识库近期同步任务"})
     async def rsshub_kb_task(self, event: AstrMessageEvent):
         """查看最近 RSSHub Routes 知识库同步任务。"""
         result = _h.handle_rsshub_kb_task(self._deps)

@@ -27,6 +27,18 @@ skills/      # 给 AI agent 的 skill
 
 ## 运行与调试原则
 
+### 启动入口
+
+项目运行通常启动 AstrBot 主仓库顶层入口，而不是直接运行插件目录内的文件。
+
+本地工作区常见入口：
+
+```bash
+python /Users/flanchan/Development/SourceCode/GithubProjects/AstrbotPluginDev/main.py
+```
+
+如果工作区路径不同，就在 AstrBot 根目录运行对应的顶层 `main.py`。
+
 ### 数据目录
 
 不要把运行时数据写回插件仓库下的 `data/`。
@@ -39,10 +51,7 @@ skills/      # 给 AI agent 的 skill
 
 ### 启动结构
 
-- `main.py` 只负责注册和生命周期入口
-- `bootstrap.py` 负责装配依赖与 runtime
-
-本地调试时不要把 startup ownership 挪回 `main.py`。
+启动分工见 [`../project/architecture.md`](../project/architecture.md#启动结构)。本地调试时不要把 startup ownership 从 `bootstrap.py` 挪回入口文件。
 
 ### Plugin Pages
 
@@ -55,30 +64,9 @@ skills/      # 给 AI agent 的 skill
 
 构成。前端行为依赖 AstrBot Plugin Pages bridge，不是一个独立 SPA。
 
-## 常用命令
+## 测试与检查命令
 
-在 AstrBot 根目录执行：
-
-```bash
-uv run ruff format data/plugins/astrbot_plugin_rsshub
-uv run ruff check data/plugins/astrbot_plugin_rsshub
-```
-
-在插件目录可执行：
-
-```bash
-python tests/run_tests.py -v
-python tests/run_tests.py --category unit
-python tests/run_tests.py --category integration
-pytest tests/ -v
-```
-
-前端脚本语法可直接检查：
-
-```bash
-node --check pages/dashboard/app.js
-node --check pages/dashboard/js/api.js
-```
+命令清单统一维护在 [`testing.md`](./testing.md)，本文件不重复列出。
 
 ## 改动前先确认的几件事
 

@@ -14,6 +14,11 @@ PowerShell:
     .\run_tests.ps1                  # 运行所有测试
     .\run_tests.ps1 -Verbose         # 详细输出
     .\run_tests.ps1 -Category unit   # 仅运行单元测试
+
+Bash:
+    ./run_tests.sh                   # 运行所有测试
+    ./run_tests.sh --verbose         # 详细输出
+    ./run_tests.sh --category unit   # 仅运行单元测试
 """
 
 from __future__ import annotations
@@ -376,52 +381,60 @@ async def test_event_bus():
 
 
 # =============================================================================
-# 扩展系统测试
+# 全局事件总线测试
 # =============================================================================
 
 
-async def test_extension_system():
-    """测试扩展系统."""
+async def test_global_event_bus():
+    """测试全局事件总线生命周期."""
+    from astrbot_plugin_rsshub.src.infrastructure.fetcher.rss.parser import EntryParsed
     from astrbot_plugin_rsshub.src.infrastructure.messaging import (
-        Extension,
         FeedParseEvent,
         get_event_bus,
-        on_event,
         reset_event_bus,
     )
 
     passed = 0
     failed = 0
+    received: list[object] = []
 
-    # 重置事件总线
-    reset_event_bus()
-
-    # 测试扩展注册
+    # 测试全局事件总线注册与发布
     try:
-        received = []
+        reset_event_bus()
+        bus = get_event_bus()
 
-        class TestExtension(Extension):
-            name = "test_ext"
-            version = "1.0.0"
+        @bus.on(FeedParseEvent)
+        async def handler(event):
+            received.append(event)
 
-            @on_event(FeedParseEvent)
-            async def on_parse(self, event):
-                received.append(event)
-
-        ext = TestExtension()
-        ext.register()
-
-        event = FeedParseEvent(entries=[])
-        await get_event_bus().emit(event)
+        event = FeedParseEvent(entries=[EntryParsed(title="Global")])
+        await bus.emit(event)
 
         assert len(received) == 1, f"期望收到 1 个事件, 实际 {len(received)}"
-
-        ext.unregister()
-        print_test("扩展注册/注销", "PASS")
+        print_test("全局事件总线注册/发布", "PASS")
         passed += 1
     except Exception as e:
-        print_test("扩展注册/注销", "FAIL", str(e))
+        print_test("全局事件总线注册/发布", "FAIL", str(e))
         failed += 1
+
+    # 测试 reset 后旧 handler 不再影响新总线
+    try:
+        old_bus = get_event_bus()
+        old_received_count = len(received)
+        reset_event_bus()
+        new_bus = get_event_bus()
+
+        assert new_bus is not old_bus, "reset 后应该创建新的事件总线实例"
+
+        await new_bus.emit(FeedParseEvent(entries=[]))
+        assert len(received) == old_received_count, "旧 handler 不应该挂到新的事件总线"
+        print_test("全局事件总线 reset 隔离", "PASS")
+        passed += 1
+    except Exception as e:
+        print_test("全局事件总线 reset 隔离", "FAIL", str(e))
+        failed += 1
+    finally:
+        reset_event_bus()
 
     return passed, failed
 
@@ -441,7 +454,7 @@ TEST_CATEGORIES = {
     ],
     "integration": [
         ("事件总线", test_event_bus),
-        ("扩展系统", test_extension_system),
+        ("全局事件总线", test_global_event_bus),
     ],
 }
 

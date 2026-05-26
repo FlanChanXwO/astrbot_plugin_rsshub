@@ -50,6 +50,7 @@ provider 会同时解析 sender strategy：
 
 - `telegram` -> Telegram 策略
 - `aiocqhttp` / `onebot` -> OneBot 策略
+- `qq_official` / `qqofficial` / `qq` -> QQ Official 策略
 
 ### Adapter 作用
 
@@ -63,11 +64,7 @@ provider 会同时解析 sender strategy：
 
 ### 推送排版策略
 
-`style` 是发送排版策略，不再表示旧 RSStT/flowerss 文本风格：
-
-- `0=auto`：使用平台自动/经典策略。
-- `1=RSSRT`：保留给 RSSRT 排版策略。
-- `2=original`：使用解析树 layout fragments，尽量保留 RSS/HTML 中图文出现顺序。
+`style` 的枚举语义见 [`domain-model.md`](./domain-model.md#推送排版策略)。sender 层只负责按该策略选择平台发送结构。
 
 ### QQ Official / Weixin OC 顺序发送
 
@@ -82,19 +79,33 @@ provider 会同时解析 sender strategy：
 
 如果中途某个媒体失败，sender 不会立刻停止，而是继续发送剩余媒体和最终文本。最终 `SendResult.ok=False`，`transient` / `needs_rebind` 聚合所有失败结果，`detail` 带有 `partial send` 语义。最终文本只追加失败媒体的原始链接，不追加成功媒体链接。
 
+### Markdown 文本发送
+
+RSS 文本格式化层支持平台感知的轻量 Markdown 输出。默认平台仍保持纯文本；Telegram 的文本内容可渲染为标题加粗、可点击 via 链接等保守 Markdown。
+
+QQ Official 的运行时开关在 `sender_strategies.platform_strategies` 的 `qq_official_strategy.markdown_mode`：
+
+- `auto`：预留平台默认策略。
+- `force`：预留强制 Markdown 策略。
+- `plain`：纯文本策略。
+
+QQ Official sender 必须通过 AstrBot `MessageChain.use_markdown_` 控制 Markdown，不能绕过 core 手写 botpy payload。当前主动推送链路临时统一生成纯文本并显式关闭 QQ Official Markdown，避免 `**标题**`、`[链接](链接)` 等 Markdown 原文直接暴露给用户；待 AstrBot core 对主动推送的消息级 Markdown 行为稳定后，再恢复三态策略。
+
+Telegram 不新增插件侧开关。插件只优化 Plain 文本文案，AstrBot Telegram adapter 会对 Plain 文本走 MarkdownV2 转换；媒体 caption Markdown 不是当前插件承诺面。
+
 ### OneBot 经典与原始顺序
 
 OneBot auto/classic 使用合并转发，节点名优先使用 feed title。合并转发失败后会回退为纯文本 Nodes。OneBot original 不使用大合并转发包，而是按 layout fragments 逐条发送图文片段，适合 AI 日报这类多图长文。
 
 ### Telegram 大图片
 
-Telegram Bot API 对 photo 有大小上限。发送前如果本地图片文件超过 10 MiB，Telegram sender 会把它改为文件组件发送，避免平台把大图按 photo 拒绝。这个降级只改变发送组件类型，不改变原始媒体 URL 和失败历史记录。
+Telegram Bot API 对 photo 有大小上限。发送前如果本地图片文件超过内置 photo 阈值，Telegram sender 会把它改为文件组件发送，避免平台把大图按 photo 拒绝。这个降级只改变发送组件类型，不改变原始媒体 URL 和失败历史记录。
 
 ### m3u8 / HLS 视频
 
-媒体发送始终先预下载到本地成功缓存；下载失败不会写入失败缓存，下一次推送会重新尝试。m3u8/HLS 链接会交给 FFmpeg 合并为 MP4，并沿用标准化后的 `http_config.proxy` 作为 FFmpeg HTTP 代理参数；裸 `host:port` 会按 `http://host:port` 处理。`http_config.media_timeout` 控制媒体预下载和 FFmpeg 下载超时，上限 1800 秒。下载流程不只检查文件非空，还会用 `media_integrity` 验证图片头/可选 Pillow 完整性，并用 ffprobe 校验视频流与时长；校验失败会删除坏缓存，并沿用媒体下载失败路径，让 sender 追加原始链接或按平台能力降级，而不是缓存坏文件。
+媒体发送始终先预下载到本地成功缓存；下载失败不会写入失败缓存，下一次推送会重新尝试。m3u8/HLS 链接会交给 FFmpeg 合并为 MP4，并沿用标准化后的 `http_config.proxy` 作为 FFmpeg HTTP 代理参数；裸 `host:port` 会按 `http://host:port` 处理。`http_config.media_timeout` 控制媒体预下载和 FFmpeg 下载超时，上限 1800 秒。下载流程不只检查文件非空，还会用本地文件头/`filetype` 探测真实媒体类型与缓存后缀，再用 `media_integrity` 验证图片头/可选 Pillow 完整性，并用 ffprobe 校验视频流与时长；校验失败会删除坏缓存，并沿用媒体下载失败路径，让 sender 追加原始链接或按平台能力降级，而不是缓存坏文件。
 
-平台限制默认值集中在 `src/shared/constants.py`。OneBot 默认优先发送本地视频文件，避免 NapCat/OneBot 端自行拉取远程 m3u8 失败；Telegram photo 阈值默认 10 MiB，超限图片按文件发送；QQ Official 对视频和多媒体优先尝试本地文件发送，失败时保留 partial 结果并在文本中暴露失败媒体链接。
+OneBot 默认优先发送本地视频文件，避免 NapCat/OneBot 端自行拉取远程 m3u8 失败。QQ Official 默认不按媒体数量预先降级为文件，图片/视频会先按平台媒体组件发送，真实发送失败后再按内置策略降级并在文本中暴露失败媒体链接。平台限制和默认策略的常量归属见 [`domain-model.md`](./domain-model.md#常量归属)。
 
 ## 媒体 fingerprint
 

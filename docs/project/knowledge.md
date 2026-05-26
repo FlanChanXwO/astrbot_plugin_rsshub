@@ -19,6 +19,25 @@
 - Agent 统一走 AstrBot 的 KB 工具能力
 - 插件只维护同步、状态和源适配
 
+## 同步流程图
+
+知识库同步是 manifest 驱动的增量流程。下面的 Mermaid 图表达成功主链路；并发控制、错误状态和 source adapter 差异在后续章节展开。
+
+```mermaid
+flowchart TD
+  A["启动同步任务"] --> B["获取 source manifest"]
+  B --> C["读取本地 managed manifest"]
+  C --> D["按 path + sha256 生成 sync plan"]
+  D --> E{"计划分类"}
+  E -->|"deleted"| F["删除远端旧文档"]
+  E -->|"added / updated"| G["下载源文件"]
+  G --> H["上传到 AstrBot KB"]
+  F --> I["更新任务进度"]
+  H --> I
+  I --> J["保存本地 manifest"]
+  J --> K["写入 task status"]
+```
+
 ## 当前公开知识库源
 
 本项目当前默认同步源是公开仓库：

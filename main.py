@@ -11,7 +11,9 @@ from astrbot.api.star import Context, Star
 
 from .bootstrap import PluginDeps, PluginRuntime, create_plugin_runtime
 from .src.application.commands import HelpImageCommand
-from .src.application.commands.import_subscriptions_cmd import IMPORT_UPLOAD_WAIT_SECONDS
+from .src.application.commands.import_subscriptions_cmd import (
+    IMPORT_UPLOAD_WAIT_SECONDS,
+)
 from .src.application.llmtools import LLM_TOOL_NAMES, build_llm_tools
 from .src.application.services.session_push_queue import SessionPushQueue
 from .src.infrastructure.config import ApplicationSettings
@@ -388,7 +390,9 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rsshub_kb_status", alias={"rss知识库同步状态", "RSS知识库同步状态"})
+    @filter.command(
+        "rsshub_kb_status", alias={"rss知识库同步状态", "RSS知识库同步状态"}
+    )
     async def rsshub_kb_status(self, event: AstrMessageEvent):
         """查看 RSSHub Routes 知识库状态。"""
         result = await _h.handle_rsshub_kb_status(self._deps)
@@ -396,7 +400,9 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rsshub_kb_task", alias={"rss知识库近期同步任务", "RSS知识库近期同步任务"})
+    @filter.command(
+        "rsshub_kb_task", alias={"rss知识库近期同步任务", "RSS知识库近期同步任务"}
+    )
     async def rsshub_kb_task(self, event: AstrMessageEvent):
         """查看最近 RSSHub Routes 知识库同步任务。"""
         result = _h.handle_rsshub_kb_task(self._deps)

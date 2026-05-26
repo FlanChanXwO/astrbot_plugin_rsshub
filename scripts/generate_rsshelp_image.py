@@ -254,6 +254,7 @@ def _group_commands(cmds: list[CommandDoc]) -> list[dict]:
         "管理员": [],
         "其他命令": [],
     }
+
     def sort_key(cmd: CommandDoc) -> tuple[str, int, str]:
         type_rank = {"command": 0, "group": 1, "group_command": 2}.get(cmd.type, 9)
         return (cmd.group_name or cmd.command, type_rank, cmd.command)
@@ -298,7 +299,9 @@ def render_html_to_temp(commands: list[CommandDoc], theme: str = "light") -> Pat
         inline_css=css,
         rsslogo_svg=rsslogo_svg,
     )
-    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(
+        suffix=".html", delete=False, mode="w", encoding="utf-8"
+    ) as f:
         f.write(html)
         return Path(f.name)
 
@@ -382,7 +385,9 @@ def _font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def render_png_fallback(commands: list[CommandDoc], output_png: Path, theme: str = "light") -> None:
+def render_png_fallback(
+    commands: list[CommandDoc], output_png: Path, theme: str = "light"
+) -> None:
     width = 1040
     padding = 40
     line_h = 28
@@ -480,11 +485,19 @@ def render_png_fallback(commands: list[CommandDoc], output_png: Path, theme: str
             outline=group_outline,
             width=2,
         )
-        draw.text((x + 18, box_y + 16), g["title"], font=font_h2, fill=group_title_color)
+        draw.text(
+            (x + 18, box_y + 16), g["title"], font=font_h2, fill=group_title_color
+        )
         inner_y = box_y + 62
         for c in g["commands"]:
             prefix = "  " if c.type == "group_command" else ""
-            suffix = "  [命令组]" if c.type == "group" else "  [子命令]" if c.type == "group_command" else ""
+            suffix = (
+                "  [命令组]"
+                if c.type == "group"
+                else "  [子命令]"
+                if c.type == "group_command"
+                else ""
+            )
             draw.text(
                 (x + 18, inner_y),
                 f"{prefix}{c.display_command}{suffix}",
@@ -496,7 +509,9 @@ def render_png_fallback(commands: list[CommandDoc], output_png: Path, theme: str
             inner_y += line_h
             if c.display_aliases:
                 alias_text = " / ".join(c.display_aliases)
-                draw.text((x + 18, inner_y), alias_text, font=font_meta, fill=text_muted)
+                draw.text(
+                    (x + 18, inner_y), alias_text, font=font_meta, fill=text_muted
+                )
                 inner_y += 24
             for label, lines in (("用法", c.usage), ("示例", c.examples)):
                 if not lines:

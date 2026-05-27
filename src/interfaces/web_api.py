@@ -427,7 +427,9 @@ class WebApiHandler:
         users = await self._user_repo.get_all(limit=1000)
         if user_ids:
             requested_user_ids = set(user_ids)
-            users = [u for u in users if str(getattr(u, "id", "")) in requested_user_ids]
+            users = [
+                u for u in users if str(getattr(u, "id", "")) in requested_user_ids
+            ]
             if not users:
                 return jsonify({"ok": True, "items": [], "total": 0})
         subscription_counts: dict[str, dict[str, int]] = {}

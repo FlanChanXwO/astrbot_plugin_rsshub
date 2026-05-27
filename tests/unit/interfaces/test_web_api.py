@@ -1021,7 +1021,9 @@ async def test_user_details_endpoint_returns_empty_for_unknown_user_id_without_s
     )
     sub_repo = MagicMock()
     sub_repo.list_for_dashboard = AsyncMock(return_value=[])
-    handler = _handler(polling_service=MagicMock(), user_repo=user_repo, sub_repo=sub_repo)
+    handler = _handler(
+        polling_service=MagicMock(), user_repo=user_repo, sub_repo=sub_repo
+    )
 
     app = Quart(__name__)
     async with app.test_request_context(
@@ -1111,8 +1113,6 @@ async def test_int_query_values_keep_legacy_separator_compatibility():
 
     payload = await response.get_json()
     assert [item["id"] for item in payload["items"]] == [1, 2, 3]
-
-
 
 
 @pytest.mark.asyncio

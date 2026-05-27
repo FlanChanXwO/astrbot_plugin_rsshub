@@ -119,7 +119,7 @@ async def test_qq_official_plain_text_uses_single_send(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_qq_official_markdown_force_keeps_active_push_plain(monkeypatch):
+async def test_qq_official_markdown_force_sets_message_chain_flag_true(monkeypatch):
     _patch_components(monkeypatch)
     sender = QQOfficialMessageSender()
     calls: list[dict] = []
@@ -139,7 +139,7 @@ async def test_qq_official_markdown_force_keeps_active_push_plain(monkeypatch):
     )
 
     assert result.ok is True
-    assert calls == [{"use_markdown": False}]
+    assert calls == [{"use_markdown": True}]
 
 
 @pytest.mark.asyncio
@@ -167,7 +167,7 @@ async def test_qq_official_markdown_plain_sets_message_chain_flag_false(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_qq_official_markdown_auto_keeps_active_push_plain(monkeypatch):
+async def test_qq_official_markdown_auto_keeps_platform_default(monkeypatch):
     _patch_components(monkeypatch)
     sender = QQOfficialMessageSender()
     calls: list[dict] = []
@@ -187,7 +187,7 @@ async def test_qq_official_markdown_auto_keeps_active_push_plain(monkeypatch):
     )
 
     assert result.ok is True
-    assert calls == [{"use_markdown": False}]
+    assert calls == [{"use_markdown": None}]
 
 
 @pytest.mark.asyncio
@@ -227,20 +227,30 @@ async def test_qq_official_multimedia_exceeding_threshold_degrades_to_files_then
     )
     sender = QQOfficialMessageSender()
     calls: list[list] = []
+    call_kwargs: list[dict] = []
 
     async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
+        call_kwargs.append(kwargs)
         return SendResult(ok=True)
 
     monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
 
     result = await sender.send_to_user(
         _request(),
-        context=MessageContext(platform_name="qq_official"),
+        context=MessageContext(
+            platform_name="qq_official",
+            sender_strategy={"markdown_mode": "plain"},
+        ),
     )
 
     assert result.ok is True
     assert [type(chain[0]) for chain in calls] == [_File, _File, _Plain]
+    assert call_kwargs == [
+        {"use_markdown": False},
+        {"use_markdown": False},
+        {"use_markdown": False},
+    ]
     assert calls[0][0].file == "/tmp/1.jpg"
     assert calls[1][0].file == "/tmp/2.mp4"
     assert calls[-1][0].text == "entry text"

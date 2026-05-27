@@ -143,7 +143,8 @@ def suffix_from_bytes(data: bytes) -> str:
 
 def suffix_from_file_header(path: Path) -> str:
     try:
-        return suffix_from_bytes(path.read_bytes()[:261])
+        with path.open("rb") as fp:
+            return suffix_from_bytes(fp.read(261))
     except OSError:
         return ""
 

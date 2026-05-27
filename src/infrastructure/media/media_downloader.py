@@ -8,10 +8,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
@@ -22,11 +23,11 @@ from ..utils.ffmpeg_helper import FFmpegTool
 from ..utils.logger import get_logger
 from ..utils.media_integrity import validate_media_file
 from ..utils.media_type_detector import (
-    MEDIA_TYPE_SUFFIXES,
     detect_media_bytes,
     detect_media_file,
     detect_media_hint,
     guess_suffix_from_url,
+    suffix_from_format_value,
     suffix_from_content_type,
     suffix_from_file_header,
     suffix_from_query,
@@ -34,7 +35,6 @@ from ..utils.media_type_detector import (
 
 logger = get_logger()
 
-_MEDIA_FORMAT_SUFFIXES = MEDIA_TYPE_SUFFIXES
 _MEDIA_REQUEST_HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -101,10 +101,7 @@ class MediaDownloader:
 
     @staticmethod
     def _suffix_from_format_value(value: str) -> str:
-        media_format = (
-            unquote(str(value or "")).strip().lower().lstrip(".").split("&", 1)[0]
-        )
-        return _MEDIA_FORMAT_SUFFIXES.get(media_format, "")
+        return suffix_from_format_value(value)
 
     @staticmethod
     def _suffix_from_query(url: str) -> str:
@@ -466,7 +463,8 @@ class MediaDownloader:
         actual_suffix = detection.suffix or ".bin"
         cache_path = self._cache_file_path(url, suffix=actual_suffix)
         meta_path = self._cache_meta_path(url)
-        cache_path.write_bytes(source.read_bytes())
+        with source.open("rb") as src, cache_path.open("wb") as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
         expire_ts = time.time() + self._CACHE_TTL_SECONDS
         meta_path.write_text(str(expire_ts), encoding="utf-8")
         logger.debug(
@@ -498,7 +496,8 @@ class MediaDownloader:
         os.close(fd)
         normalized = Path(tmp_name)
         try:
-            normalized.write_bytes(source.read_bytes())
+            with source.open("rb") as src, normalized.open("wb") as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
         except Exception:
             normalized.unlink(missing_ok=True)
             raise

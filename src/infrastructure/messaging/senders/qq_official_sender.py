@@ -14,7 +14,9 @@ from ....shared.constants import (
     QQ_OFFICIAL_DEGRADE_STRATEGY_FILE_THEN_LINK,
     QQ_OFFICIAL_DEGRADE_STRATEGY_LINK_ONLY,
     QQ_OFFICIAL_MARKDOWN_MODE_AUTO,
+    QQ_OFFICIAL_MARKDOWN_MODE_FORCE,
     QQ_OFFICIAL_MARKDOWN_MODE_OPTIONS,
+    QQ_OFFICIAL_MARKDOWN_MODE_PLAIN,
 )
 from ...pipeline import MessageComponent
 from .base_sender import DefaultMessageSender
@@ -276,6 +278,7 @@ class QQOfficialMessageSender(DefaultMessageSender):
             file_result = await self._send_media_as_file(
                 request.session_id,
                 image_component,
+                use_markdown=use_markdown,
             )
             if file_result.ok:
                 text_result = await self._send_failed_media_links_text(
@@ -321,6 +324,7 @@ class QQOfficialMessageSender(DefaultMessageSender):
             file_result = await self._send_media_as_file(
                 request.session_id,
                 video_component,
+                use_markdown=use_markdown,
             )
             if file_result.ok:
                 text_result = await self._send_failed_media_links_text(
@@ -378,7 +382,11 @@ class QQOfficialMessageSender(DefaultMessageSender):
         failed_urls: list[str] = []
 
         for component in media_components:
-            file_result = await self._send_media_as_file(request.session_id, component)
+            file_result = await self._send_media_as_file(
+                request.session_id,
+                component,
+                use_markdown=use_markdown,
+            )
             if not file_result.ok:
                 self._record_failed_url(failed_urls, component)
                 failures.append(self._result_with_stage(file_result, "degrade_file"))
@@ -444,14 +452,19 @@ class QQOfficialMessageSender(DefaultMessageSender):
         cls,
         context: MessageContext | None,
     ) -> bool | None:
-        # Temporary compatibility guard: QQ Official active pushes stay plain text
-        # until AstrBot core no longer leaks Markdown syntax in normal payloads.
-        return False
+        mode = cls._markdown_mode_for_context(context)
+        if mode == QQ_OFFICIAL_MARKDOWN_MODE_FORCE:
+            return True
+        if mode == QQ_OFFICIAL_MARKDOWN_MODE_PLAIN:
+            return False
+        return None
 
     async def _send_media_as_file(
         self,
         session_id: str,
         component: MessageComponent,
+        *,
+        use_markdown: bool | None = None,
     ) -> SendResult:
         file_path = str(component.file or "").strip()
         if not file_path or "://" in file_path:
@@ -475,4 +488,5 @@ class QQOfficialMessageSender(DefaultMessageSender):
                     url=component.original_url,
                 )
             ],
+            use_markdown=use_markdown,
         )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -424,6 +425,11 @@ class WebApiHandler:
         user_ids = _query_values("user_id")
         keywords = _query_values("keyword")
         users = await self._user_repo.get_all(limit=1000)
+        if user_ids:
+            requested_user_ids = set(user_ids)
+            users = [u for u in users if str(getattr(u, "id", "")) in requested_user_ids]
+            if not users:
+                return jsonify({"ok": True, "items": [], "total": 0})
         subscription_counts: dict[str, dict[str, int]] = {}
         all_user_ids = [str(u.id) for u in users if str(getattr(u, "id", "")).strip()]
         subscriptions = []
@@ -570,15 +576,21 @@ class WebApiHandler:
         if removed_count > 0:
             self._bump_counter()
             asyncio.create_task(self._broadcast({"event": "data_changed"}))
+            if len(user_ids) > 1:
+                message = f"已处理 {removed_count} 个用户"
+            else:
+                user_id = user_ids[0]
+                if user_deleted:
+                    message = f"用户 {user_id} 已删除"
+                else:
+                    message = f"已清理用户 {user_id} 的关联数据"
             return jsonify(
                 {
                     "ok": True,
                     "removed_count": removed_count,
                     "deleted_subscriptions": deleted_subscriptions,
                     "deleted_push_history": deleted_push_history,
-                    "message": f"已删除 {removed_count} 个用户"
-                    if len(user_ids) > 1
-                    else f"用户 {user_ids[0]} 已删除",
+                    "message": message,
                 }
             )
         return jsonify(
@@ -627,9 +639,9 @@ class WebApiHandler:
         feed_ids: list[int] = []
         if data:
             if isinstance(data.get("feed_ids"), list):
-                feed_ids = [int(item) for item in data["feed_ids"] if str(item).strip()]
+                feed_ids = _coerce_int_values(data["feed_ids"])
             elif data.get("feed_id"):
-                feed_ids = [int(data.get("feed_id", 0))]
+                feed_ids = _coerce_int_values([data.get("feed_id")])
 
         feed_ids = sorted({feed_id for feed_id in feed_ids if feed_id > 0})
         if not feed_ids:
@@ -648,14 +660,17 @@ class WebApiHandler:
             self._bump_counter()
             asyncio.create_task(self._broadcast({"event": "data_changed"}))
 
+        ok = removed_count > 0 or deleted_subscriptions > 0 or deleted_push_history > 0
         return jsonify(
             {
-                "ok": removed_count > 0,
+                "ok": ok,
                 "removed_count": removed_count,
                 "deleted_subscriptions": int(deleted_subscriptions or 0),
                 "deleted_push_history": int(deleted_push_history or 0),
                 "message": f"已删除 {removed_count} 个 Feed"
                 if removed_count > 0
+                else "Feed 未删除，但已清理关联数据"
+                if ok
                 else "没有匹配的 Feed 被删除",
             }
         )
@@ -678,9 +693,6 @@ class WebApiHandler:
             return jsonify({"ok": False, "error": "Feed 不存在"})
 
         options = data.get("options") if isinstance(data.get("options"), dict) else {}
-        if "title" in options:
-            title = str(options.get("title") or "").strip()
-            feed.title = title[:1024] if title else feed.link
         if "link" in options:
             link = str(options.get("link") or "").strip()
             if len(link) > 4096:
@@ -693,6 +705,9 @@ class WebApiHandler:
                 if existing is not None and existing.id != feed_id:
                     return jsonify({"ok": False, "error": "Feed 链接已存在"})
             feed.link = link
+        if "title" in options:
+            title = str(options.get("title") or "").strip()
+            feed.title = title[:1024] if title else feed.link
         if "state" in options:
             try:
                 state = int(options.get("state"))
@@ -1099,7 +1114,7 @@ class WebApiHandler:
         if not user_id:
             return self._user_id_required_response()
 
-        sub_ids = (data or {}).get("sub_ids", [])
+        sub_ids = _coerce_int_values((data or {}).get("sub_ids", []))
 
         if not sub_ids:
             return jsonify({"ok": False, "error": "sub_ids 不能为空"})
@@ -1118,7 +1133,7 @@ class WebApiHandler:
         if not user_id:
             return self._user_id_required_response()
 
-        sub_ids = (data or {}).get("sub_ids", [])
+        sub_ids = _coerce_int_values((data or {}).get("sub_ids", []))
 
         if not sub_ids:
             return jsonify({"ok": False, "error": "sub_ids 不能为空"})
@@ -1137,7 +1152,7 @@ class WebApiHandler:
         if not user_id:
             return self._user_id_required_response()
 
-        sub_ids = (data or {}).get("sub_ids", [])
+        sub_ids = _coerce_int_values((data or {}).get("sub_ids", []))
 
         if not sub_ids:
             return jsonify({"ok": False, "error": "sub_ids 不能为空"})
@@ -1146,7 +1161,7 @@ class WebApiHandler:
         deleted_push_history = 0
         if result.success and bool((data or {}).get("delete_push_history")):
             deleted_push_history = await self._push_history_repo.delete_by_sub_ids(
-                [int(sub_id) for sub_id in sub_ids if str(sub_id).strip()]
+                sub_ids
             )
         self._bump_counter()
         asyncio.create_task(self._broadcast({"event": "data_changed"}))
@@ -1533,7 +1548,8 @@ class WebApiHandler:
             )
 
         data = await request.get_json()
-        history_id = int(data.get("history_id", 0)) if data else 0
+        history_ids = _coerce_int_values([data.get("history_id")]) if data else []
+        history_id = history_ids[0] if history_ids else 0
         if history_id <= 0:
             return jsonify({"ok": False, "error": "history_id 不能为空"})
 
@@ -1636,12 +1652,34 @@ def _coerce_query_values(raw: Any) -> list[str]:
 
 
 def _query_int_values(name: str) -> list[int]:
+    raw_values = [*request.args.getlist(name), *request.args.getlist(f"{name}[]")]
+    return _coerce_int_values(raw_values)
+
+
+def _coerce_int_values(raw_values: Any) -> list[int]:
     values: list[int] = []
-    for value in _query_values(name):
-        try:
-            values.append(int(value))
-        except (TypeError, ValueError):
+    items = raw_values if isinstance(raw_values, list) else [raw_values]
+    for raw in items:
+        text = str(raw or "").strip()
+        if not text:
             continue
+        candidates: list[Any]
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                candidates = [text]
+            else:
+                candidates = parsed if isinstance(parsed, list) else [parsed]
+        else:
+            # 仅整数参数保留历史兼容：支持英文逗号、中文逗号和换行批量输入。
+            candidates = re.split(r"[,，\n]+", text)
+        for candidate in candidates:
+            try:
+                parsed_value = int(str(candidate).strip())
+            except (TypeError, ValueError):
+                continue
+            values.append(parsed_value)
     return list(dict.fromkeys(values))
 
 

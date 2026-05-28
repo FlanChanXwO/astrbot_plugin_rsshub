@@ -141,6 +141,42 @@ def test_resolve_layout_fragment_miss_preserves_original():
     assert info.file == "https://example.com/remote.mp4"
 
 
+def test_resolve_layout_fragment_uses_generated_local_path():
+    info = MediaDispatchResolver.resolve_layout_fragment(
+        LayoutFragment(
+            kind="image",
+            url="rsshub-generated://table/" + "a" * 64,
+            local_path="/tmp/table.png",
+        ),
+        prepared_media_by_url=None,
+    )
+
+    assert info.media_type == "image"
+    assert info.component_kind == "media"
+    assert info.file == "/tmp/table.png"
+
+
+def test_resolve_layout_fragment_skips_failed_generated_prepared_media():
+    source_id = "rsshub-generated://table/" + "a" * 64
+    prepared_map = {
+        source_id: PreparedMedia(
+            media_type="image",
+            original_url=source_id,
+            download_failed=True,
+            generated=True,
+        )
+    }
+
+    info = MediaDispatchResolver.resolve_layout_fragment(
+        LayoutFragment(kind="image", url=source_id, local_path="/tmp/table.png"),
+        prepared_media_by_url=prepared_map,
+    )
+
+    assert info.media_type == ""
+    assert info.component_kind == ""
+    assert info.file == ""
+
+
 def test_resolve_layout_fragment_audio_is_tail():
     info = MediaDispatchResolver.resolve_layout_fragment(
         LayoutFragment(kind="audio", url="https://example.com/podcast.mp3"),

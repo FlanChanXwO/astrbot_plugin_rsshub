@@ -63,13 +63,13 @@ class OneBotMessageSender(DefaultMessageSender):
                 effective_prepared = await self.prepare_media(
                     request.media, timeout=timeout, proxy=proxy
                 )
+            prepared_media_by_url = {
+                pm.original_url: pm
+                for pm in (effective_prepared or [])
+                if pm.original_url
+            }
 
             if self._is_original_style(context) and request.layout:
-                prepared_media_by_url = {
-                    pm.original_url: pm
-                    for pm in (effective_prepared or [])
-                    if pm.original_url
-                }
                 return await self._send_components_in_order(
                     session_id,
                     self._layout_to_components(
@@ -77,6 +77,9 @@ class OneBotMessageSender(DefaultMessageSender):
                     ),
                     combine_image_text=True,
                     default_text=request.message,
+                    prepared_media_by_url=prepared_media_by_url,
+                    platform="onebot",
+                    prefer_local_video=self._prefer_local_video(context),
                 )
 
             nickname = (
@@ -85,10 +88,17 @@ class OneBotMessageSender(DefaultMessageSender):
 
             from astrbot.api.message_components import File, Image, Record, Video
 
-            components = self._formatter.build_components(
-                prepared_media=effective_prepared,
-                text=request.message,
+            components = self._build_components(
+                request,
+                effective_prepared,
+                context,
                 failed_urls=[],
+                platform="onebot",
+                prefer_local_video=self._prefer_local_video(context),
+            )
+            components = self._apply_first_send_candidates(
+                components,
+                prepared_media_by_url,
                 platform="onebot",
                 prefer_local_video=self._prefer_local_video(context),
             )
@@ -136,12 +146,18 @@ class OneBotMessageSender(DefaultMessageSender):
                 failed_urls = self._formatter.collect_original_urls(
                     effective_prepared or []
                 )
+                fallback_message = (
+                    self._message_with_all_generated_fallbacks(request) or "RSS update"
+                )
                 fallback_text = self._append_failed_links(
-                    request.message or "RSS update",
+                    fallback_message,
                     failed_urls,
                 )
                 fallback_nodes = [
-                    Node(content=[Plain(fallback_text or "RSS update")], name=nickname)
+                    Node(
+                        content=[Plain(fallback_text or "RSS update")],
+                        name=nickname,
+                    )
                 ]
                 return await self._send_chain(session_id, [Nodes(fallback_nodes)])
             return result

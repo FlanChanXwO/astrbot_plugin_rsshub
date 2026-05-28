@@ -8,9 +8,7 @@ from astrbot_plugin_rsshub.src.infrastructure.media.media_downloader import (
     MediaDownloader,
 )
 from astrbot_plugin_rsshub.src.infrastructure.utils.ffmpeg_helper import FFmpegTool
-from astrbot_plugin_rsshub.src.infrastructure.utils.media_integrity import (
-    MediaValidationResult,
-)
+from astrbot_plugin_rsshub.src.shared.constants import GIF_COMPRESS_TARGET_MAX_BYTES
 
 _VALID_GIF = (
     b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00"
@@ -365,9 +363,6 @@ async def test_media_downloader_cleans_normalized_temp_when_gif_replaces_it(
         gif_path.write_bytes(_VALID_GIF)
         return gif_path
 
-    async def fake_validate_media_file(*_args, **_kwargs):
-        return MediaValidationResult(True)
-
     unlinked: list[Path] = []
     original_safe_unlink = MediaDownloader.safe_unlink
 
@@ -379,10 +374,6 @@ async def test_media_downloader_cleans_normalized_temp_when_gif_replaces_it(
     monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
     monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
     monkeypatch.setattr(FFmpegTool, "transcode_to_gif", fake_transcode_to_gif)
-    monkeypatch.setattr(
-        "astrbot_plugin_rsshub.src.infrastructure.media.media_downloader.validate_media_file",
-        fake_validate_media_file,
-    )
     monkeypatch.setattr(
         MediaDownloader,
         "safe_unlink",
@@ -401,6 +392,96 @@ async def test_media_downloader_cleans_normalized_temp_when_gif_replaces_it(
     assert path.suffix == ".gif"
     assert normalized_paths
     assert all(not item.exists() for item in normalized_paths)
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_builds_valid_gif_variants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    gif_path = tmp_path / "source.gif"
+    gif_path.write_bytes(_VALID_GIF + (b"0" * GIF_COMPRESS_TARGET_MAX_BYTES))
+    compressed_path = tmp_path / "source-small.gif"
+    compressed_path.write_bytes(_VALID_GIF)
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_transcode_to_gif(*_args, **_kwargs):
+        return gif_path
+
+    async def fake_transcode_to_gif_under_limit(*_args, **kwargs):
+        assert kwargs["max_bytes"] == GIF_COMPRESS_TARGET_MAX_BYTES
+        return compressed_path
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "transcode_to_gif", fake_transcode_to_gif)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "transcode_to_gif_under_limit",
+        fake_transcode_to_gif_under_limit,
+    )
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert prepared.media_type == "image"
+    assert prepared.local_path == gif_path
+    assert [variant.variant for variant in prepared.variants] == [
+        "original",
+        "gif",
+        "compressed_gif",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_skips_invalid_gif_variant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    gif_path = tmp_path / "broken.gif"
+    gif_path.write_bytes(b"not a gif")
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_transcode_to_gif(*_args, **_kwargs):
+        return gif_path
+
+    async def fake_transcode_to_gif_under_limit(*_args, **_kwargs):
+        raise AssertionError("invalid high quality GIF should not be compressed")
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "transcode_to_gif", fake_transcode_to_gif)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "transcode_to_gif_under_limit",
+        fake_transcode_to_gif_under_limit,
+    )
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert prepared.media_type == "video"
+    assert [variant.variant for variant in prepared.variants] == ["original"]
 
 
 @pytest.mark.asyncio

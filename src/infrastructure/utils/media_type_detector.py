@@ -78,9 +78,22 @@ MEDIA_MIME_PREFIXES = {
     "audio/": "audio",
 }
 
-FTYP_AUDIO_BRANDS = {b"M4A ", b"M4B ", b"M4P ", b"mp4a"}
+FTYP_AUDIO_BRANDS = {
+    b"M4A ",
+    b"M4B ",
+    b"M4P ",
+    b"mp4a",
+}
 FTYP_QUICKTIME_BRANDS = {b"qt  "}
-FTYP_MP4_BRANDS = {b"avc1", b"dash", b"iso2", b"isom", b"mp41", b"mp42", b"MSNV"}
+FTYP_MP4_BRANDS = {
+    b"avc1",
+    b"dash",
+    b"iso2",
+    b"isom",
+    b"mp41",
+    b"mp42",
+    b"MSNV",
+}
 
 
 @dataclass(frozen=True)
@@ -154,8 +167,7 @@ def suffix_from_bytes(data: bytes) -> str:
 
 def suffix_from_file_header(path: Path) -> str:
     try:
-        with path.open("rb") as fp:
-            return suffix_from_bytes(fp.read(261))
+        return suffix_from_bytes(path.read_bytes()[:261])
     except OSError:
         return ""
 

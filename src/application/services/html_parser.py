@@ -20,6 +20,7 @@ from ...domain.entities.content_types import (
     ContentNode,
     ContentNodeType,
     FileContent,
+    GeneratedImageContent,
     HtmlNode,
     ImageContent,
     LayoutFragment,
@@ -52,13 +53,27 @@ class HTMLParser:
         " ",
     )
 
-    def __init__(self, html: str, feed_link: str | None = None):
+    def __init__(
+        self,
+        html: str,
+        feed_link: str | None = None,
+        table_renderer: Any | None = None,
+        render_tables_as_images: bool = True,
+    ):
         self.html = normalize_html_markup(html)
         self.feed_link = feed_link
         self.soup: BeautifulSoup | None = None
-        self.media: list[ImageContent | VideoContent | AudioContent | FileContent] = []
+        self.media: list[
+            ImageContent
+            | GeneratedImageContent
+            | VideoContent
+            | AudioContent
+            | FileContent
+        ] = []
         self.links: list[str] = []
         self.mentions: list[MentionContent] = []
+        self._table_renderer = table_renderer
+        self._render_tables_as_images = render_tables_as_images
         self._parse_count = 0
         self._seen_links: set[str] = set()
         self._seen_media: set[str] = set()
@@ -301,41 +316,110 @@ class HTMLParser:
         return result
 
     async def _parse_table(self, table: Tag) -> list[ContentNode] | None:
-        """将表格简化为按行文本"""
-        rows = table.find_all("tr")
-        if not rows:
+        """优先将表格渲染为图片，失败时保留文本 fallback。"""
+        fallback_text = self._table_plain_text(table)
+        if self._render_tables_as_images:
+            try:
+                renderer = self._get_table_renderer()
+                rendered = await self._run_async(renderer.render_table, table)
+                if rendered is not None:
+                    generated = GeneratedImageContent(
+                        source_id=rendered.source_id,
+                        cache_path=str(rendered.path),
+                        alt="[表格已转为图片]",
+                        fallback_text=fallback_text,
+                    )
+                    self._append_media(generated)
+                    return [generated]
+            except Exception as ex:
+                from ...infrastructure.utils.logger import get_logger
+
+                get_logger().warning(
+                    "table_image_render_fallback_to_text: rows=%s, err_type=%s, err=%s",
+                    len(self._table_rows(table)),
+                    type(ex).__name__,
+                    ex,
+                )
+
+        return await self._parse_table_text(table)
+
+    async def _parse_table_text(self, table: Tag) -> list[ContentNode] | None:
+        """将当前 table 转为按行文本，不递归吞入嵌套 table。"""
+        lines = self._table_text_lines(table)
+        if not lines:
             return None
 
         result: list[ContentNode] = [TextContent(text="\n")]
-        for row in rows:
-            if not isinstance(row, Tag):
-                continue
-            cols = row.find_all(("th", "td"))
-            values: list[str] = []
-            for col in cols:
-                if not isinstance(col, Tag):
-                    continue
-                parsed = await self._parse_children(col.children)
-                plain = "".join(item.get_plain() for item in parsed).strip()
-                if plain:
-                    values.append(plain)
-            if values:
-                result.append(TextContent(text=" | ".join(values)))
-                result.append(TextContent(text="\n"))
+        for line in lines:
+            result.append(TextContent(text=line))
+            result.append(TextContent(text="\n"))
 
         if len(result) <= 1:
             return None
         result.append(TextContent(text="\n"))
         return result
 
+    def _table_plain_text(self, table: Tag) -> str:
+        """生成图片不可用时使用的表格文本，不参与成功图片路径展示。"""
+        return normalize_layout_text("\n".join(self._table_text_lines(table)))
+
+    def _table_text_lines(self, table: Tag) -> list[str]:
+        rows = self._table_rows(table)
+        lines: list[str] = []
+        for row in rows:
+            if not isinstance(row, Tag):
+                continue
+            cols = row.find_all(("th", "td"), recursive=False)
+            values: list[str] = []
+            for col in cols:
+                if not isinstance(col, Tag):
+                    continue
+                plain = self._table_cell_text(col, table)
+                if plain:
+                    values.append(plain)
+            if values:
+                lines.append(" | ".join(values))
+        return lines
+
+    @staticmethod
+    def _table_rows(table: Tag) -> list[Tag]:
+        return [
+            row
+            for row in table.find_all("tr")
+            if isinstance(row, Tag) and row.find_parent("table") is table
+        ]
+
+    @staticmethod
+    def _table_cell_text(cell: Tag, table: Tag) -> str:
+        texts: list[str] = []
+        for text_node in cell.find_all(string=True):
+            if text_node.find_parent("table") is not table:
+                continue
+            text = str(text_node).strip()
+            if text:
+                texts.append(text)
+        return normalize_layout_text(" ".join(texts))
+
     def _append_media(
         self,
-        media: ImageContent | VideoContent | AudioContent | FileContent,
+        media: ImageContent
+        | GeneratedImageContent
+        | VideoContent
+        | AudioContent
+        | FileContent,
     ) -> None:
         """按 URL 去重收集媒体"""
         if media.url not in self._seen_media:
             self._seen_media.add(media.url)
             self.media.append(media)
+
+    def _get_table_renderer(self) -> Any:
+        """延迟创建表格渲染器，避免无表格内容提前加载 Pillow。"""
+        if self._table_renderer is None:
+            from ...infrastructure.rendering import TableImageRenderer
+
+            self._table_renderer = TableImageRenderer()
+        return self._table_renderer
 
     def _append_mention(self, mention: MentionContent) -> None:
         """按 target 去重收集提及组件"""
@@ -534,6 +618,18 @@ def build_layout_fragments(root: HtmlNode) -> list[LayoutFragment]:
             )
             if node.alt:
                 text_parts.append(node.alt)
+            return
+        if isinstance(node, GeneratedImageContent):
+            flush_text()
+            fragments.append(
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url=node.source_id,
+                    local_path=node.cache_path,
+                    fallback_text=node.fallback_text,
+                )
+            )
             return
         if isinstance(node, VideoContent):
             flush_text()

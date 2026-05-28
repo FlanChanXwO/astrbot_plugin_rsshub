@@ -8,26 +8,26 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import shutil
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import aiohttp
 
 from astrbot.core.utils.http_ssl import build_tls_connector
 
+from ...shared.constants import GIF_COMPRESS_TARGET_MAX_BYTES
 from ..utils import get_plugin_cache_dir
 from ..utils.ffmpeg_helper import FFmpegTool
 from ..utils.logger import get_logger
 from ..utils.media_integrity import validate_media_file
 from ..utils.media_type_detector import (
+    MEDIA_TYPE_SUFFIXES,
     detect_media_bytes,
     detect_media_file,
     detect_media_hint,
     guess_suffix_from_url,
-    suffix_from_format_value,
     suffix_from_content_type,
     suffix_from_file_header,
     suffix_from_query,
@@ -35,6 +35,7 @@ from ..utils.media_type_detector import (
 
 logger = get_logger()
 
+_MEDIA_FORMAT_SUFFIXES = MEDIA_TYPE_SUFFIXES
 _MEDIA_REQUEST_HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -101,7 +102,10 @@ class MediaDownloader:
 
     @staticmethod
     def _suffix_from_format_value(value: str) -> str:
-        return suffix_from_format_value(value)
+        media_format = (
+            unquote(str(value or "")).strip().lower().lstrip(".").split("&", 1)[0]
+        )
+        return _MEDIA_FORMAT_SUFFIXES.get(media_format, "")
 
     @staticmethod
     def _suffix_from_query(url: str) -> str:
@@ -463,8 +467,7 @@ class MediaDownloader:
         actual_suffix = detection.suffix or ".bin"
         cache_path = self._cache_file_path(url, suffix=actual_suffix)
         meta_path = self._cache_meta_path(url)
-        with source.open("rb") as src, cache_path.open("wb") as dst:
-            shutil.copyfileobj(src, dst, length=1024 * 1024)
+        cache_path.write_bytes(source.read_bytes())
         expire_ts = time.time() + self._CACHE_TTL_SECONDS
         meta_path.write_text(str(expire_ts), encoding="utf-8")
         logger.debug(
@@ -496,8 +499,7 @@ class MediaDownloader:
         os.close(fd)
         normalized = Path(tmp_name)
         try:
-            with source.open("rb") as src, normalized.open("wb") as dst:
-                shutil.copyfileobj(src, dst, length=1024 * 1024)
+            normalized.write_bytes(source.read_bytes())
         except Exception:
             normalized.unlink(missing_ok=True)
             raise
@@ -756,3 +758,165 @@ class MediaDownloader:
                     cleanup_paths.append(path)
             for path in cleanup_paths:
                 self.safe_unlink(path)
+
+    async def get_or_download_prepared(
+        self,
+        *,
+        url: str,
+        timeout_seconds: int = 30,
+        proxy: str = "",
+        media_type: str | None = None,
+        try_convert_gif: bool = False,
+        gif_transcode_timeout: int = 60,
+        m3u8_timeout: int = 120,
+    ):
+        """下载媒体并返回 PreparedMedia，保留原始视频与 GIF 变体。"""
+        from ..messaging.senders.types import MediaVariant, PreparedMedia
+
+        local_path = await self.get_or_download(
+            url=url,
+            timeout_seconds=timeout_seconds,
+            proxy=proxy,
+            media_type=media_type,
+            try_convert_gif=False,
+            gif_transcode_timeout=gif_transcode_timeout,
+            m3u8_timeout=m3u8_timeout,
+        )
+        detection = detect_media_file(local_path)
+        effective_type = (
+            detection.media_type
+            if detection.media_type in {"image", "video", "audio"}
+            else (media_type or "file")
+        )
+        prepared = PreparedMedia(
+            media_type=effective_type,
+            original_url=url,
+            local_path=local_path,
+            detected_mime=detection.mime,
+            detected_suffix=detection.suffix,
+            detection_source=detection.source,
+        )
+        prepared.add_variant(
+            MediaVariant(
+                variant="original" if effective_type == "video" else "primary",
+                media_type=effective_type,
+                path=local_path,
+                mime=detection.mime,
+                suffix=detection.suffix,
+                size_bytes=self._safe_size(local_path),
+            )
+        )
+
+        if try_convert_gif and effective_type == "video" and local_path.exists():
+            await self._append_gif_variants(
+                prepared,
+                local_path=local_path,
+                timeout_seconds=gif_transcode_timeout,
+            )
+            gif_variant = next(
+                (
+                    variant
+                    for variant in prepared.variants
+                    if variant.variant in {"gif", "compressed_gif"}
+                ),
+                None,
+            )
+            if gif_variant is not None:
+                prepared.local_path = gif_variant.path
+                prepared.media_type = "image"
+                prepared.detected_mime = gif_variant.mime
+                prepared.detected_suffix = gif_variant.suffix
+                prepared.detection_source = "gif_variant"
+        return prepared
+
+    async def _append_gif_variants(
+        self,
+        prepared,
+        *,
+        local_path: Path,
+        timeout_seconds: int,
+    ) -> None:
+        from ..messaging.senders.types import MediaVariant
+
+        try:
+            has_audio = await FFmpegTool.has_audio_stream(
+                local_path,
+                timeout_seconds=10,
+                auto_install_ffmpeg=True,
+            )
+            if has_audio:
+                return
+            gif_path = await FFmpegTool.transcode_to_gif(
+                local_path,
+                timeout_seconds=timeout_seconds,
+                auto_install_ffmpeg=True,
+            )
+            if (
+                gif_path
+                and gif_path.exists()
+                and await self._is_valid_gif_variant(gif_path)
+            ):
+                detection = detect_media_file(gif_path)
+                prepared.add_variant(
+                    MediaVariant(
+                        variant="gif",
+                        media_type="image",
+                        path=gif_path,
+                        mime=detection.mime,
+                        suffix=detection.suffix or ".gif",
+                        size_bytes=self._safe_size(gif_path),
+                    )
+                )
+            gif_size = self._safe_size(gif_path) if gif_path else 0
+            if gif_size > GIF_COMPRESS_TARGET_MAX_BYTES:
+                compressed_path = await FFmpegTool.transcode_to_gif_under_limit(
+                    local_path,
+                    max_bytes=GIF_COMPRESS_TARGET_MAX_BYTES,
+                    timeout_seconds=timeout_seconds,
+                    auto_install_ffmpeg=True,
+                )
+                if (
+                    compressed_path
+                    and compressed_path.exists()
+                    and await self._is_valid_gif_variant(compressed_path)
+                ):
+                    detection = detect_media_file(compressed_path)
+                    prepared.add_variant(
+                        MediaVariant(
+                            variant="compressed_gif",
+                            media_type="image",
+                            path=compressed_path,
+                            mime=detection.mime,
+                            suffix=detection.suffix or ".gif",
+                            size_bytes=self._safe_size(compressed_path),
+                        )
+                    )
+        except Exception as ex:
+            logger.warning(
+                "GIF variant generation failed, keeping original video: url=%s, err=%s",
+                prepared.original_url,
+                ex,
+            )
+
+    @staticmethod
+    async def _is_valid_gif_variant(path: Path) -> bool:
+        validation = await validate_media_file(
+            path,
+            media_type="image",
+            timeout_seconds=10,
+        )
+        if validation.ok:
+            return True
+        logger.warning(
+            "GIF variant validation failed, skip variant: path=%s, detail=%s",
+            path,
+            validation.detail,
+        )
+        return False
+
+    @staticmethod
+    def _safe_size(path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0

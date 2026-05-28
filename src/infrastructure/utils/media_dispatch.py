@@ -137,9 +137,34 @@ class MediaDispatchResolver:
         if url and prepared_media_by_url:
             prepared = prepared_media_by_url.get(url)
             if prepared is not None:
+                if prepared.download_failed:
+                    from ...domain.entities.content_types import is_generated_media_url
+
+                    if prepared.generated or is_generated_media_url(url):
+                        return MediaDispatchInfo(
+                            media_type="",
+                            component_kind="",
+                            file="",
+                            original_url=url,
+                        )
                 return MediaDispatchResolver.resolve_prepared(prepared)
 
         # 未预下载 → 保留原始类型
+        if kind in ("image", "video") and fragment.local_path:
+            return MediaDispatchInfo(
+                media_type=kind,
+                component_kind="media",
+                file=fragment.local_path,
+                original_url=url,
+            )
+        if kind in ("audio", "file") and fragment.local_path:
+            return MediaDispatchInfo(
+                media_type=kind,
+                component_kind="tail",
+                file=fragment.local_path,
+                original_url=url,
+                name=name,
+            )
         if kind in ("image", "video") and url:
             return MediaDispatchInfo(
                 media_type=kind,

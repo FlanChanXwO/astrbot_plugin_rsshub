@@ -4,6 +4,9 @@ from pathlib import Path
 
 import pytest
 from astrbot_plugin_rsshub.src.application.services.html_parser import HTMLParser
+from astrbot_plugin_rsshub.src.domain.entities.content_types import (
+    build_generated_media_url,
+)
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
     PreparedMedia,
 )
@@ -81,6 +84,28 @@ def test_failed_video_is_not_sent_as_remote_video_component():
     assert components[0].text == (
         "hello\n媒体原始链接:\nhttps://example.com/playlist.m3u8"
     )
+
+
+def test_failed_generated_media_does_not_append_internal_id():
+    formatter = MessageFormatter()
+    generated_id = build_generated_media_url("table", "a" * 64)
+
+    components = formatter.build_components(
+        prepared_media=[
+            PreparedMedia(
+                media_type="image",
+                original_url=generated_id,
+                local_path=None,
+                download_failed=True,
+                generated=True,
+            )
+        ],
+        text="hello",
+        failed_urls=[],
+    )
+
+    assert [(item.kind, item.media_type) for item in components] == [("text", "")]
+    assert components[0].text == "hello"
 
 
 def test_telegram_chain_does_not_truncate_caption_text():
@@ -194,6 +219,37 @@ async def test_entry_text_formatter_decodes_entity_escaped_html():
     assert "<img" not in text
     assert "Body" in text
     assert "via https://example.com/post | Feed (author: Author)" in text
+
+
+@pytest.mark.asyncio
+async def test_entry_text_formatter_removes_table_image_placeholder(tmp_path):
+    formatter = EntryTextFormatter()
+
+    text = await formatter.format_entry(
+        EntryFormatInput(
+            title="",
+            content="<table><tr><td>A</td><td>B</td></tr></table>",
+        ),
+        EffectivePushOptions(),
+    )
+
+    assert "[表格已转为图片]" not in text
+
+
+@pytest.mark.asyncio
+async def test_entry_text_formatter_keeps_table_text_when_media_hidden():
+    formatter = EntryTextFormatter()
+
+    text = await formatter.format_entry(
+        EntryFormatInput(
+            title="",
+            content="<table><tr><td>A</td><td>B</td></tr></table>",
+        ),
+        EffectivePushOptions(display_media=False),
+    )
+
+    assert "A | B" in text
+    assert "[表格已转为图片]" not in text
 
 
 @pytest.mark.asyncio

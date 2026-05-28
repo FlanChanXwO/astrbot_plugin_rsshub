@@ -14,9 +14,7 @@ from ....shared.constants import (
     QQ_OFFICIAL_DEGRADE_STRATEGY_FILE_THEN_LINK,
     QQ_OFFICIAL_DEGRADE_STRATEGY_LINK_ONLY,
     QQ_OFFICIAL_MARKDOWN_MODE_AUTO,
-    QQ_OFFICIAL_MARKDOWN_MODE_FORCE,
     QQ_OFFICIAL_MARKDOWN_MODE_OPTIONS,
-    QQ_OFFICIAL_MARKDOWN_MODE_PLAIN,
 )
 from ...pipeline import MessageComponent
 from .base_sender import DefaultMessageSender
@@ -44,14 +42,17 @@ class QQOfficialMessageSender(DefaultMessageSender):
         try:
             use_markdown = self._use_markdown_for_context(context)
             prepared_media = await self._prepare_effective_media(request, context)
+            prepared_media_by_url = {
+                pm.original_url: pm for pm in (prepared_media or []) if pm.original_url
+            }
             if self._is_original_style(context) and request.layout:
-                prepared_media_by_url = {
-                    pm.original_url: pm
-                    for pm in (prepared_media or [])
-                    if pm.original_url
-                }
                 layout_components = self._layout_to_components(
                     request, prepared_media_by_url=prepared_media_by_url
+                )
+                layout_components = self._apply_first_send_candidates(
+                    layout_components,
+                    prepared_media_by_url,
+                    platform="qq_official",
                 )
                 threshold_result = await self._maybe_send_threshold_degrade(
                     request,
@@ -72,12 +73,19 @@ class QQOfficialMessageSender(DefaultMessageSender):
                     combine_image_text=True,
                     default_text=request.message,
                     use_markdown=use_markdown,
+                    prepared_media_by_url=prepared_media_by_url,
+                    platform="qq_official",
                 )
 
             components = self._build_components(
                 request,
                 prepared_media,
                 context,
+                platform="qq_official",
+            )
+            components = self._apply_first_send_candidates(
+                components,
+                prepared_media_by_url,
                 platform="qq_official",
             )
             has_media = any(self._is_media_component(item) for item in components)
@@ -113,18 +121,22 @@ class QQOfficialMessageSender(DefaultMessageSender):
                     components,
                     first_failure=result,
                     use_markdown=use_markdown,
+                    prepared_media_by_url=prepared_media_by_url,
                 )
             if self._single_video_component(components) is not None:
                 return await self._send_single_video_then_fallback(
                     request,
                     components,
                     use_markdown=use_markdown,
+                    prepared_media_by_url=prepared_media_by_url,
                 )
             return await self._send_components_media_first(
                 request.session_id,
                 components,
                 default_text=request.message,
                 use_markdown=use_markdown,
+                prepared_media_by_url=prepared_media_by_url,
+                platform="qq_official",
             )
         except Exception as err:
             return SendResult(
@@ -176,6 +188,7 @@ class QQOfficialMessageSender(DefaultMessageSender):
         components: list[MessageComponent],
         *,
         use_markdown: bool | None = None,
+        prepared_media_by_url: dict | None = None,
     ) -> SendResult:
         video_component = self._single_video_component(components)
         if video_component is None:
@@ -184,6 +197,8 @@ class QQOfficialMessageSender(DefaultMessageSender):
                 components,
                 default_text=request.message,
                 use_markdown=use_markdown,
+                prepared_media_by_url=prepared_media_by_url,
+                platform="qq_official",
             )
 
         chain = self._component_to_chain(video_component)
@@ -202,6 +217,7 @@ class QQOfficialMessageSender(DefaultMessageSender):
                 video_component=video_component,
                 first_failure=video_result,
                 use_markdown=use_markdown,
+                prepared_media_by_url=prepared_media_by_url,
             )
 
         failures: list[SendResult] = []
@@ -263,6 +279,7 @@ class QQOfficialMessageSender(DefaultMessageSender):
         *,
         first_failure: SendResult,
         use_markdown: bool | None = None,
+        prepared_media_by_url: dict | None = None,
     ) -> SendResult:
         image_component = next(
             item
@@ -275,12 +292,16 @@ class QQOfficialMessageSender(DefaultMessageSender):
 
         failures = [self._result_with_stage(first_failure, "send_image_text")]
         if strategy == QQ_OFFICIAL_DEGRADE_STRATEGY_FILE_THEN_LINK:
-            file_result = await self._send_media_as_file(
+            fallback = await self._send_component_fallback_candidates(
                 request.session_id,
                 image_component,
+                prepared_media_by_url=prepared_media_by_url,
+                platform="qq_official",
+                skip_first_file=image_component.file,
                 use_markdown=use_markdown,
             )
-            if file_result.ok:
+            failures.extend(fallback.failures)
+            if fallback.ok:
                 text_result = await self._send_failed_media_links_text(
                     request,
                     components,
@@ -292,7 +313,6 @@ class QQOfficialMessageSender(DefaultMessageSender):
                         self._result_with_stage(text_result, "degrade_text")
                     )
                 return self._partial_send_result(failures)
-            failures.append(self._result_with_stage(file_result, "degrade_file"))
 
         text_result = await self._send_failed_media_links_text(
             request,
@@ -312,6 +332,7 @@ class QQOfficialMessageSender(DefaultMessageSender):
         video_component: MessageComponent,
         first_failure: SendResult,
         use_markdown: bool | None = None,
+        prepared_media_by_url: dict | None = None,
     ) -> SendResult:
         strategy = self._get_qq_official_degrade_strategy()
         if strategy == QQ_OFFICIAL_DEGRADE_STRATEGY_FAIL:
@@ -321,12 +342,16 @@ class QQOfficialMessageSender(DefaultMessageSender):
         failed_urls: list[str] = []
 
         if strategy == QQ_OFFICIAL_DEGRADE_STRATEGY_FILE_THEN_LINK:
-            file_result = await self._send_media_as_file(
+            fallback = await self._send_component_fallback_candidates(
                 request.session_id,
                 video_component,
+                prepared_media_by_url=prepared_media_by_url,
+                platform="qq_official",
+                skip_first_file=video_component.file,
                 use_markdown=use_markdown,
             )
-            if file_result.ok:
+            failures.extend(fallback.failures)
+            if fallback.ok:
                 text_result = await self._send_failed_media_links_text(
                     request,
                     components,
@@ -338,7 +363,6 @@ class QQOfficialMessageSender(DefaultMessageSender):
                         self._result_with_stage(text_result, "degrade_text")
                     )
                 return self._partial_send_result(failures)
-            failures.append(self._result_with_stage(file_result, "degrade_file"))
 
         self._record_failed_url(failed_urls, video_component)
         text_result = await self._send_failed_media_links_text(
@@ -382,14 +406,15 @@ class QQOfficialMessageSender(DefaultMessageSender):
         failed_urls: list[str] = []
 
         for component in media_components:
-            file_result = await self._send_media_as_file(
+            fallback = await self._send_component_fallback_candidates(
                 request.session_id,
                 component,
-                use_markdown=use_markdown,
+                prepared_media_by_url=None,
+                platform="qq_official",
             )
-            if not file_result.ok:
+            if not fallback.ok:
                 self._record_failed_url(failed_urls, component)
-                failures.append(self._result_with_stage(file_result, "degrade_file"))
+            failures.extend(fallback.failures)
 
         text_result = await self._send_failed_media_links_text(
             request,
@@ -452,19 +477,14 @@ class QQOfficialMessageSender(DefaultMessageSender):
         cls,
         context: MessageContext | None,
     ) -> bool | None:
-        mode = cls._markdown_mode_for_context(context)
-        if mode == QQ_OFFICIAL_MARKDOWN_MODE_FORCE:
-            return True
-        if mode == QQ_OFFICIAL_MARKDOWN_MODE_PLAIN:
-            return False
-        return None
+        # Temporary compatibility guard: QQ Official active pushes stay plain text
+        # until AstrBot core no longer leaks Markdown syntax in normal payloads.
+        return False
 
     async def _send_media_as_file(
         self,
         session_id: str,
         component: MessageComponent,
-        *,
-        use_markdown: bool | None = None,
     ) -> SendResult:
         file_path = str(component.file or "").strip()
         if not file_path or "://" in file_path:
@@ -488,5 +508,4 @@ class QQOfficialMessageSender(DefaultMessageSender):
                     url=component.original_url,
                 )
             ],
-            use_markdown=use_markdown,
         )

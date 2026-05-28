@@ -6,8 +6,37 @@
 from __future__ import annotations
 
 from abc import ABC
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
+
+GENERATED_MEDIA_SCHEME = "rsshub-generated"
+GENERATED_MEDIA_TABLE_KIND = "table"
+
+
+def build_generated_media_url(kind: str, digest: str) -> str:
+    """构造本地生成媒体的稳定标识，不承诺它是远程 URL。"""
+    normalized_kind = str(kind or "").strip().lower()
+    normalized_digest = str(digest or "").strip().lower()
+    return f"{GENERATED_MEDIA_SCHEME}://{normalized_kind}/{normalized_digest}"
+
+
+def parse_generated_media_url(value: str) -> tuple[str, str] | None:
+    """解析本地生成媒体标识，返回 kind 与内容 hash。"""
+    text = str(value or "").strip()
+    parsed = urlparse(text)
+    if parsed.scheme != GENERATED_MEDIA_SCHEME:
+        return None
+    kind = parsed.netloc.strip().lower()
+    digest = parsed.path.strip("/").lower()
+    if not kind or not digest:
+        return None
+    return kind, digest
+
+
+def is_generated_media_url(value: str) -> bool:
+    """判断字符串是否为插件本地生成媒体标识。"""
+    return parse_generated_media_url(value) is not None
 
 
 class ContentNode(BaseModel, ABC):
@@ -42,6 +71,22 @@ class ImageContent(ContentNode):
 
     url: str = Field(..., description="图片URL")
     alt: str = Field(default="", description="替代文本")
+
+    def get_plain(self) -> str:
+        return (self.alt or "").strip()
+
+
+class GeneratedImageContent(ContentNode):
+    """插件本地生成的图片内容节点。"""
+
+    source_id: str = Field(..., description="本地生成媒体稳定标识")
+    cache_path: str = Field(..., description="本地缓存文件路径")
+    alt: str = Field(default="[表格已转为图片]", description="替代文本")
+    fallback_text: str = Field(default="", description="生成图片不可用时的文本降级")
+
+    @property
+    def url(self) -> str:
+        return self.source_id
 
     def get_plain(self) -> str:
         return (self.alt or "").strip()
@@ -90,6 +135,7 @@ ContentNodeType = (
     TextContent
     | LinkContent
     | ImageContent
+    | GeneratedImageContent
     | VideoContent
     | AudioContent
     | FileContent
@@ -113,16 +159,18 @@ class LayoutFragment(BaseModel):
     text: str = Field(default="", description="Text content")
     media_type: str = Field(default="", description="Media type")
     url: str = Field(default="", description="Media URL")
+    local_path: str = Field(default="", description="Generated local media path")
     name: str = Field(default="", description="File name")
+    fallback_text: str = Field(default="", description="Media send failure fallback")
 
 
 class ParsedResult(BaseModel):
     """HTML解析结果"""
 
     html_tree: HtmlNode = Field(..., description="解析后的HTML树")
-    media: list[ImageContent | VideoContent | AudioContent | FileContent] = Field(
-        default_factory=list, description="媒体列表"
-    )
+    media: list[
+        ImageContent | GeneratedImageContent | VideoContent | AudioContent | FileContent
+    ] = Field(default_factory=list, description="媒体列表")
     layout: list[LayoutFragment] = Field(
         default_factory=list, description="按解析顺序生成的推送布局片段"
     )

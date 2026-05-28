@@ -78,6 +78,19 @@
 
 旧 `flowerss` 语义已经废弃，迁移时会重置为 classic。
 
+## 表格图片语义
+
+HTML `<table>` 解析时会先尝试走轻量转图链路：
+
+- `HTMLParser._parse_table()` 调用 `infrastructure.rendering.TableImageRenderer`。
+- Renderer 使用 `BeautifulSoup/lxml` 读取 `caption`、`thead`、`tbody`、`tr`、`th`、`td`，并基础处理 `rowspan` / `colspan`。
+- 图片用 `Pillow` 绘制为统一聊天卡片风格，不做网页 CSS 高保真截图。
+- 字体按 `RSSHUB_TABLE_FONT_PATH`、`RSSHUB_TABLE_FONT_DIR`、`assets/fonts/`、常见系统字体的顺序查找；都不可用时才回退到 Pillow 默认字体，并记录 warning，提示中文或特殊字符可能显示不完整。
+- 成功后正文树里放入 `GeneratedImageContent`，`layout` 中生成带 `local_path` 的 image fragment；original style 不再把 `[表格已转为图片]` 作为可见文本片段发送，表格纯文本只作为图片缺失或发送失败时的内部 fallback。
+- 文本格式化会按 `display_media` 决定是否走表格转图：正常显示媒体时移除短占位以避免重复刷屏；关闭媒体时保留 `A | B | C` 文本 fallback。
+
+表格图片按规范化表格模型计算 sha256，并保存为 `cache/table_images/table_<hash>.png`。同一表格重复推送会复用同一张图，缓存写入使用唯一临时文件避免并发同 hash 互相覆盖。空表格、坏 HTML 或渲染异常会保留原有 `A | B | C` 文本 fallback，不阻断 RSS 推送。
+
 ## 为什么 OneBot 维持“媒体在前，文本在后”
 
 这是当前实际平台兼容性做出来的结果，不是抽象美感选择：

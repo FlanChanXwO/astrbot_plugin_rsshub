@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover - lightweight test fallback
         unified_msg_origin: str = ""
 
 
-from ...domain.entities.content_types import LayoutFragment
+from ...domain.entities.content_types import LayoutFragment, is_generated_media_url
 from ...domain.entities.push_history import PushHistory
 from ...domain.repositories.push_history_repository import PushHistoryRepository
 from ...domain.repositories.subscription_repository import SubscriptionRepository
@@ -165,6 +165,11 @@ def append_media_links_to_text(
 ) -> str:
     """Append original media URLs to text for failure-facing output."""
     normalized = normalize_media_items(media_urls=media_urls, media_items=media_items)
+    normalized = [
+        (media_type, url)
+        for media_type, url in normalized
+        if not is_generated_media_url(url)
+    ]
     if not normalized:
         return text
     urls = [url for _media_type, url in normalized]
@@ -186,6 +191,11 @@ def strip_appended_media_links_from_text(
     if not text:
         return text
     normalized = normalize_media_items(media_urls=media_urls, media_items=media_items)
+    normalized = [
+        (media_type, url)
+        for media_type, url in normalized
+        if not is_generated_media_url(url)
+    ]
     if not normalized:
         return text
 

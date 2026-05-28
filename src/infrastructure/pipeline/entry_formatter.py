@@ -65,7 +65,10 @@ class EntryTextFormatter:
                 output_format,
             )
             output_format = EntryOutputFormat.PLAIN
-        body = await self.clean_text(entry.content or entry.summary or "")
+        body = await self.clean_text(
+            entry.content or entry.summary or "",
+            render_tables_as_images=options.display_media,
+        )
         title = await self.clean_text(entry.title)
         author = await self.clean_text(entry.author)
         feed_title = await self.clean_text(entry.feed_title)
@@ -115,8 +118,11 @@ class EntryTextFormatter:
         return content
 
     @staticmethod
-    async def clean_text(value: str) -> str:
-        parsed = await HTMLParser(value or "").parse()
+    async def clean_text(value: str, *, render_tables_as_images: bool = True) -> str:
+        parsed = await HTMLParser(
+            value or "",
+            render_tables_as_images=render_tables_as_images,
+        ).parse()
         text = parsed.html_tree.get_plain()
         text = remove_media_placeholders(text)
         return normalize_plain_text(text)
@@ -267,6 +273,6 @@ def normalize_plain_text(value: str) -> str:
 
 
 def remove_media_placeholders(value: str) -> str:
-    text = re.sub(r"(?m)^\s*\[(视频|音频)\]\s*$\n?", "", value or "")
-    text = re.sub(r"[ \t]*(\[视频\]|\[音频\])[ \t]*", " ", text)
+    text = re.sub(r"(?m)^\s*\[(视频|音频|表格已转为图片)\]\s*$\n?", "", value or "")
+    text = re.sub(r"[ \t]*(\[视频\]|\[音频\]|\[表格已转为图片\])[ \t]*", " ", text)
     return text

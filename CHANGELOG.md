@@ -14,6 +14,7 @@
 - QQ Official 对视频和多媒体默认优先按本地文件发送，尽量保证用户拿到媒体；单图+文本仍优先使用 QQ 支持的图文合发能力。
 - 媒体缓存 GC、媒体完整性阈值和平台降级策略收口为内置常量，不再作为用户配置项暴露。
 - 旧 `basic_config.proxy`、`basic_config.timeout`、`media_config.download_media_timeout` 和 `m3u8_download_timeout` 会在启动配置自愈时迁移到 `http_config`。
+- 表格图片渲染从 `infrastructure.media` 归位到 `infrastructure.rendering`，媒体包只保留下载、指纹和发送前媒体处理职责。
 
 ### Fixed
 
@@ -21,6 +22,7 @@
 - 修复坏媒体文件可能进入成功缓存的问题；命中缓存和写入缓存前都会做基础完整性校验，坏缓存会被删除并触发重新下载。
 - 修复 m3u8/HLS 合并输出校验不足的问题；FFmpeg 输出必须通过视频流与时长校验后才会写入成功缓存。
 - 修复 QQ Official 单图+文本合发失败时可能静默丢失媒体的问题；失败会按内置策略优先文件降级，并在结果/文本中保留可见的原始媒体链接。
+- 修复表格图片缓存并发写入、original layout 占位文本、generated media 缺失时暴露内部标识，以及关闭媒体时表格正文丢失的问题。
 
 ## [2.0.2] - 2026-05-23
 

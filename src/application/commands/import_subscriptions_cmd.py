@@ -15,6 +15,8 @@ from ...domain.value_objects.feed_url import FeedUrl
 from ...infrastructure.config import validate_interval_value
 from ..dto.result_dto import CommandResult
 
+IMPORT_UPLOAD_WAIT_SECONDS = 5 * 60
+
 
 @dataclass
 class ImportItemResult:

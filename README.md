@@ -130,13 +130,13 @@
 
 ### HTTP 网络配置 (`http_config`)
 
-`http_config.proxy` 会同时用于 RSS 拉取、媒体预下载和 FFmpeg m3u8/HLS 下载。媒体发送始终先下载到本地成功缓存；失败下载不写入失败缓存。平台限制、缓存 GC、媒体完整性校验和降级策略由 `src/shared/constants.py` 的内置策略统一维护，不作为用户配置项暴露。
+`http_config.proxy` 会同时用于 RSS 拉取、媒体预下载和 FFmpeg m3u8/HLS 下载。媒体发送始终先下载到本地成功缓存；失败下载不写入失败缓存。媒体真实类型以本地预下载文件探测结果为准，URL 扩展名只作为下载前提示。平台限制和会随平台能力调整的默认策略由 `src/shared/constants.py` 维护；缓存 GC、媒体完整性阈值这类固定实现细节不作为用户配置项暴露。
 
 | 配置项 | 类型 | 说明 | 默认值 |
 |--------|------|------|--------|
 | `proxy` | 字符串 | HTTP/SOCKS 代理地址，留空则不使用代理。例如 `http://127.0.0.1:7890`；填写 `localhost:7890` 这类裸地址时会按 `http://localhost:7890` 处理 | `""` |
 | `timeout` | 整数 | RSS 拉取和普通 HTTP 请求超时（秒） | `30` |
-| `media_timeout` | 整数 | 媒体预下载、m3u8/HLS 合并与 FFmpeg 下载超时（秒），上限 1800 秒 | `30` |
+| `media_timeout` | 整数 | 媒体预下载、m3u8/HLS 合并与 FFmpeg 下载超时（秒），上限 1800 秒 | `300` |
 
 ### RSSHub Routes 知识库 (`route_knowledge`)
 
@@ -198,19 +198,22 @@ Plugin Pages 的用户/订阅处理链编辑器会优先读取 Web API `handlers
 
 `sender_strategies.enabled_platforms` 现在是平台多选列表，默认启用 `telegram`、`aiocqhttp`、`qq_official`。未选中的平台会回退到默认发送器。
 
-> 兼容说明：旧版 `sender_strategies.telegram = true` 这类布尔对象配置仍可读取；保存后会写回 `sender_strategies.enabled_platforms`。平台策略统一写入 `sender_strategies.platform_strategies` 这个 `template_list`，可添加 `telegram_strategy` / `onebot_strategy` 等不同模板；当前每类模板只读取第一条。
+> 兼容说明：旧版 `sender_strategies.telegram = true` 这类布尔对象配置仍可读取；保存后会写回 `sender_strategies.enabled_platforms`。平台策略统一写入 `sender_strategies.platform_strategies` 这个 `template_list`，可添加 `telegram_strategy` / `onebot_strategy` / `qq_official_strategy` 等不同模板；当前每类模板只读取第一条。
 
-平台专属 sender 策略模板目前用于 `telegram` 和 `aiocqhttp`。不同模板的配置项不需要一致：
+平台专属 sender 策略模板目前用于 `telegram`、`aiocqhttp` 和 `qq_official`。不同模板的配置项不需要一致：
 
 | 配置项 | 类型 | 说明 |
 |--------|------|------|
 | `enable_telegraph` | 布尔值 | 仅 Telegram 使用：启用 Telegraph 自动分流 |
 | `telegraph_token` | 字符串 | 仅 Telegram 使用：Telegraph access token；启用自动分流时必填 |
 | `prefer_local_video` | 布尔值 | 仅 OneBot 使用：覆盖默认视频来源策略；默认优先使用本地视频文件 |
+| `markdown_mode` | 选项 | 仅 QQ Official 使用：预留的 Markdown 三态配置；当前主动推送临时统一按纯文本发送 |
 
 Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略里触发：当前为自动发送、Telegram 策略已启用 Telegraph、token 有效，且去重后的媒体条目数大于 1。OneBot 不使用 Telegraph，避免在 QQ/NapCat 环境中依赖不可访问的外部页面服务。Telegram 本地图片超过 10 MiB 时会降级为文件发送，避免 Bot API photo 大小限制导致整条推送失败。
 
-发送前会先下载媒体到本地成功缓存，再生成平台无关消息组件并由排序器统一整理顺序；下载失败不会写入失败缓存，下一次推送会重新尝试。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。OneBot 默认使用本地视频文件，`prefer_local_video=false` 仅作为兼容覆盖项。
+QQ Official 的 Markdown 配置会保留并继续通过 AstrBot core 的 `MessageChain.use_markdown_` 作为唯一接入点，不会手写 botpy payload。由于当前主动推送链路可能在普通 payload 中泄露 Markdown 原文，插件侧临时统一生成纯文本并显式关闭 QQ Official Markdown；待 AstrBot core 对主动推送的消息级 Markdown 行为稳定后再恢复三态策略。Telegram 文本推送会生成轻量 Markdown 内容，并交给 AstrBot Telegram adapter 的 Plain 文本 MarkdownV2 转换路径；媒体 caption 是否使用 Markdown 取决于 AstrBot adapter，本插件不额外承诺。
+
+发送前会先下载媒体到本地成功缓存，再根据本地文件头/`filetype` 探测结果修正图片、视频、音频类型，然后生成平台无关消息组件并由排序器统一整理顺序；下载失败不会写入失败缓存，下一次推送会重新尝试。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。OneBot 默认使用本地视频文件，`prefer_local_video=false` 仅作为兼容覆盖项。
 
 ## 📝 使用方法
 
@@ -281,12 +284,13 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 | `/rsshelp` | `/RSS 帮助` | 查看帮助图片 |
 | `/sub_test <目标>` | `/测试订阅` | 管理员测试推送。目标可以是订阅 ID 或 RSS URL，固定推送最新 1 条 |
 
-> `rsshelp` 使用仓库内预生成并提交的帮助图片：`assets/help/rsshelp.png`。运行时如果图片缺失，只会提示“没有找到帮助图片”，不会自动生成。
+> `rsshelp` 使用仓库内预生成并提交的帮助图片：白天发送 `assets/help/rsshelp_light.png`，夜间发送 `assets/help/rsshelp_dark.png`；目标主题图缺失时会回退到另一张。运行时如果图片缺失，只会提示“没有找到帮助图片”，不会自动生成。帮助图生成脚本默认同时输出这两张主题图，不再生成旧的 `rsshelp.png`。
 >
 > 当命令或帮助样式变更后，可手动刷新帮助图：
 > ```bash
-> python scripts/generate_rsshelp_image.py
+> ./scripts/gen_rsshelp.sh
 > ```
+> 生成脚本的 HTML 渲染路径会从 Google Fonts 加载 `Noto Sans SC` 和 `JetBrains Mono`，避免依赖维护者本机字体；离线或字体加载失败时会回退到系统字体栈。
 
 **`/sub_test` 命令示例：**
 
@@ -324,7 +328,7 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 
 本插件为 AI 提供以下工具函数：
 
-- `rss_subscribe` - 订阅 RSS 源
+- `rss_subscribe` - 订阅 RSS 源；公开参数只保留 `targets: string[]`，每项可以是完整 Feed URL、RSSHub 路径或路由路径，支持一次传入多个目标
 - `rss_unsubscribe` - 取消订阅
 - `rss_unsubscribe_all` - 取消所有订阅
 - `rss_list_subscriptions` - 列出订阅
@@ -344,6 +348,8 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 > `rss_push_xml_entry` 是面向 AI agent 的即时推送工具，不使用订阅 `sub_id`，也不读取订阅默认配置。它会：
 > - 对输入 XML 做格式校验，拒绝坏格式、DOCTYPE/ENTITY 和超大输入
 > - 将标签内容解析为正文 + 媒体组件
+> - 允许安全排版参数：`style`、`send_mode`、`display_media`、`display_title`、`display_author`、`display_via`、`display_entry_tags`、`length_limit`
+> - 不开放 `handlers`，即时推送不会让 agent 注入处理链
 > - 使用 `source_key + user_id + target_session + entry_guid` 做成功态幂等去重
 > - 写入推送历史并复用现有失败重试链路
 > - 在媒体发送失败时，把原始媒体链接保留到失败历史和回退文本中
@@ -401,8 +407,9 @@ src/
 本项目管理界面使用 **AstrBot Plugin Pages**（`pages/dashboard`），通过 AstrBot 面板访问。
 后端接口由 `WebApiHandler` 注册到 `/{plugin_name}/...` 路径下（当前为 `/astrbot_plugin_rsshub/...`）。
 
-管理页包含已有订阅管理、用户/Feed 列表、推送历史、默认订阅设置和 RSSHub Routes 知识库同步。WebUI 不创建新订阅，也不提供订阅导入/导出入口；新增、导入和导出订阅请使用聊天命令或 AI agent。用户状态仅保留「用户」和「已封禁」两种；窄屏下订阅表格会切换为卡片式布局，推送历史筛选、分页和知识库状态区域会自动换行，避免按钮或长文本重叠。
+管理页包含已有订阅管理、用户/Feed 列表、推送历史、默认订阅设置和 RSSHub Routes 知识库同步。WebUI 不创建新订阅，也不提供订阅导入/导出入口；新增、导入和导出订阅请使用聊天命令或 AI agent。订阅列表提供 Feed URL 筛选入口，推送历史也可按历史记录保存的 Feed URL 筛选；筛选框使用标签输入，按 Enter 提交一个筛选值，条件变化后自动查询，不再依赖逗号、中文逗号或换行拆分。用户列表展示该用户的总订阅数和启用订阅数，用户编辑不再展示或修改 `default_target_session`。Feed 列表支持编辑和删除，删除 Feed 会删除对应订阅；用户、订阅和 Feed 删除时推送历史默认保留，只有在确认中显式选择时才一起删除。用户状态仅保留「用户」和「已封禁」两种。窄屏下订阅表格会切换为卡片式布局，推送历史筛选、分页和知识库状态区域会自动换行，避免按钮或长文本重叠。
 订阅列表采用前端分页，分页控件放在列表上方；页面滚动被限制在列表/配置容器内部，避免切换标签页时整页布局抖动。默认订阅设置统一使用底部保存按钮，不再使用遮挡表单的悬浮按钮。
+推送历史每行提供「重试」操作，用于人工重放旧记录；重试会复用原记录保存的文本、媒体 URL、目标会话和来源信息，并把本次结果写回原历史行。列表按最近活动时间排序，因此重试后该行会回到顶部。点击历史行跳转相关订阅时按历史保存的 Feed 链接和用户精确筛选，不使用历史 `sub_id`，避免订阅删除后自增 ID 被新订阅复用造成误匹配。
 
 ## 🧩 解析与推送兼容性
 
@@ -412,6 +419,7 @@ src/
 - m3u8/HLS 在先下载后发送时会通过 FFmpeg 合并为 MP4，并用 ffprobe 校验视频流与时长；校验失败会按媒体下载失败处理，避免 0 秒坏视频进入缓存。
 - OneBot / NapCat 经典合并转发失败后会回退为纯文本 Nodes；多图长文建议使用 `style=2` 的原始顺序排版。
 - 推送历史中的失败原因会按 512 字符上限统一截断；旧数据库里遗留的超长失败原因也会在读取时自动清洗，避免 `/push-history` 接口和定时重试任务因脏数据崩溃。
+- 插件启动时会补齐旧库中被订阅或推送历史引用、但缺失于 `rsshub_user` 的用户记录；运行时订阅、导入、调度推送、测试推送和 XML 即时推送也会先确保用户存在，避免产生孤儿订阅或孤儿历史。
 
 ---
 

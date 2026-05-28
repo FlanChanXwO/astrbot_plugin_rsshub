@@ -43,7 +43,31 @@ cd tests
 .\run_tests.ps1 -Quick
 ```
 
-### 方法三：使用 pytest（如果已安装）
+### 方法三：使用 Bash（macOS / Linux）
+
+```bash
+cd tests
+
+# 运行所有测试
+./run_tests.sh
+
+# 详细输出
+./run_tests.sh --verbose
+
+# 仅运行单元测试
+./run_tests.sh --category unit
+
+# 快速模式
+./run_tests.sh --quick
+```
+
+Bash 脚本会优先使用当前激活的虚拟环境，再回退到 AstrBot 根目录的 `uv run python`、AstrBot `.venv` 和系统 Python。如需指定解释器，可使用：
+
+```bash
+RSSHUB_TEST_PYTHON=/path/to/python ./run_tests.sh --quick
+```
+
+### 方法四：使用 pytest（如果已安装）
 
 ```bash
 pip install pytest pytest-asyncio
@@ -71,6 +95,7 @@ tests/
 ├── README.md                 # 本文件
 ├── run_tests.py             # Python 测试运行器（内置测试）
 ├── run_tests.ps1            # PowerShell 测试运行器
+├── run_tests.sh             # Bash 测试运行器（macOS / Linux）
 ├── conftest.py              # pytest 配置和 fixtures
 ├── mocks/                   # Mock 对象
 │   ├── __init__.py

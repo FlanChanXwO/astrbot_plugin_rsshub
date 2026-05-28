@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import importlib
 import sys
+import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from astrbot_plugin_rsshub.src.application.commands.help_image_cmd import (
+    HelpImageCommand,
+)
 from astrbot_plugin_rsshub.src.interfaces.handlers import data as data_handlers
 from astrbot_plugin_rsshub.src.interfaces.handlers.admin import handle_test_sub
 from astrbot_plugin_rsshub.src.interfaces.handlers.config import (
@@ -309,9 +313,14 @@ async def test_rsshelp_returns_image_chain(monkeypatch, tmp_path):
 
     monkeypatch.delitem(sys.modules, "astrbot_plugin_rsshub.main", raising=False)
     main = importlib.import_module("astrbot_plugin_rsshub.main")
-    image_path = tmp_path / "rsshelp.png"
+    image_path = tmp_path / "rsshelp_light.png"
     image_path.write_bytes(b"fake")
-    monkeypatch.setattr(main, "_HELP_IMAGE_PATH", image_path)
+
+    class FakeHelpImageCommand:
+        def execute(self, context=None):
+            return image_path
+
+    monkeypatch.setattr(main, "HelpImageCommand", FakeHelpImageCommand)
 
     plugin = main.RSSHubPlugin(MagicMock(), {})
     result = []
@@ -321,6 +330,39 @@ async def test_rsshelp_returns_image_chain(monkeypatch, tmp_path):
     assert result
     assert "chain" in result[0]
     assert len(result[0]["chain"]) == 1
+
+
+def test_rsshelp_selects_help_image_by_astrbot_timezone(monkeypatch, tmp_path):
+    monkeypatch.delitem(sys.modules, "astrbot_plugin_rsshub.main", raising=False)
+    main = importlib.import_module("astrbot_plugin_rsshub.main")
+    light_path = tmp_path / "rsshelp_light.png"
+    dark_path = tmp_path / "rsshelp_dark.png"
+    light_path.write_bytes(b"light")
+    dark_path.write_bytes(b"dark")
+
+    class FixedDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            from datetime import datetime
+
+            return datetime(2026, 5, 26, 22 if tz else 12, tzinfo=tz)
+
+    import astrbot_plugin_rsshub.src.application.commands.help_image_cmd as help_image_cmd
+
+    monkeypatch.setattr(help_image_cmd, "datetime", FixedDateTime)
+
+    command = HelpImageCommand(light_path=light_path, dark_path=dark_path)
+    context = MagicMock()
+    context.get_config.return_value = {"timezone": "Asia/Shanghai"}
+
+    assert command.execute(context) == dark_path
+
+    context.get_config.return_value = {"timezone": ""}
+    assert command.execute(context) == light_path
+
+    dark_path.unlink()
+    context.get_config.return_value = {"timezone": "Asia/Shanghai"}
+    assert command.execute(context) == light_path
 
 
 def test_main_command_signature_uses_greedy(monkeypatch):
@@ -367,29 +409,33 @@ def test_main_command_signature_uses_greedy(monkeypatch):
     star_mod.Context = object
     star_mod.Star = FakeStar
 
-    filter_mod = sys.modules["astrbot.core.star.filter"]
-    filter_mod.GreedyStr = FakeGreedyStr
+    command_mod = types.ModuleType("astrbot.core.star.filter.command")
+    command_mod.GreedyStr = FakeGreedyStr
+    monkeypatch.setitem(sys.modules, "astrbot.core.star.filter.command", command_mod)
 
+    monkeypatch.delitem(
+        sys.modules,
+        "astrbot_plugin_rsshub.src.interfaces.astrbot_compat",
+        raising=False,
+    )
     monkeypatch.delitem(sys.modules, "astrbot_plugin_rsshub.main", raising=False)
     main = importlib.import_module("astrbot_plugin_rsshub.main")
 
-    assert main.RSSHubPlugin.sub_feed.__annotations__["args"] in (
-        FakeGreedyStr,
-        "GreedyStr",
+    compat = importlib.import_module(
+        "astrbot_plugin_rsshub.src.interfaces.astrbot_compat"
     )
-    assert main.RSSHubPlugin.unsub_feed.__annotations__["args"] in (
-        FakeGreedyStr,
-        "GreedyStr",
+    assert compat.GreedyStr is FakeGreedyStr
+
+    greedy_args_commands = (
+        main.RSSHubPlugin.sub_feed,
+        main.RSSHubPlugin.unsub_feed,
+        main.RSSHubPlugin.sub_list,
+        main.RSSHubPlugin.stop_rss_job,
+        main.RSSHubPlugin.sub_profile_set,
+        main.RSSHubPlugin.sub_profile_get,
+        main.RSSHubPlugin.import_subs,
+        main.RSSHubPlugin.test_sub,
     )
-    assert main.RSSHubPlugin.sub_list.__annotations__["args"] in (
-        FakeGreedyStr,
-        "GreedyStr",
-    )
-    assert main.RSSHubPlugin.import_subs.__annotations__["args"] in (
-        FakeGreedyStr,
-        "GreedyStr",
-    )
-    assert main.RSSHubPlugin.test_sub.__annotations__["args"] in (
-        FakeGreedyStr,
-        "GreedyStr",
-    )
+    for command in greedy_args_commands:
+        assert command.__annotations__["args"] == "GreedyStr"
+    assert main.RSSHubPlugin.export_subs.__annotations__["scope"] == "GreedyStr"

@@ -152,13 +152,10 @@
 
 ## 对维护者最重要的事实
 
-- 入口分离是硬约束：`main.py` 负责注册与生命周期，`bootstrap.py` 负责组装。
-- 类型化配置模型与运行态设置统一位于 `src/infrastructure/config/models/`：持久化配置模型在 `plugin_config_models.py`，运行态设置在 `runtime_settings.py`，sender 策略兼容在 `sender_strategy_models.py`；`src/infrastructure/config/datamodels.py` 仅作为兼容导出。共享常量只保留 `src/shared/constants.py`。
-- 订阅/用户的继承语义只认 `-100`。
-- `push_history.content` 保存最终可发送文本；`raw_xml` 保留原始 XML。
-- OneBot 的消息顺序当前仍保持“媒体在前，文本与 via 在后”。
-- `minimal_interval` 是订阅/默认配置写入阶段的硬下限，不是仅在运行时轮询时才补救。
-- `failed_queue_capacity=0` 仅关闭自动失败重试回收；失败 `push_history` 仍必须保留。
-- `failed_queue_max_retries` 只控制自动重试上限，不影响失败历史的审计可见性。
-- `deduplicate_multi_bot` 只在同一 `target_session` 且最终 payload 等价时去重；被压掉的发送要写 `skipped` history。
-- 推送历史自动清理范围是推送历史页的业务设置，不属于插件启动级配置。
+本页只保留定位与取舍，不维护细节清单。修改前按主题查对应章节：
+
+- 启动、分层、配置职责：[`architecture.md`](./architecture.md)
+- 领域值、配置模型、常量归属：[`domain-model.md`](./domain-model.md)
+- 命令、AI tools、用户配置、推送历史：[`application.md`](./application.md)
+- 平台发送、媒体、代理、缓存：[`platforms.md`](./platforms.md)
+- 分发、失败重试、去重审计：[`dispatch.md`](./dispatch.md)

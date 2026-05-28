@@ -14,6 +14,29 @@
 
 统一服务的价值是：无论入口是谁，Feed 的读取、去重、metadata 更新和 dispatch 输入构造都只维护一份。
 
+## 主流程图
+
+下面的 Mermaid 图展示轮询主路径。异常、兼容指纹和历史窗口合并的细节仍以正文算法说明为准。
+
+```mermaid
+flowchart TD
+  A["Scheduler / 手动刷新 / 指定订阅刷新"] --> B["FeedPollingService"]
+  B --> C["构造条件请求头"]
+  C --> D{"Feed 是否变化"}
+  D -->|"304 / 无新内容"| E["返回无变化结果"]
+  D -->|"200 / 有内容"| F["解析 RSS / Atom"]
+  F --> G{"解析成功"}
+  G -->|"否"| H["返回 parse_error"]
+  G -->|"是"| I["更新 Feed metadata"]
+  I --> J["生成 entry 指纹组"]
+  J --> K{"是否新条目"}
+  K -->|"否"| L["合并历史窗口"]
+  K -->|"是"| M["构造 dispatch 输入"]
+  M --> N["交给 NotificationDispatcher"]
+  L --> O["保存 Feed 状态"]
+  N --> O
+```
+
 ## 输入与输出
 
 ### 主要输入

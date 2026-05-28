@@ -1,7 +1,5 @@
 # 贡献说明
 
-本文替代原根目录 `CONTRIBUTE.md`，用于说明当前版本的贡献流程与注意事项。
-
 ## 贡献目标
 
 优先做这些事情：
@@ -35,7 +33,7 @@
 
 前端 Plugin Pages（`pages/`）更推荐：
 
-- `gemini 3.1 pro`
+- `gemini 3.5 pro`
 - `kimi 2.6`
 
 如果希望统一一套模型做全栈贡献，也推荐直接使用：
@@ -47,13 +45,12 @@
 
 ## 改动前先理解当前边界
 
-最重要的几条：
+改动前先确认自己触碰的是哪条边界，不在这里复制业务规则：
 
-- `main.py` 与 `bootstrap.py` 的职责不能混
-- 配置模型位于 `src/infrastructure/config/models/`：持久化配置在 `plugin_config_models.py`，运行态设置在 `runtime_settings.py`，sender 策略兼容在 `sender_strategy_models.py`；`src/infrastructure/config/datamodels.py` 仅保留兼容导出。共享常量只认 `src/shared/constants.py`
-- 订阅/用户配置只认 `-100` 继承
-- `handlers` 是当前内容处理入口，不要把旧翻译管道加回来
-- Plugin Pages 不负责新建订阅和 TOML 导入导出
+- 架构与启动分工见 [`../project/architecture.md`](../project/architecture.md)
+- 领域值、配置模型和常量归属见 [`../project/domain-model.md`](../project/domain-model.md)
+- 命令、AI tools、用户配置、推送历史见 [`../project/application.md`](../project/application.md)
+- 平台发送、媒体、代理和缓存见 [`../project/platforms.md`](../project/platforms.md)
 
 如果准备做的事和这些边界冲突，需要先明确说明为什么。
 
@@ -67,45 +64,15 @@
 
 ## 文档同步要求
 
-以下情况不要只改代码：
-
-- 命令行为变化
-- 配置项变化
-- 管理页入口变化
-- handler / AI / KB 能力变化
-
-至少同步更新：
-
-- `README.md`
-- `docs/`
-
-必要时再更新：
-
-- `AGENTS.md`
-- `CLAUDE.md`
-- `CHANGELOG.md`
-
-以下情况通常应直接视为“必须同步文档”：
-
-- 命令行为或参数变化
-- Web API / Plugin Pages 行为变化
-- 配置项、默认值、继承语义、兼容规则变化
-- handler、AI、sender、知识库、去重、重试、推送历史语义变化
-- 仓储查询语义、测试推送路径、数据管理能力变化
-
-如果这些变化同时影响维护约定或架构边界，还需要同步更新：
-
-- `AGENTS.md`
-- `CLAUDE.md`
+文档同步细则统一维护在 [`maintenance.md`](./maintenance.md#文档同步)。贡献文档只强调一点：不要只改代码而让 README、docs、CHANGELOG 或 agent 入口说明失真。
 
 ## 代码风格
 
-- 优先沿用现有模式，不引入新风格
-- 默认使用 ASCII
-- 少写无意义注释
-- 不要为了局部问题顺手大改 unrelated 模块
+通用工程原则见 [`engineering-principles.md`](./engineering-principles.md)。贡献时优先沿用现有模式，不要为了局部问题顺手大改 unrelated 模块。
 
 ## PR 描述建议
+
+新代码和修复改动的 PR 目标分支应为 `dev`，不要直接提交到主分支。
 
 建议至少写清楚：
 

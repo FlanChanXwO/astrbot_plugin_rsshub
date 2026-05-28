@@ -1,260 +1,132 @@
-# RSSHub 插件扩展化与 AI 编排重构计划
+# RSSHub 插件处理器内部通信计划草案
 
-日期：2026-05-19
+日期：2026-05-26
 
 ## Summary
 
-插件定位收敛为 **RSS 状态、调度、去重、可靠发送基础设施 + 可扩展组件加工 runtime**。
+上一轮 v2.0.0 重构已经完成核心收口：RSS 轮询、订阅管理、推送历史、多平台可靠发送、Plugin Pages、Routes KB 和内置处理器都已经进入当前主线。现在剩余的主要方向不是继续扩张 UI 或恢复旧功能，而是推进 **Stage 3：处理器内部通信与扩展运行时边界**。
 
-RSS 抓取、订阅管理、去重、推送历史、多平台发送和失败重试继续由插件负责；翻译、总结、日报、深层 XML 解析、Feed 级格式化交给 AI 或外部扩展完成。插件核心只接收稳定的结构化组件结果，再按平台可靠发送。
+本计划把后续工作聚焦到一件事：让 handler chain 从“内置 handler 的函数式串行调用”升级成“有稳定消息契约、上下文、trace、错误模型和未来外部进程桥接能力的处理器 runtime”。
 
-当前状态：前置收尾已在 2026-05-18 合并进 `v2.0.0` 的 PR #47 完成，下一步从 Stage 1 开始。
+## 当前状态
 
-后续实施顺序：
-
-1. 集成 RSSHub Routes 知识库导入/同步，让 Agent 能通过 AstrBot KB 和 skill 查路由。
-2. 建立平台无关组件契约，把发送层输入从“最终文本 + 媒体 URL”升级为 `ComponentDocument`。
-3. 实现独立 venv 子进程扩展 runtime、Registry、作者辅助 skill 和内置 AI formatter extension。
+| 领域 | 状态 | 备注 |
+| --- | --- | --- |
+| RSS 轮询、去重、调度 | 已完成 | `FeedPollingService` 已作为统一入口。 |
+| 可靠发送与媒体预下载 | 已完成 | 成功缓存保留，失败缓存移除，媒体统一预下载。 |
+| 推送历史、重试、审计 | 已完成 | 手动重试写回原历史行，失败历史保留。 |
+| Plugin Pages 管理面 | 已完成主体 | 已覆盖订阅、用户、Feed、历史、数据管理、Routes KB。 |
+| Routes KB 同步 | 已完成 | 插件负责同步和状态，检索交给 AstrBot KB。 |
+| 内置处理器 | 已完成主体 | `ai_filter`、`ai_transform` 已纳入 handler runtime。 |
+| 处理器内部通信 | 未完成 | 当前 handler 输出结构仍偏内置实现，缺少通用消息契约。 |
+| 外部处理器执行 | 未完成 | external handler 可保存/展示，但运行时不执行。 |
+| Registry / 安装流 | 暂缓 | 依赖处理器通信契约稳定后再做。 |
 
 ## Decisions
 
-- **AI 边界**：日报、翻译、总结全部交给 AI 或扩展；插件只保留可靠发送、基础 fallback、推送历史和可观测性。
-- **失败策略**：AI/扩展失败时有限重试；仍失败则放行原始 entry 或基础组件，避免断流。
-- **发布策略**：AI 产物默认自动发布，不做人工审阅队列。
-- **扩展信任模型**：允许任意 Python 代码，但运行在独立 venv 子进程中。
-- **扩展来源**：通过中心化 Registry 发现和安装；Registry 可以记录任意远程 URL。
-- **资源访问**：默认开放网络和文件访问，主要依赖 AstrBot 插件隔离机制与管理员信任。
-- **扩展 API 边界**：扩展不直接拿主进程内部单例，只通过受控上下文、事件 payload 和 RPC 服务访问插件能力。
-- **扩展生命周期**：长期安装包，可被多个 feed 复用。
-- **扩展组合规则**：按显式配置顺序串行执行，上一个扩展的输出作为下一个扩展的输入。
-- **组件契约**：扩展输出平台无关组件，由插件转换为 AstrBot MessageChain。
-- **格式化优先级**：扩展返回组件时跳过内置文本格式化器；无组件结果时走基础格式化 fallback。
-- **Feed 级格式化**：AI formatter 绑定 Feed 级配置，不做会话级临时格式化规则。
-- **知识库边界**：插件只负责 RSSHub Routes KB 导入、同步、状态和 LLM 提示注入；检索与使用交给 AstrBot 内置 KB 工具和 route skill。
+| 主题 | 决策 | 备注 |
+| --- | --- | --- |
+| 插件核心职责 | 继续负责 RSS 状态、调度、去重、可靠发送、推送历史和可观测性 | 不恢复传统翻译、日报或固定总结系统。 |
+| 处理器职责 | handler 负责内容过滤、改写、补充结构化结果和记录 trace | handler 不是平台 sender，不直接输出平台私有消息结构。 |
+| 失败策略 | 处理器失败默认放行原始 entry | RSS 推送是基础设施，处理器不能变成断流点。 |
+| 通信模型 | 先稳定主进程内部消息契约，再桥接外部子进程 | 避免一开始把 Registry、venv、RPC 和 UI 全部耦合在一起。 |
+| 执行顺序 | 多处理器按显式配置顺序串行执行 | 上一个处理器的结果进入下一个处理器上下文。 |
+| 可观测性 | 每个处理器必须产生结构化 trace | trace 写入 push history，便于 Dashboard 排障。 |
+| 安全边界 | 第一阶段不做细粒度权限模型 | 外部 runtime 阶段再明确进程、文件、网络边界。 |
 
-## Cleanup Completed
+## Stage 3 目标
 
-这部分已在 PR #47 完成并合并。它们不属于扩展 runtime 本身，但已经为后续接口设计和测试稳定性完成清障。
+Stage 3 不以“安装第三方处理器”为第一目标，而是先把处理器之间、处理器与主链路之间的通信协议稳定下来。
 
-- 已删除传统翻译路径：
-  - `_conf_schema.json` 不再暴露 `translation`。
-  - `ApplicationSettings`、config adapter、pipeline config 不再包含 translation behavior 字段。
-  - `TranslationFilter`、translator providers、translation cache repository/API/UI 从主代码移除。
-  - Plugin Pages 删除翻译配置、翻译缓存 tab、translation cache API 调用。
-  - 旧数据库列 `translate`、`translate_target_lang` 不再读写；如暂不迁移表结构，仅作为历史列保留。
-- 已删除 RSSHub route stub：
-  - 移除 `rsshub_search_routes` 和 `rsshub_get_route_schema` 两个只返回迁移提示的 LLM tool。
-  - 保留 `rsshub_build_subscribe_url`，它仍是 Agent 构建订阅 URL 的原子工具。
-  - README 和测试同步删除 route stub 说明。
-- 已清理旧内容过滤残留：
-  - `ContentFilterService` 只剩测试覆盖，已删除；去重行为直接归 `Feed` 与 `FeedPollingService` 所有。
-  - 当前 `MediaFingerprintService` port/adapter 已存在，不再作为未完成项。
-  - scheduler 已统一调用 `FeedPollingService`，不再作为未完成项。
-
-已完成验收：
-
-```bash
-python -m json.tool _conf_schema.json >/private/tmp/rsshub_conf_schema_check.json
-pytest -q tests/unit/application/test_settings.py
-pytest -q tests/unit/interfaces/test_web_api.py
-pytest -q tests/unit/application/test_llmtools.py
-pytest -q tests/unit/application/test_content_processing_service.py
+```mermaid
+flowchart TD
+  A["EntrySnapshot"] --> B["HandlerRequest"]
+  B --> C["Handler Runtime"]
+  C --> D["HandlerResult"]
+  D --> E{"result.action"}
+  E -->|"continue"| F["进入下一个 handler"]
+  E -->|"skip"| G["dispatcher 写 skipped history"]
+  E -->|"replace_entry"| H["应用改写后的 entry"]
+  E -->|"append_artifact"| I["写入 artifacts / trace"]
+  F --> J["最终 entry + trace"]
+  H --> J
+  I --> F
 ```
 
-## Stage 1：RSSHub Routes 知识库集成（已实现）
+## Stage 3.1：处理器消息契约
 
-目标：将 RSSHub Routes 知识库导入 AstrBot，让 Agent 能查找路由、构建订阅 URL、再调用订阅工具。插件不提供 KB 搜索 LLM tool。
+| 工作项 | 内容 | 验收 |
+| --- | --- | --- |
+| 定义输入模型 | 新增 `HandlerRequest`，包含 entry snapshot、raw XML、媒体 URL、生效配置、来源信息和共享上下文 | 内置 handler 不再直接依赖零散参数。 |
+| 定义输出模型 | 新增 `HandlerResult`，表达 `continue`、`skip`、`replace_entry`、`replace_text`、`replace_raw_xml`、`append_artifact` 等结果 | dispatcher 能根据 action 做统一处理。 |
+| 定义 trace 事件 | 新增结构化 `HandlerTraceEvent`，记录 handler id、状态、耗时、错误、fallback、模型步骤等摘要 | push history 能保存稳定 trace，不泄漏 provider 内部 prompt。 |
+| 定义 artifacts | 允许处理器写入 JSON-safe 的中间产物 | 后续处理器可读取，但不能拿到任意主进程对象。 |
+| 定义错误模型 | 区分配置错误、运行时错误、外部服务错误、校验失败 | 错误进入 trace，并按默认放行策略处理。 |
 
-- 新增 Routes KB 同步服务：
-  - 读取远端 `metadata.json`。
-  - 读取本地 manifest，按 `path + sha256` 做增量 diff。
-  - 只下载新增/变更文件，清理远端已删除文件。
-  - 导入 `index/namespaces.md`、`index/*.md`、`docs/routes/**/*.md` 到 AstrBot KB。
-  - 同名文档先删后上传，使用 path 作为稳定 doc name。
-  - 后台任务同一时间只允许一个 running sync。
-- 新增 source adapter：
-  - `auto`：镜像优先，metadata 或文档下载失败时回退官方源。
-  - `mirror`：只使用镜像源，失败报错。
-  - `github`：只使用官方 GitHub/raw。
-  - `local`：从本地目录导入，支持离线部署。
-- 新增管理入口：
-  - Plugin Pages 展示 KB 状态、同步进度、最近错误和手动同步按钮。
-  - Chat command 保留最小集合：`/rsshub_kb_init`、`/rsshub_kb_sync`、`/rsshub_kb_status`、`/rsshub_kb_task`。
-  - 不恢复 `rsshub_search_routes` 和 `rsshub_get_route_schema` LLM tool。
-- LLM 注入与 skill：
-  - `@filter.on_llm_request()` 识别 RSSHub route 查询意图时注入 KB name 和使用提示。
-  - route skill 指导 Agent：确认 AstrBot KB 配置已启用 `RSSHub Routes`，再用 AstrBot KB 工具查路由，之后用 `rsshub_build_subscribe_url` 构建 URL，最后在用户明确要求订阅时调用 `rss_subscribe`。
-- 知识库生成与默认源：
-  - `.github/scripts/generate_knowledgebase.py` 生成 `metadata.json`、`index/` 和 `docs/routes/`。
-  - `.github/workflows/sync-rsshub-knowledgebase.yml` 发布到 `rsshub-routes-knowledgebase` 分支。
-  - 默认 raw 源指向 `FlanChanXwO/astrbot_plugin_rsshub/rsshub-routes-knowledgebase`。
+## Stage 3.2：内部运行时通信
 
-验收：
+| 工作项 | 内容 | 验收 |
+| --- | --- | --- |
+| 统一执行上下文 | 新增 `HandlerExecutionContext`，保存 request、artifacts、trace、当前 entry 版本 | handler 不通过全局变量交换状态。 |
+| 串行管线 | runtime 按配置顺序执行 handler，并把每一步 result 应用到上下文 | 上一个处理器的输出能被下一个处理器看到。 |
+| 结果应用器 | 集中处理 skip、entry 替换、文本替换、raw XML 替换、artifact 追加 | 不让每个 handler 自己改 dispatcher 状态。 |
+| 校验门禁 | raw XML、媒体 URL、文本字段更新后统一校验 | 校验失败记录 trace 并回退，不破坏成功路径。 |
+| 兼容层 | 旧 `ai_filter` / `ai_transform` 行为通过 adapter 映射到新契约 | 外部表现不变，测试不回退。 |
 
-```bash
-pytest -q tests/unit/application/test_route_knowledge_service.py
-pytest -q tests/integration/test_route_knowledge_sync.py
-pytest -q tests/unit/interfaces/test_web_api.py
-pytest -q tests/unit/infrastructure/test_route_knowledge_repository.py
-pytest -q tests/unit/test_route_knowledge_generator.py
-```
+## Stage 3.3：内置处理器迁移
 
-## Stage 2：组件契约与发送层收敛
+| 处理器 | 迁移内容 | 必须保持的行为 |
+| --- | --- | --- |
+| `ai_filter` | 输入改为 `HandlerRequest`，输出 `HandlerResult(skip/continue)` | provider 缺失、超时、脏 JSON、schema 不合法时默认放行。 |
+| `ai_transform(scope=plaintext)` | 输出文本字段 patch，而不是直接改零散对象 | 只允许改写 title、summary、content。 |
+| `ai_transform(scope=xml)` | 输出 raw XML patch，统一走 XML 校验与重解析 | 校验失败回退原始 entry 并记录 trace。 |
+| trace 写入 | 所有内置 handler 走统一 `HandlerTraceEvent` | history 中仍能看到 allow、reason、scope、steps_used、fallback。 |
 
-目标：让插件内部形成稳定的“结构化组件 → 平台 MessageChain”边界，为 AI/扩展输出提供统一落点。
+## Stage 3.4：外部处理器桥接预备
 
-- 新增平台无关组件模型：
-  - `ComponentDocument`
-  - `TextComponent`
-  - `ImageComponent`
-  - `VideoComponent`
-  - `AudioComponent`
-  - `FileComponent`
-  - `LinkComponent`
-  - `MetadataComponent`
-- 调整发送入口：
-  - Feed/entry 默认格式化结果也转换成 `ComponentDocument`。
-  - Notification dispatcher 和 message sender 先支持组件文档，再保留原文本 fallback。
-  - 组件结果优先于基础文本格式化；`style=0` 使用自动排版，`style=1` 使用 RSSRT 排版，`style=2` 使用原始顺序 layout fragments。
-- 保留发送兼容行为：
-  - 媒体下载失败时追加原始链接。
-  - Telegram caption 限制仍生效。
-  - OneBot merged-forward node name 继续优先 feed title，fallback `RSSHub`。
-  - 推送尾部仍保留 legacy `via <link> | <feed> (author: ...)` 风格，直到组件 formatter 明确替代。
+这一阶段只做运行时边界，不急着做完整 Registry。
 
-验收：
+| 工作项 | 内容 | 备注 |
+| --- | --- | --- |
+| 外部处理器 manifest 草案 | 定义 name、version、entrypoint、supported_hooks、dependencies、description | 先作为本地开发契约。 |
+| JSON-safe payload | 保证 `HandlerRequest` / `HandlerResult` 可序列化 | 为后续 JSON-RPC 子进程做准备。 |
+| 子进程 RPC 草案 | 设计 `initialize`、`handle_request`、`health_check`、`shutdown` | 不必在第一步实现完整 venv 管理。 |
+| external handler 状态 | Plugin Pages 可继续展示 disabled / unavailable / installed 之类状态 | 不要把“可配置”伪装成“已可执行”。 |
 
-```bash
-pytest -q tests/unit/infrastructure/test_message_formatter.py
-pytest -q tests/unit/application/test_notification_dispatcher.py
-pytest -q tests/unit/application/test_feed_polling_service.py
-pytest -q tests/integration/test_feed_push_simulation.py
-```
+## Deferred：Registry 与完整 Extension Runtime
 
-## Stage 3：子进程 Extension Runtime
-
-目标：把扩展从同进程 import 任意 Python，升级为独立环境、可观测、可重启的业务能力模块。
-
-- 将现有同进程 `PluginManager` / event bus 标记为 legacy，或迁移成新 runtime 的兼容层。
-- 定义扩展包 manifest：
-  - name
-  - version
-  - entrypoint
-  - dependencies
-  - supported_hooks
-  - description
-- 每个扩展使用独立 venv，作为子进程运行。
-- 主进程与扩展通过 JSON-RPC 交换数据：
-  - `initialize`
-  - `handle_hook`
-  - `health_check`
-  - `shutdown`
-- 第一版支持 hook：
-  - `fetch`
-  - `parse`
-  - `entry_process`
-  - `dedup`
-  - `format`
-  - `before_send`
-  - `after_send`
-- 扩展可以取消、替换或完全接管结果。
-- 多扩展按 feed 配置中的显式顺序串行执行，上一个扩展的输出作为下一个扩展的输入。
-- 扩展异常、超时、非法组件输出、进程退出时记录错误，有限重试后 fallback 放行。
-
-验收：
-
-```bash
-pytest -q tests/unit/application tests/unit/infrastructure
-pytest -q tests/integration/test_plugin_integration.py
-```
-
-## Stage 4：Registry、Plugin Pages、Skill 与内置 AI Formatter
-
-目标：形成可被 AI 生成、安装、验证和长期复用的扩展生态雏形。
-
-- Plugin Pages 增加扩展管理：
-  - 安装
-  - 启停
-  - 排序
-  - 版本
-  - 依赖安装状态
-  - 运行日志
-  - 错误状态
-- Registry 元数据至少包含：
-  - 扩展名
-  - 版本
-  - 入口
-  - 依赖
-  - 远程 URL
-  - 校验信息
-  - 描述文档
-- 支持从 Registry 安装扩展、更新扩展、锁定版本和校验下载结果。
-- 第一版不做权限声明，也不做细粒度资源限制。
-- 新增作者辅助 skill：
-  - 生成扩展骨架。
-  - 生成 hook 示例和组件输出示例。
-  - 生成测试。
-  - 生成扩展 manifest 和打包产物。
-  - skill 只辅助开发/发布，不参与运行时推送链路。
-- 内置 Feed 级 AI formatter extension：
-  - 输入 feed、entry、raw XML 和当前 feed 配置。
-  - 调用 AstrBot LLM。
-  - 一次性完成深层 XML 解析、翻译、总结、改写和组件排版。
-  - 输出 `ComponentDocument`。
-
-验收：
-
-```bash
-pytest -q tests/unit/interfaces/test_web_api.py
-pytest -q tests/unit/application tests/unit/infrastructure
-pytest -q tests/integration
-```
+| 项目 | 暂缓原因 | 触发条件 |
+| --- | --- | --- |
+| 独立 venv 创建与依赖安装 | 需要稳定 handler payload 和错误模型 | Stage 3.1 - 3.3 完成并有测试。 |
+| Registry 安装 / 更新 / 锁版本 | 依赖 manifest 和包格式稳定 | 本地 external handler 能跑通后再做。 |
+| 作者辅助 skill | 依赖最终扩展骨架 | runtime API 稳定后再生成。 |
+| 内置 Feed 级 AI formatter extension | 依赖组件输出契约和 handler 通信稳定 | `ai_transform` 新契约稳定后再评估。 |
+| 权限声明和细粒度沙箱 | 第一版不做 | 真正支持远程第三方扩展前重新评估。 |
 
 ## Test Focus
 
-- 翻译删除回归：
-  - `_conf_schema.json` 不再包含 `translation` 分组。
-  - Web API 不再返回或写入 translation behavior/cache。
-  - Plugin Pages 不再显示翻译配置和翻译缓存。
-  - FeedPollingService 不再调用传统 `TranslationFilter`。
-  - 旧 `translate` 字段不影响订阅创建、导入导出和推送。
-- 组件契约：
-  - `text`、`image`、`video`、`audio`、`file`、`link` 组件能转换成当前平台 MessageChain。
-  - 扩展组件优先，未返回组件时基础格式化 fallback。
-  - 媒体下载失败、Telegram caption、OneBot merged-forward、legacy via 尾部不回归。
-- 扩展 runtime：
-  - venv 创建、依赖安装、子进程启动、RPC 调用、超时、退出和重启。
-  - 多扩展显式顺序执行，输出可串接。
-  - 扩展接管 `format` / `before_send` 时仍记录推送历史和失败队列。
-  - 异常、超时、非法组件输出时有限重试，最终 fallback 放行。
-- RSSHub Routes KB：
-  - manifest diff 覆盖新增、更新、删除、无变化。
-  - 镜像失败可 fallback；`mirror` 模式不回退官方。
-  - sha256 校验失败拒绝导入。
-  - 同名 doc 删除后重新上传。
-  - 同一时间只允许一个同步任务。
-  - route 查询意图才注入 KB 使用提示。
-- AI formatter：
-  - Feed 级配置启用后，entry 通过扩展产出组件。
-  - LLM 返回非法 JSON、超时、异常时重试后放行。
-  - raw XML 深层字段解析结果能进入组件输出。
+| 测试方向 | 覆盖点 |
+| --- | --- |
+| 消息契约 | `HandlerRequest`、`HandlerResult`、`HandlerTraceEvent` JSON-safe，字段兼容旧 handler 输入。 |
+| 运行时管线 | 多 handler 串行执行、artifacts 传递、结果应用、skip 中断、fallback 放行。 |
+| 内置处理器回归 | `ai_filter`、`ai_transform plaintext`、`ai_transform xml` 行为不变。 |
+| XML 校验 | XML 改写成功重解析，失败回退原始 entry，trace 记录失败原因。 |
+| 推送历史 | handler trace 仍写入同一条 push history，不新增碎片历史。 |
+| 失败路径 | provider 缺失、超时、脏 JSON、schema 错、handler 异常都不会阻断默认 RSS 推送。 |
+| Web API / Pages | handler schema、handler 编辑、trace 展示不因契约迁移回退。 |
 
 ## Non-goals
 
-- 不再实现插件内置传统翻译管道。
-- 不再实现插件内置日报/Digest 模块。
-- 不再实现插件核心里的固定总结系统。
-- 第一版不做扩展权限声明和细粒度沙箱。
-- 第一版不做人工审阅队列。
-- 第一版不把扩展输出直接绑定到 Telegram/OneBot 等平台私有消息结构。
-- 不给插件新增 RSSHub route 搜索 LLM tool；检索走 AstrBot KB 工具。
-- 不把已完成的旧架构阶段重新列入计划，例如 scheduler 统一、FeedPollingService、MediaFingerprintService port。
+- 不恢复旧翻译管道、旧 AI enrich 配置面或 route-search / route-build LLM tools。
+- 不在 Stage 3 直接实现完整 Registry 市场。
+- 不让 handler 直接输出 Telegram / OneBot / QQ Official 私有消息结构。
+- 不把 handler 失败变成 RSS 推送失败的默认原因。
+- 不把 external handler 展示状态伪装成已可执行能力。
 
 ## Assumptions
 
-- 接受破坏性删除传统翻译功能，不做旧翻译配置和缓存数据迁移。
-- 接受任意远程扩展和默认开放资源访问带来的安全风险。
-- AstrBot 插件隔离机制和管理员信任是第一版主要安全边界。
-- 扩展 runtime 的稳定性优先于极致性能；子进程 RPC 的开销可以接受。
-- AI/扩展失败不能阻断默认 RSS 推送。
-- 发送可靠性、推送历史、去重、订阅管理仍是插件核心职责。
+- RSS 可靠推送仍是插件核心职责，handler 是增强层。
+- 第一阶段接受仅主进程内部通信契约落地，不要求外部子进程立即可用。
+- 外部处理器最终会通过 JSON-safe payload 和 RPC 边界接入。
+- 处理器默认串行执行；并行处理不在本计划内。
+- 处理器输出必须可观测、可回退、可测试。

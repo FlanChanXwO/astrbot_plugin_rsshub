@@ -38,6 +38,10 @@
 
 这避免了重复主键插入。
 
+### `delete_many(feed_ids)`
+
+删除一批 Feed。这个方法只负责 Feed 表自身删除；Dashboard 删除 Feed 的级联订阅和可选推送历史清理由 Web API 编排对应仓储完成。
+
 ## Subscription 仓储
 
 ### `list_for_dashboard(...)`
@@ -46,6 +50,7 @@
 
 - 支持 `user_ids`
 - 支持 `feed_ids`
+- 支持 `feed_links`
 - 支持 `sub_ids`
 - 支持 `keywords`
 
@@ -66,6 +71,10 @@
 - `handlers` 会先转成 JSON 字符串
 - `handlers_mode` 会做标准化
 
+### `delete_all_by_feed_ids(feed_ids)`
+
+按 Feed ID 删除关联订阅。Dashboard 删除 Feed 时会先按 Feed 找到订阅，再根据请求里的 `delete_push_history` 决定是否同步清理这些订阅或 Feed 对应的推送历史。
+
 ## User 仓储
 
 ### `get_or_create(user_id)`
@@ -76,12 +85,28 @@
 
 - 聊天命令和 Web API 都可能先引用用户，再产生用户记录
 - 不需要额外的注册流程
+- 订阅、TOML 导入、调度推送、测试推送和 XML 即时推送在写入订阅或推送历史前都应确保用户存在
+- 启动期 schema 自愈会扫描 `rsshub_sub.user_id` 与 `rsshub_push_history.user_id`，补齐历史脏库里缺失的 `rsshub_user` 行
 
 ### `save(user)`
 
 如果用户已存在，则更新可编辑字段；否则插入新行。
 
 ## PushHistory 仓储
+
+### 关键词过滤
+
+### `delete_by_user(user_id)`
+
+删除指定用户的全部推送历史。这个接口只给显式清理用户审计历史的流程使用；Dashboard 删除用户默认只删除用户与订阅，保留推送历史。
+
+### `delete_by_sub_ids(sub_ids)`
+
+删除指定订阅对应的推送历史。这个接口只在删除订阅且请求显式要求 `delete_push_history=true` 时使用。
+
+### `delete_by_feed_ids(feed_ids)`
+
+删除指定 Feed 对应的推送历史。这个接口只在删除 Feed 且请求显式要求 `delete_push_history=true` 时使用。
 
 ### 关键词过滤
 

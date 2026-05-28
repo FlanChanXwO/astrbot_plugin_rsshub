@@ -9,6 +9,7 @@ from .migration_runner import (
     cleanup_legacy_translation_tables,
     ensure_profile_schema,
     ensure_push_history_schema,
+    ensure_user_rows,
     run_migrations,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "run_migrations",
     "ensure_profile_schema",
     "ensure_push_history_schema",
+    "ensure_user_rows",
     "cleanup_legacy_translation_tables",
 ]

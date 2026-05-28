@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from sqlalchemy import delete
 from sqlmodel import select
 
 from ...domain.entities.feed import Feed
@@ -110,6 +111,19 @@ class FeedRepositoryImpl:
             result = await session.execute(stmt)
             orms = result.scalars().all()
             return [self._to_entity(orm) for orm in orms]
+
+    async def delete_many(self, feed_ids: list[int]) -> int:
+        """批量删除 Feed。"""
+        ids = sorted({int(feed_id) for feed_id in feed_ids if int(feed_id) > 0})
+        if not ids:
+            return 0
+
+        db = get_database()
+        async with db.get_session() as session:
+            stmt = delete(FeedORM).where(FeedORM.id.in_(ids))
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0)
 
     @staticmethod
     def _to_entity(orm: FeedORM) -> Feed:

@@ -67,6 +67,14 @@ def _apply_history_keyword_filters(stmt, keywords: list[str] | None):
     return stmt.where(or_(*clauses))
 
 
+def _history_last_activity_expr():
+    return func.max(
+        PushHistoryORM.created_at,
+        PushHistoryORM.updated_at,
+        func.coalesce(PushHistoryORM.completed_at, PushHistoryORM.updated_at),
+    )
+
+
 class PushHistoryRepositoryImpl:
     """推送历史仓库实现类"""
 
@@ -86,7 +94,7 @@ class PushHistoryRepositoryImpl:
             stmt = select(PushHistoryORM).where(PushHistoryORM.sub_id == sub_id)
             if status:
                 stmt = stmt.where(PushHistoryORM.status == status)
-            stmt = stmt.order_by(desc(PushHistoryORM.created_at))
+            stmt = stmt.order_by(desc(_history_last_activity_expr()))
             if limit:
                 stmt = stmt.limit(limit)
             result = await session.execute(stmt)
@@ -224,11 +232,7 @@ class PushHistoryRepositoryImpl:
         db = get_database()
         async with db.get_session() as session:
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
-            last_activity = func.max(
-                PushHistoryORM.created_at,
-                PushHistoryORM.updated_at,
-                func.coalesce(PushHistoryORM.completed_at, PushHistoryORM.updated_at),
-            )
+            last_activity = _history_last_activity_expr()
             stmt = (
                 delete(PushHistoryORM)
                 .where(last_activity < cutoff_date)
@@ -257,7 +261,7 @@ class PushHistoryRepositoryImpl:
         """获取所有推送历史"""
         db = get_database()
         async with db.get_session() as session:
-            stmt = select(PushHistoryORM).order_by(desc(PushHistoryORM.created_at))
+            stmt = select(PushHistoryORM).order_by(desc(_history_last_activity_expr()))
             if status:
                 stmt = stmt.where(PushHistoryORM.status == status)
             stmt = _apply_history_keyword_filters(stmt, keywords)
@@ -285,7 +289,7 @@ class PushHistoryRepositoryImpl:
                 stmt = stmt.where(PushHistoryORM.status == status)
             stmt = _apply_history_keyword_filters(stmt, keywords)
             stmt = (
-                stmt.order_by(desc(PushHistoryORM.created_at))
+                stmt.order_by(desc(_history_last_activity_expr()))
                 .offset(offset)
                 .limit(limit)
             )
@@ -353,6 +357,47 @@ class PushHistoryRepositoryImpl:
         db = get_database()
         async with db.get_session() as session:
             stmt = delete(PushHistoryORM).where(PushHistoryORM.id.in_(ids))
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0)
+
+    async def delete_by_user(self, user_id: str) -> int:
+        """删除指定用户的全部推送历史。"""
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return 0
+
+        db = get_database()
+        async with db.get_session() as session:
+            stmt = delete(PushHistoryORM).where(
+                PushHistoryORM.user_id == normalized_user_id
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0)
+
+    async def delete_by_sub_ids(self, sub_ids: list[int]) -> int:
+        """删除指定订阅的全部推送历史。"""
+        ids = sorted({int(sub_id) for sub_id in sub_ids if int(sub_id) > 0})
+        if not ids:
+            return 0
+
+        db = get_database()
+        async with db.get_session() as session:
+            stmt = delete(PushHistoryORM).where(PushHistoryORM.sub_id.in_(ids))
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0)
+
+    async def delete_by_feed_ids(self, feed_ids: list[int]) -> int:
+        """删除指定 Feed 的全部推送历史。"""
+        ids = sorted({int(feed_id) for feed_id in feed_ids if int(feed_id) > 0})
+        if not ids:
+            return 0
+
+        db = get_database()
+        async with db.get_session() as session:
+            stmt = delete(PushHistoryORM).where(PushHistoryORM.feed_id.in_(ids))
             result = await session.execute(stmt)
             await session.commit()
             return int(result.rowcount or 0)

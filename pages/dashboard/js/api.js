@@ -15,6 +15,14 @@ function buildDirectApiUrl(path, params = {}) {
   const url = new URL(`/astrbot_plugin_rsshub/${normalizedPath}`, window.location.origin);
   for (const [key, value] of Object.entries(params || {})) {
     if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== undefined && item !== null && item !== '') {
+          url.searchParams.append(key, String(item));
+        }
+      }
+      continue;
+    }
     url.searchParams.set(key, String(value));
   }
   return url;
@@ -55,6 +63,33 @@ function cloneBridgeValue(value, seen) {
   return cloned;
 }
 
+function normalizeFilterValue(value) {
+  if (value && typeof value === 'object' && Array.isArray(value.values)) {
+    return normalizeFilterValue([...value.values, value.input]);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean);
+  }
+  const normalized = String(value ?? '').trim();
+  return normalized ? [normalized] : [];
+}
+
+function setArrayParam(params, key, value) {
+  const normalized = normalizeFilterValue(value);
+  if (normalized.length > 0) {
+    params[key] = normalized;
+  }
+}
+
+function setTextParam(params, key, value) {
+  const normalized = String(value ?? '').trim();
+  if (normalized) {
+    params[key] = normalized;
+  }
+}
+
 export async function ready() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const bridge = getBridge();
@@ -86,31 +121,45 @@ async function apiPost(path, payload = {}) {
   return await handleResponse(result);
 }
 
+async function apiPostRaw(path, payload = {}) {
+  const bridge = requireBridge();
+  return await bridge.apiPost(path, toBridgePayload(payload));
+}
+
 export async function getSubscriptions(filters = {}) {
   const params = {};
-  if (filters.user_id) params.user_id = filters.user_id;
+  setArrayParam(params, 'user_id', filters.user_id);
   if (filters.feed_id !== undefined && filters.feed_id !== null && filters.feed_id !== '') {
-    params.feed_id = filters.feed_id;
+    setArrayParam(params, 'feed_id', filters.feed_id);
   }
+  setArrayParam(params, 'feed_link', filters.feed_link);
   if (filters.sub_id !== undefined && filters.sub_id !== null && filters.sub_id !== '') {
-    params.sub_id = filters.sub_id;
+    setArrayParam(params, 'sub_id', filters.sub_id);
   }
-  if (filters.keyword) params.keyword = filters.keyword;
+  setTextParam(params, 'keyword', filters.keyword);
   const r = await apiGet('subscriptions', params);
   return { items: r.items || [], total: r.total || 0 };
 }
 
 export async function getFeeds(filters = {}) {
   const params = {};
-  if (filters.feed_id) params.feed_id = filters.feed_id;
-  if (filters.keyword) params.keyword = filters.keyword;
+  setArrayParam(params, 'feed_id', filters.feed_id);
+  setTextParam(params, 'keyword', filters.keyword);
   const r = await apiGet('feeds', params);
   return { items: r.items || [], total: r.total || 0 };
 }
 
-export async function unsubscribe(subId, userId) {
+export async function getSuggestions(scope, field, q = '', limit = 10) {
+  const params = { scope, field, limit };
+  setTextParam(params, 'q', q);
+  const r = await apiGet('suggestions', params);
+  return { items: r.items || [] };
+}
+
+export async function unsubscribe(subId, userId, deletePushHistory = false) {
   const payload = { sub_id: subId };
   if (userId) payload.user_id = userId;
+  if (deletePushHistory) payload.delete_push_history = true;
   return await apiPost('unsubscribe', payload);
 }
 
@@ -130,6 +179,24 @@ export async function refreshFeed(feedId) {
 
 export async function refreshFeeds(feedIds) {
   return await apiPost('feeds/refresh', { feed_ids: feedIds });
+}
+
+export async function updateFeed(feedId, options) {
+  return await apiPost('feeds/update', { feed_id: feedId, options });
+}
+
+export async function deleteFeed(feedId, deletePushHistory = false) {
+  return await apiPost('feeds/delete', {
+    feed_id: feedId,
+    delete_push_history: Boolean(deletePushHistory),
+  });
+}
+
+export async function deleteFeeds(feedIds, deletePushHistory = false) {
+  return await apiPost('feeds/delete', {
+    feed_ids: feedIds,
+    delete_push_history: Boolean(deletePushHistory),
+  });
 }
 
 export async function getPluginSettings() {
@@ -172,9 +239,10 @@ export async function batchDeactivate(subIds, userId) {
   return await apiPost('batch/deactivate', payload);
 }
 
-export async function batchUnsubscribe(subIds, userId) {
+export async function batchUnsubscribe(subIds, userId, deletePushHistory = false) {
   const payload = { sub_ids: subIds };
   if (userId) payload.user_id = userId;
+  if (deletePushHistory) payload.delete_push_history = true;
   return await apiPost('batch/unsubscribe', payload);
 }
 
@@ -184,10 +252,17 @@ export async function getStats() {
 
 let previousCounter = 0;
 
-export async function getPushHistory({ status = '', keyword = '', page = 1, pageSize = 20 } = {}) {
+export async function getPushHistory({
+  status = '',
+  feedLink = '',
+  keyword = '',
+  page = 1,
+  pageSize = 20,
+} = {}) {
   const params = { page, page_size: pageSize };
   if (status) params.status = status;
-  if (keyword) params.keyword = keyword;
+  setArrayParam(params, 'feed_link', feedLink);
+  setTextParam(params, 'keyword', keyword);
   const r = await apiGet('push-history', params);
   return {
     items: r.items || [],
@@ -217,6 +292,10 @@ export async function deletePushHistoryBatch(historyIds) {
   return await apiPost('push-history/delete', { history_ids: historyIds });
 }
 
+export async function retryPushHistory(historyId) {
+  return await apiPostRaw('push-history/retry', { history_id: historyId });
+}
+
 export async function cleanupPushHistory(days = 30) {
   return await apiPost('push-history/cleanup', { days });
 }
@@ -227,8 +306,8 @@ export async function clearPushHistory() {
 
 export async function getUserDetails(filters = {}) {
   const params = {};
-  if (filters.user_id) params.user_id = filters.user_id;
-  if (filters.keyword) params.keyword = filters.keyword;
+  setArrayParam(params, 'user_id', filters.user_id);
+  setTextParam(params, 'keyword', filters.keyword);
   const r = await apiGet('users/detail', params);
   return { items: r.items || [], total: r.total || 0 };
 }
@@ -237,12 +316,18 @@ export async function updateUser(userId, settings) {
   return await apiPost('users/update', { user_id: userId, settings });
 }
 
-export async function deleteUser(userId) {
-  return await apiPost('users/delete', { user_id: userId });
+export async function deleteUser(userId, deletePushHistory = false) {
+  return await apiPost('users/delete', {
+    user_id: userId,
+    delete_push_history: Boolean(deletePushHistory),
+  });
 }
 
-export async function deleteUsers(userIds) {
-  return await apiPost('users/delete', { user_ids: userIds });
+export async function deleteUsers(userIds, deletePushHistory = false) {
+  return await apiPost('users/delete', {
+    user_ids: userIds,
+    delete_push_history: Boolean(deletePushHistory),
+  });
 }
 
 export async function getDataManagementOverview() {

@@ -329,6 +329,87 @@ async def ensure_push_history_schema(conn) -> list[str]:
     return applied
 
 
+async def ensure_user_rows(conn) -> int:
+    """补齐订阅/推送历史引用但用户表缺失的用户记录。
+
+    旧库可能因为订阅、测试推送或 LLM 推送入口未显式创建用户，导致
+    `rsshub_sub` / `rsshub_push_history` 中存在 user_id，而 `rsshub_user`
+    没有对应记录。这里只插入用户 id，其余字段依赖表默认值。
+    """
+
+    async def _table_exists(table: str) -> bool:
+        result = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        )
+        return result.fetchone() is not None
+
+    async def _column_names(table: str) -> set[str]:
+        result = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+        return {str(row[1]) for row in result.fetchall()}
+
+    if not await _table_exists("rsshub_user"):
+        return 0
+
+    source_tables = [
+        table
+        for table in ("rsshub_sub", "rsshub_push_history")
+        if await _table_exists(table)
+    ]
+    if not source_tables:
+        return 0
+
+    before_result = await conn.exec_driver_sql("SELECT COUNT(*) FROM rsshub_user")
+    before = int(before_result.scalar() or 0)
+    user_columns = await _column_names("rsshub_user")
+    insert_defaults = {
+        "state": "1",
+        "interval": "-100",
+        "notify": "-100",
+        "send_mode": "-100",
+        "handlers": "'[]'",
+        "length_limit": "-100",
+        "display_author": "-100",
+        "display_via": "-100",
+        "display_title": "-100",
+        "display_entry_tags": "-100",
+        "style": "-100",
+        "display_media": "-100",
+        "needs_binding_notice": "0",
+        "created_at": "CURRENT_TIMESTAMP",
+        "updated_at": "CURRENT_TIMESTAMP",
+    }
+    insert_columns = ["id"]
+    insert_values = ["id"]
+    for column, value_expr in insert_defaults.items():
+        if column in user_columns:
+            insert_columns.append(column)
+            insert_values.append(value_expr)
+
+    selects = "\nUNION\n".join(
+        f"SELECT DISTINCT TRIM(user_id) AS id FROM {table} "
+        "WHERE user_id IS NOT NULL AND TRIM(user_id) != ''"
+        for table in source_tables
+    )
+    await conn.exec_driver_sql(
+        f"""
+        INSERT OR IGNORE INTO rsshub_user ({", ".join(insert_columns)})
+        SELECT {", ".join(insert_values)}
+        FROM ({selects}) AS referenced_users
+        WHERE id IS NOT NULL
+          AND id != ''
+          AND NOT EXISTS (
+              SELECT 1 FROM rsshub_user WHERE rsshub_user.id = referenced_users.id
+          )
+        """
+    )
+    after_result = await conn.exec_driver_sql("SELECT COUNT(*) FROM rsshub_user")
+    inserted = int(after_result.scalar() or 0) - before
+    if inserted > 0:
+        logger.info("数据库 schema 自愈: 补齐缺失用户记录 %s 个", inserted)
+    return max(0, inserted)
+
+
 async def ensure_profile_schema(conn) -> list[str]:
     """补齐当前用户/订阅配置表运行必需字段。
 

@@ -4,10 +4,31 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 from xml.etree import ElementTree
 
 from ...domain.entities.content_types import LayoutFragment
+from ...infrastructure.pipeline import (
+    EffectivePushOptions,
+    EntryFormatInput,
+    EntryTextFormatter,
+)
 from ...infrastructure.utils import get_logger
+from ...shared.constants import (
+    DISPLAY_AUTO,
+    DISPLAY_DISABLED,
+    DISPLAY_FORCED,
+    DISPLAY_VIA_AUTO,
+    DISPLAY_VIA_FORCED,
+    DISPLAY_VIA_FULLY_DISABLED,
+    DISPLAY_VIA_LINK_ONLY,
+    SEND_MODE_AUTO,
+    SEND_MODE_DIRECT,
+    SEND_MODE_LINK_ONLY,
+    STYLE_AUTO,
+    STYLE_ORIGINAL,
+    STYLE_RSSRT,
+)
 from .feed_polling_service import FeedPollingService
 from .html_parser import HTMLParser
 from .notification_dispatcher import (
@@ -17,6 +38,7 @@ from .notification_dispatcher import (
 )
 
 logger = get_logger()
+_entry_text_formatter = EntryTextFormatter()
 
 MAX_XML_BYTES = 256 * 1024
 MAX_XML_NODES = 4096
@@ -41,6 +63,15 @@ class ParsedAgentXmlEntry:
     media_urls: list[str]
     media_items: list[tuple[str, str]]
     layout: list[LayoutFragment]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentXmlPushOptions:
+    """Per-call formatting overrides for agent XML pushes."""
+
+    send_mode: int = SEND_MODE_AUTO
+    style: int = STYLE_AUTO
+    format_options: EffectivePushOptions = EffectivePushOptions()
 
 
 def _validate_xml_input(xml: str) -> str:
@@ -76,6 +107,179 @@ def _collect_xml_media(root: ElementTree.Element) -> list[str]:
             if value.startswith(("http://", "https://")):
                 media_urls.append(value)
     return list(dict.fromkeys(media_urls))
+
+
+def _local_name(tag: str) -> str:
+    return str(tag or "").rsplit("}", 1)[-1].lower()
+
+
+def _collect_xml_tags(root: ElementTree.Element) -> tuple[str, ...]:
+    tags: list[str] = []
+    for elem in root.iter():
+        if _local_name(elem.tag) not in {"category", "tag"}:
+            continue
+        value = str(elem.text or "").strip()
+        if value:
+            tags.append(value)
+    return tuple(dict.fromkeys(tags))
+
+
+def _coerce_int(value: Any, *, fallback: int) -> int:
+    if value is None:
+        return fallback
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _parse_mapped_int(
+    value: Any,
+    *,
+    mapping: dict[str, int],
+    allowed: set[int],
+    fallback: int,
+) -> int:
+    if value is None:
+        return fallback
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in mapping:
+            return mapping[normalized]
+    candidate = _coerce_int(value, fallback=fallback)
+    return candidate if candidate in allowed else fallback
+
+
+def _parse_bool(value: Any, *, fallback: bool) -> bool:
+    if value is None:
+        return fallback
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enable", "enabled", "开启"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disable", "disabled", "关闭"}:
+            return False
+    return fallback
+
+
+def _build_link_only_content(*, title: str, link: str) -> str:
+    title = str(title or "").strip()
+    link = str(link or "").strip()
+    if title and link:
+        return f"{title}\n{link}"
+    return title or link
+
+
+def _resolve_push_options(
+    *,
+    send_mode: Any = None,
+    style: Any = None,
+    display_media: Any = None,
+    display_title: Any = None,
+    display_author: Any = None,
+    display_via: Any = None,
+    display_entry_tags: Any = None,
+    length_limit: Any = None,
+) -> AgentXmlPushOptions:
+    send_mode_value = _parse_mapped_int(
+        send_mode,
+        mapping={
+            "link_only": SEND_MODE_LINK_ONLY,
+            "link-only": SEND_MODE_LINK_ONLY,
+            "link": SEND_MODE_LINK_ONLY,
+            "仅链接": SEND_MODE_LINK_ONLY,
+            "auto": SEND_MODE_AUTO,
+            "自动": SEND_MODE_AUTO,
+            "direct": SEND_MODE_DIRECT,
+            "直接发送": SEND_MODE_DIRECT,
+        },
+        allowed={SEND_MODE_LINK_ONLY, SEND_MODE_AUTO, SEND_MODE_DIRECT},
+        fallback=SEND_MODE_AUTO,
+    )
+    style_value = _parse_mapped_int(
+        style,
+        mapping={
+            "auto": STYLE_AUTO,
+            "classic": STYLE_AUTO,
+            "rsstt": STYLE_AUTO,
+            "rssrt": STYLE_RSSRT,
+            "original": STYLE_ORIGINAL,
+        },
+        allowed={STYLE_AUTO, STYLE_RSSRT, STYLE_ORIGINAL},
+        fallback=STYLE_AUTO,
+    )
+    display_toggle_mapping = {
+        "disabled": DISPLAY_DISABLED,
+        "disable": DISPLAY_DISABLED,
+        "off": DISPLAY_DISABLED,
+        "false": DISPLAY_DISABLED,
+        "禁用": DISPLAY_DISABLED,
+        "auto": DISPLAY_AUTO,
+        "自动": DISPLAY_AUTO,
+        "forced": DISPLAY_FORCED,
+        "force": DISPLAY_FORCED,
+        "on": DISPLAY_FORCED,
+        "true": DISPLAY_FORCED,
+        "强制": DISPLAY_FORCED,
+    }
+    display_via_value = _parse_mapped_int(
+        display_via,
+        mapping={
+            "fully_disabled": DISPLAY_VIA_FULLY_DISABLED,
+            "full_disabled": DISPLAY_VIA_FULLY_DISABLED,
+            "disabled": DISPLAY_VIA_FULLY_DISABLED,
+            "disable": DISPLAY_VIA_FULLY_DISABLED,
+            "off": DISPLAY_VIA_FULLY_DISABLED,
+            "false": DISPLAY_VIA_FULLY_DISABLED,
+            "完全禁用": DISPLAY_VIA_FULLY_DISABLED,
+            "link_only": DISPLAY_VIA_LINK_ONLY,
+            "link-only": DISPLAY_VIA_LINK_ONLY,
+            "link": DISPLAY_VIA_LINK_ONLY,
+            "仅链接": DISPLAY_VIA_LINK_ONLY,
+            "auto": DISPLAY_VIA_AUTO,
+            "自动": DISPLAY_VIA_AUTO,
+            "forced": DISPLAY_VIA_FORCED,
+            "force": DISPLAY_VIA_FORCED,
+            "on": DISPLAY_VIA_FORCED,
+            "true": DISPLAY_VIA_FORCED,
+            "强制": DISPLAY_VIA_FORCED,
+        },
+        allowed={
+            DISPLAY_VIA_FULLY_DISABLED,
+            DISPLAY_VIA_LINK_ONLY,
+            DISPLAY_VIA_AUTO,
+            DISPLAY_VIA_FORCED,
+        },
+        fallback=DISPLAY_VIA_AUTO,
+    )
+    length_limit_value = max(0, _coerce_int(length_limit, fallback=0))
+    return AgentXmlPushOptions(
+        send_mode=send_mode_value,
+        style=style_value,
+        format_options=EffectivePushOptions(
+            length_limit=length_limit_value,
+            display_author=_parse_mapped_int(
+                display_author,
+                mapping=display_toggle_mapping,
+                allowed={DISPLAY_DISABLED, DISPLAY_AUTO, DISPLAY_FORCED},
+                fallback=DISPLAY_AUTO,
+            ),
+            display_via=display_via_value,
+            display_title=_parse_mapped_int(
+                display_title,
+                mapping=display_toggle_mapping,
+                allowed={DISPLAY_DISABLED, DISPLAY_AUTO, DISPLAY_FORCED},
+                fallback=DISPLAY_AUTO,
+            ),
+            display_entry_tags=_parse_bool(display_entry_tags, fallback=False),
+            style=style_value,
+            display_media=_parse_bool(display_media, fallback=True),
+        ),
+    )
 
 
 def _parse_xml_root(xml: str) -> tuple[ElementTree.Element, str]:
@@ -115,6 +319,14 @@ class AgentXmlPushService:
         entry_guid: str = "",
         idempotency_key: str = "",
         dry_run: bool = False,
+        style: Any = None,
+        send_mode: Any = None,
+        display_media: Any = None,
+        display_title: Any = None,
+        display_author: Any = None,
+        display_via: Any = None,
+        display_entry_tags: Any = None,
+        length_limit: Any = None,
     ) -> dict[str, object]:
         source_key = str(source_key or "").strip()
         if not source_key:
@@ -130,17 +342,32 @@ class AgentXmlPushService:
 
         valid_xml = _validate_xml_input(xml)
         root, body_xml = _parse_xml_root(valid_xml)
+        options = _resolve_push_options(
+            style=style,
+            send_mode=send_mode,
+            display_media=display_media,
+            display_title=display_title,
+            display_author=display_author,
+            display_via=display_via,
+            display_entry_tags=display_entry_tags,
+            length_limit=length_limit,
+        )
         parsed = await HTMLParser(body_xml, feed_link=link or "").parse()
         plain_body = FeedPollingService._remove_media_placeholders(
             parsed.html_tree.get_plain().strip()
         )
-        content = FeedPollingService._format_dispatch_content(
-            title=title,
-            body=plain_body,
-            link=str(link or "").strip(),
-            feed_title=str(feed_title or "").strip(),
-            feed_link=str(link or "").strip(),
-            author=str(author or "").strip(),
+        content = await _entry_text_formatter.format_entry(
+            EntryFormatInput(
+                title=title,
+                content=plain_body,
+                summary=plain_body,
+                link=str(link or "").strip(),
+                author=str(author or "").strip(),
+                feed_title=str(feed_title or "").strip(),
+                feed_link=str(link or "").strip(),
+                tags=_collect_xml_tags(root),
+            ),
+            options.format_options,
         )
         media_items = FeedPollingService._media_items_from_parsed(parsed.media)
         media_urls = [
@@ -153,6 +380,20 @@ class AgentXmlPushService:
             media_urls=media_urls,
             media_items=media_items,
         )
+        dispatch_media_urls = media_urls
+        dispatch_media_items = normalized_media_items
+        dispatch_layout = list(parsed.layout)
+        if not options.format_options.display_media:
+            dispatch_media_urls = []
+            dispatch_media_items = []
+            dispatch_layout = []
+        if options.send_mode == SEND_MODE_LINK_ONLY:
+            content = _build_link_only_content(
+                title=title, link=str(link or "").strip()
+            )
+            dispatch_media_urls = []
+            dispatch_media_items = []
+            dispatch_layout = []
         final_guid = (
             str(entry_guid or "").strip()
             or str(idempotency_key or "").strip()
@@ -177,7 +418,7 @@ class AgentXmlPushService:
             entry_guid=final_guid,
             media_urls=media_urls,
             media_items=normalized_media_items,
-            layout=list(parsed.layout),
+            layout=dispatch_layout,
         )
         if dry_run:
             return {
@@ -190,7 +431,7 @@ class AgentXmlPushService:
                     "feed_title": preview.feed_title,
                     "author": preview.author,
                     "entry_guid": preview.entry_guid,
-                    "media_urls": preview.media_urls,
+                    "media_urls": dispatch_media_urls,
                 },
             }
 
@@ -208,10 +449,12 @@ class AgentXmlPushService:
             entry_link=preview.entry_link,
             feed_title=preview.feed_title,
             feed_link=preview.feed_link,
-            media_urls=preview.media_urls,
-            media_items=preview.media_items,
-            layout=preview.layout,
+            media_urls=dispatch_media_urls,
+            media_items=dispatch_media_items,
+            layout=dispatch_layout,
             entry_guid=preview.entry_guid,
+            send_mode=options.send_mode,
+            style=options.style,
         )
         result["dry_run"] = False
         result["preview"] = {

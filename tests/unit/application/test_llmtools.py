@@ -99,7 +99,62 @@ async def test_llm_tool_list_handlers_returns_registry_schema():
 
 
 @pytest.mark.asyncio
-async def test_llm_tool_rss_subscribe_supports_uri_with_default_base_url():
+async def test_llm_tool_rss_subscribe_schema_only_exposes_targets():
+    deps = _build_deps()
+    _, plugin_ctx = _make_ctx()
+    tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    tool = next(t for t in tools if t.name == "rss_subscribe")
+
+    assert tool.parameters["properties"] == {
+        "targets": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "订阅目标数组；每项可为完整 RSS URL 或 RSSHub 路由路径，例如 /twitter/user/123。",
+        }
+    }
+    assert tool.parameters["required"] == ["targets"]
+
+
+@pytest.mark.asyncio
+async def test_llm_tool_rss_subscribe_schema_does_not_expose_legacy_params():
+    deps = _build_deps()
+    _, plugin_ctx = _make_ctx()
+    tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    tool = next(t for t in tools if t.name == "rss_subscribe")
+
+    assert set(tool.parameters["properties"]) == {"targets"}
+    assert "url" not in tool.parameters["properties"]
+    assert "interval" not in tool.parameters["properties"]
+    assert "targets" in tool.parameters["properties"]
+
+
+@pytest.mark.asyncio
+async def test_llm_tool_rss_subscribe_supports_url_targets():
+    deps = _build_deps()
+    deps["subscribe_cmd"].execute = AsyncMock(
+        return_value=SimpleNamespace(success=True, message="订阅成功")
+    )
+    ctx, plugin_ctx = _make_ctx()
+    tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    tool = next(t for t in tools if t.name == "rss_subscribe")
+
+    result = await tool.handler(
+        ctx,
+        ["https://example.com/rss.xml", "https://example.com/atom.xml"],
+    )
+
+    assert result == "成功订阅 2 个 RSS 源"
+    assert deps["subscribe_cmd"].execute.await_count == 2
+    assert [
+        call.kwargs["url"] for call in deps["subscribe_cmd"].execute.await_args_list
+    ] == [
+        "https://example.com/rss.xml",
+        "https://example.com/atom.xml",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_llm_tool_rss_subscribe_supports_uri_targets_with_default_base_url():
     set_config(
         RsshubPluginConfig(
             basic_config=BasicConfig(rsshub_base_url="https://rss.example.com"),
@@ -114,16 +169,22 @@ async def test_llm_tool_rss_subscribe_supports_uri_with_default_base_url():
     tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
     tool = next(t for t in tools if t.name == "rss_subscribe")
 
-    result = await tool.handler(ctx, uri="/twitter/user/dynamic/123")
-    assert "订阅成功" in result
-    deps["subscribe_cmd"].execute.assert_awaited_once()
-    assert deps["subscribe_cmd"].execute.await_args.kwargs["url"] == (
-        "https://rss.example.com/twitter/user/dynamic/123"
+    result = await tool.handler(
+        ctx,
+        ["/twitter/user/dynamic/123", "pixiv/search/碧蓝档案"],
     )
+    assert result == "成功订阅 2 个 RSS 源"
+    assert deps["subscribe_cmd"].execute.await_count == 2
+    assert [
+        call.kwargs["url"] for call in deps["subscribe_cmd"].execute.await_args_list
+    ] == [
+        "https://rss.example.com/twitter/user/dynamic/123",
+        "https://rss.example.com/pixiv/search/碧蓝档案",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_llm_tool_rss_subscribe_uri_keeps_original_keyword_text():
+async def test_llm_tool_rss_subscribe_mixed_targets_deduplicate_in_order():
     set_config(
         RsshubPluginConfig(
             basic_config=BasicConfig(rsshub_base_url="https://rss.example.com"),
@@ -138,26 +199,38 @@ async def test_llm_tool_rss_subscribe_uri_keeps_original_keyword_text():
     tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
     tool = next(t for t in tools if t.name == "rss_subscribe")
 
-    await tool.handler(ctx, uri="/pixiv/search/碧蓝档案")
-
-    deps["subscribe_cmd"].execute.assert_awaited_once()
-    assert deps["subscribe_cmd"].execute.await_args.kwargs["url"] == (
-        "https://rss.example.com/pixiv/search/碧蓝档案"
+    await tool.handler(
+        ctx,
+        [
+            " https://example.com/rss.xml ",
+            "/twitter/user/dynamic/123",
+            "https://example.com/rss.xml",
+            "",
+            "twitter/user/dynamic/123",
+        ],
     )
+
+    assert deps["subscribe_cmd"].execute.await_count == 2
+    assert [
+        call.kwargs["url"] for call in deps["subscribe_cmd"].execute.await_args_list
+    ] == [
+        "https://example.com/rss.xml",
+        "https://rss.example.com/twitter/user/dynamic/123",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_llm_tool_rss_subscribe_handler():
+async def test_llm_tool_rss_subscribe_empty_targets_returns_error_without_subscribe():
     deps = _build_deps()
-    deps["subscribe_cmd"].execute = AsyncMock(
-        return_value=SimpleNamespace(success=True, message="订阅成功")
-    )
+    deps["subscribe_cmd"].execute = AsyncMock()
     ctx, plugin_ctx = _make_ctx()
     tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
     tool = next(t for t in tools if t.name == "rss_subscribe")
 
-    result = await tool.handler(ctx, "https://example.com/rss.xml")
-    assert "订阅成功" in result
+    result = await tool.handler(ctx, ["", "   "])
+
+    assert "订阅目标不能为空" in result
+    deps["subscribe_cmd"].execute.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -171,7 +244,7 @@ async def test_llm_tool_rss_subscribe_accepts_direct_event():
     tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
     tool = next(t for t in tools if t.name == "rss_subscribe")
 
-    result = await tool.handler(event, "https://example.com/rss.xml")
+    result = await tool.handler(event, ["https://example.com/rss.xml"])
 
     assert "订阅成功" in result
     deps["subscribe_cmd"].execute.assert_awaited_once_with(
@@ -349,6 +422,87 @@ async def test_llm_tool_rss_push_xml_entry_dry_run_validates_and_previews():
     assert data["dry_run"] is True
     assert data["preview"]["entry_guid"].startswith("agent:")
     deps["notification_dispatcher"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_llm_tool_rss_push_xml_entry_schema_exposes_safe_formatting_params():
+    deps = _build_deps()
+    _, plugin_ctx = _make_ctx()
+    tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    tool = next(t for t in tools if t.name == "rss_push_xml_entry")
+
+    properties = tool.parameters["properties"]
+    for key in (
+        "style",
+        "send_mode",
+        "display_media",
+        "display_title",
+        "display_author",
+        "display_via",
+        "display_entry_tags",
+        "length_limit",
+    ):
+        assert key in properties
+    assert properties["style"]["enum"] == ["auto", "rssrt", "original"]
+    assert properties["send_mode"]["enum"] == ["auto", "link_only", "direct"]
+    assert properties["display_media"]["type"] == "boolean"
+    assert properties["length_limit"]["type"] == "integer"
+
+
+@pytest.mark.asyncio
+async def test_llm_tool_rss_push_xml_entry_passes_safe_formatting_params():
+    service = MagicMock()
+    service.push_entry_json = AsyncMock(return_value='{"ok": true}')
+    deps = _build_deps()
+    deps["agent_xml_push_service"] = service
+    ctx, plugin_ctx = _make_ctx()
+    tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    tool = next(t for t in tools if t.name == "rss_push_xml_entry")
+
+    result = await tool.handler(
+        ctx,
+        "daily:ai-news",
+        "Daily",
+        "<entry><p>Hello</p></entry>",
+        "https://example.com/post",
+        "Alice",
+        "Feed",
+        "guid-1",
+        "idem-1",
+        False,
+        style="original",
+        send_mode="link_only",
+        display_media=False,
+        display_title="disabled",
+        display_author="forced",
+        display_via="link_only",
+        display_entry_tags=True,
+        length_limit=120,
+    )
+
+    assert json.loads(result)["ok"] is True
+    service.push_entry_json.assert_awaited_once_with(
+        user_id="u1",
+        platform_name="aiocqhttp",
+        target_session="p:g:1",
+        source_key="daily:ai-news",
+        title="Daily",
+        xml="<entry><p>Hello</p></entry>",
+        link="https://example.com/post",
+        author="Alice",
+        feed_title="Feed",
+        entry_guid="guid-1",
+        idempotency_key="idem-1",
+        dry_run=False,
+        style="original",
+        send_mode="link_only",
+        display_media=False,
+        display_title="disabled",
+        display_author="forced",
+        display_via="link_only",
+        display_entry_tags=True,
+        length_limit=120,
+    )
 
 
 @pytest.mark.asyncio

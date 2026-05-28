@@ -178,6 +178,39 @@ class PushHistoryRepository(Protocol):
         """
         ...
 
+    async def delete_by_user(self, user_id: str) -> int:
+        """删除指定用户的全部推送历史。
+
+        Args:
+            user_id: 用户唯一标识
+
+        Returns:
+            实际删除的记录数量
+        """
+        ...
+
+    async def delete_by_sub_ids(self, sub_ids: list[int]) -> int:
+        """删除指定订阅的全部推送历史。
+
+        Args:
+            sub_ids: 订阅 ID 列表
+
+        Returns:
+            实际删除的记录数量
+        """
+        ...
+
+    async def delete_by_feed_ids(self, feed_ids: list[int]) -> int:
+        """删除指定 Feed 的全部推送历史。
+
+        Args:
+            feed_ids: Feed ID 列表
+
+        Returns:
+            实际删除的记录数量
+        """
+        ...
+
     async def delete_old_records(self, days: int = 30) -> int:
         """删除指定天数前的历史记录
 

@@ -64,16 +64,24 @@ LLM_TOOL_NAMES = [
 ]
 
 
-def _normalize_subscribe_target(*, url: str = "", uri: str = "") -> str:
-    targets = [part.strip() for part in str(url or "").split() if part.strip()]
-    raw_uri = str(uri or "").strip()
-    if raw_uri:
-        resolved = _resolve_rsshub_uri(raw_uri)
-        logger.debug(
-            "LLM 订阅工具解析 RSSHub 路由: uri=%s -> url=%s", raw_uri, resolved
-        )
-        targets.append(resolved)
-    return " ".join(targets)
+def _normalize_subscribe_targets(targets: list[str] | None = None) -> str:
+    normalized_targets: list[str] = []
+    seen: set[str] = set()
+    for target in targets or []:
+        raw_target = str(target or "").strip()
+        if not raw_target:
+            continue
+        resolved = _resolve_rsshub_uri(raw_target)
+        if raw_target != resolved:
+            logger.debug(
+                "LLM 订阅工具解析 RSSHub 路由: target=%s -> url=%s",
+                raw_target,
+                resolved,
+            )
+        if resolved and resolved not in seen:
+            normalized_targets.append(resolved)
+            seen.add(resolved)
+    return " ".join(normalized_targets)
 
 
 def _resolve_rsshub_uri(value: str) -> str:
@@ -141,13 +149,15 @@ def build_llm_tools(*, deps: LLMToolDeps, plugin_context) -> list[FunctionTool]:
 
     async def rss_subscribe(
         context: ContextWrapper[AstrAgentContext],
-        url: str = "",
-        uri: str = "",
+        targets: list[str] | None = None,
     ) -> str:
         event = _extract_event(context)
+        normalized_targets = _normalize_subscribe_targets(targets)
+        if not normalized_targets:
+            return "订阅目标不能为空，请提供至少一个 RSS URL 或 RSSHub 路由路径"
         result = await h.handle_sub(
             event,
-            _normalize_subscribe_target(url=url, uri=uri),
+            normalized_targets,
             deps,
         )
         return result.get("plain", "")
@@ -428,6 +438,14 @@ def build_llm_tools(*, deps: LLMToolDeps, plugin_context) -> list[FunctionTool]:
         entry_guid: str = "",
         idempotency_key: str = "",
         dry_run: bool = False,
+        style: Any = None,
+        send_mode: Any = None,
+        display_media: Any = None,
+        display_title: Any = None,
+        display_author: Any = None,
+        display_via: Any = None,
+        display_entry_tags: Any = None,
+        length_limit: Any = None,
     ) -> str:
         event = _extract_event(context)
         service = deps["agent_xml_push_service"]
@@ -448,6 +466,14 @@ def build_llm_tools(*, deps: LLMToolDeps, plugin_context) -> list[FunctionTool]:
                 entry_guid=entry_guid,
                 idempotency_key=idempotency_key,
                 dry_run=bool(dry_run),
+                style=style,
+                send_mode=send_mode,
+                display_media=display_media,
+                display_title=display_title,
+                display_author=display_author,
+                display_via=display_via,
+                display_entry_tags=display_entry_tags,
+                length_limit=length_limit,
             )
         except AgentXmlValidationError as exc:
             return json.dumps(
@@ -459,19 +485,17 @@ def build_llm_tools(*, deps: LLMToolDeps, plugin_context) -> list[FunctionTool]:
     return [
         _tool(
             name="rss_subscribe",
-            description="订阅 RSS 源。优先传 uri，工具会自动用插件默认 RSSHub 基址拼接；也支持直接传完整 URL，多个目标可用空格分隔。",
+            description="订阅 RSS 源。targets 每项可为完整 http/https URL 或 RSSHub 路由路径，路由路径会自动用插件默认 RSSHub 基址拼接。",
             parameters={
                 "type": "object",
                 "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "一个或多个完整 RSS URL，空格分隔。已提供 uri 时可留空。",
-                    },
-                    "uri": {
-                        "type": "string",
-                        "description": "RSSHub 路由 uri 或相对路径，例如 /twitter/user/123。优先使用此字段。",
+                    "targets": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "订阅目标数组；每项可为完整 RSS URL 或 RSSHub 路由路径，例如 /twitter/user/123。",
                     },
                 },
+                "required": ["targets"],
             },
             handler=rss_subscribe,
             plugin_context=plugin_context,
@@ -677,6 +701,43 @@ def build_llm_tools(*, deps: LLMToolDeps, plugin_context) -> list[FunctionTool]:
                         "description": "可选显式幂等键",
                     },
                     "dry_run": {"type": "boolean", "description": "仅解析预览，不发送"},
+                    "style": {
+                        "type": "string",
+                        "enum": ["auto", "rssrt", "original"],
+                        "description": "可选推送样式；original 会尽量按 XML/HTML 原始布局推送。",
+                    },
+                    "send_mode": {
+                        "type": "string",
+                        "enum": ["auto", "link_only", "direct"],
+                        "description": "可选发送模式：auto 自动、link_only 仅链接、direct 直接发送。",
+                    },
+                    "display_media": {
+                        "type": "boolean",
+                        "description": "是否发送 XML/HTML 中解析出的媒体。",
+                    },
+                    "display_title": {
+                        "type": "string",
+                        "enum": ["auto", "disabled", "forced"],
+                        "description": "标题显示策略。",
+                    },
+                    "display_author": {
+                        "type": "string",
+                        "enum": ["auto", "disabled", "forced"],
+                        "description": "作者显示策略。",
+                    },
+                    "display_via": {
+                        "type": "string",
+                        "enum": ["auto", "fully_disabled", "link_only", "forced"],
+                        "description": "via 来源尾注显示策略。",
+                    },
+                    "display_entry_tags": {
+                        "type": "boolean",
+                        "description": "是否显示 XML 中的 category/tag 标签。",
+                    },
+                    "length_limit": {
+                        "type": "integer",
+                        "description": "正文截断长度；0 表示不截断。",
+                    },
                 },
                 "required": ["source_key", "title", "xml"],
             },

@@ -203,13 +203,17 @@ def _build_history_row(
     status: str,
     retry_count: int,
     max_retries: int,
+    sub_id: int | None = None,
+    feed_id: int | None = None,
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
     completed_at: datetime | None = None,
 ) -> PushHistoryORM:
     now = datetime.now(timezone.utc)
     return PushHistoryORM(
+        sub_id=sub_id,
         user_id=user_id,
+        feed_id=feed_id,
         content=status,
         entry_title=status,
         entry_link=f"https://example.com/{user_id}",
@@ -317,6 +321,173 @@ async def test_count_retryable_alias_matches_primary_method(monkeypatch, tmp_pat
     monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
 
     assert await repo.count_retryable() == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_by_sub_ids_deletes_matching_history(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    db = await _build_test_database(
+        tmp_path / "push_history_delete_sub_ids.db",
+        [
+            _build_history_row(
+                user_id="u1",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                sub_id=1,
+                feed_id=10,
+            ),
+            _build_history_row(
+                user_id="u1",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                sub_id=2,
+                feed_id=10,
+            ),
+            _build_history_row(
+                user_id="u1",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                sub_id=3,
+                feed_id=11,
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    removed = await repo.delete_by_sub_ids([1, 2, 2, 0])
+    remaining = await repo.get_all(limit=10)
+
+    assert removed == 2
+    assert [item.sub_id for item in remaining] == [3]
+
+
+@pytest.mark.asyncio
+async def test_delete_by_feed_ids_deletes_matching_history(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    db = await _build_test_database(
+        tmp_path / "push_history_delete_feed_ids.db",
+        [
+            _build_history_row(
+                user_id="u1",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                sub_id=1,
+                feed_id=10,
+            ),
+            _build_history_row(
+                user_id="u1",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                sub_id=2,
+                feed_id=10,
+            ),
+            _build_history_row(
+                user_id="u1",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                sub_id=3,
+                feed_id=11,
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    removed = await repo.delete_by_feed_ids([10, 10, -1])
+    remaining = await repo.get_all(limit=10)
+
+    assert removed == 2
+    assert [item.feed_id for item in remaining] == [11]
+
+
+@pytest.mark.asyncio
+async def test_get_all_sorts_by_last_activity_timestamp(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 5, 25, 12, tzinfo=timezone.utc)
+    db = await _build_test_database(
+        tmp_path / "push_history_sort_all.db",
+        [
+            _build_history_row(
+                user_id="new-created",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                created_at=base,
+                updated_at=base,
+            ),
+            _build_history_row(
+                user_id="old-created-recent-updated",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                created_at=base - timedelta(days=7),
+                updated_at=base + timedelta(hours=1),
+            ),
+            _build_history_row(
+                user_id="old-created-recent-completed",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                created_at=base - timedelta(days=14),
+                updated_at=base - timedelta(days=14),
+                completed_at=base + timedelta(hours=2),
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    histories = await repo.get_all(limit=10)
+
+    assert [item.user_id for item in histories] == [
+        "old-created-recent-completed",
+        "old-created-recent-updated",
+        "new-created",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_by_user_sorts_by_last_activity_timestamp(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 5, 25, 12, tzinfo=timezone.utc)
+    db = await _build_test_database(
+        tmp_path / "push_history_sort_user.db",
+        [
+            _build_history_row(
+                user_id="u1",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                created_at=base,
+                updated_at=base,
+            ),
+            _build_history_row(
+                user_id="u1",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                created_at=base - timedelta(days=7),
+                updated_at=base + timedelta(hours=1),
+            ),
+            _build_history_row(
+                user_id="u2",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                created_at=base + timedelta(days=1),
+                updated_at=base + timedelta(days=1),
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    histories = await repo.get_by_user(user_id="u1", limit=10)
+
+    assert [item.status for item in histories] == ["failed", "success"]
 
 
 @pytest.mark.asyncio

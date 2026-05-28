@@ -11,6 +11,7 @@ from ...domain.entities.feed import Feed
 from ...domain.entities.subscription import Subscription
 from ...domain.repositories.feed_repository import FeedRepository
 from ...domain.repositories.subscription_repository import SubscriptionRepository
+from ...domain.repositories.user_repository import UserRepository
 from ...domain.value_objects.feed_url import FeedUrl
 from ...infrastructure.config import validate_interval_value
 from ..dto.result_dto import CommandResult
@@ -51,9 +52,11 @@ class ImportSubscriptionsCommand:
         self,
         subscription_repo: SubscriptionRepository,
         feed_repo: FeedRepository,
+        user_repo: UserRepository | None = None,
     ):
         self._subscription_repo = subscription_repo
         self._feed_repo = feed_repo
+        self._user_repo = user_repo
 
     async def execute(
         self,
@@ -92,6 +95,11 @@ class ImportSubscriptionsCommand:
                 success=False,
                 message="没有找到有效的订阅记录",
             )
+
+        normalized_user_id = str(user_id or "").strip()
+        if self._user_repo is not None and normalized_user_id:
+            await self._user_repo.get_or_create(normalized_user_id)
+            user_id = normalized_user_id
 
         items: list[ImportItemResult] = []
         success_count = 0

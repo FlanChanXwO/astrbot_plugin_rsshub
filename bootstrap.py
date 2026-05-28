@@ -308,6 +308,7 @@ def _build_dependencies(
             feed_repo=feed_repo,
             fetch_settings=app_settings.fetch,
             fetcher_factory=RSSFeedFetcher,
+            user_repo=user_repo,
         ),
         unsubscribe_cmd=UnsubscribeFeedCommand(
             subscription_repo=sub_repo,
@@ -326,6 +327,7 @@ def _build_dependencies(
         import_cmd=ImportSubscriptionsCommand(
             subscription_repo=sub_repo,
             feed_repo=feed_repo,
+            user_repo=user_repo,
         ),
         get_user_settings_cmd=GetUserSettingsCommand(user_repo=user_repo),
         set_user_settings_cmd=SetUserSettingsCommand(user_repo=user_repo),
@@ -401,6 +403,7 @@ def _register_web_api(
         sub_repo=deps["subscription_repo"],
         user_repo=get_user_repository(),
         push_history_repo=get_push_history_repository(),
+        notification_dispatcher=deps["notification_dispatcher"],
         route_knowledge_service=deps["route_knowledge_service"],
         config=config,
         raw_config=raw_config,

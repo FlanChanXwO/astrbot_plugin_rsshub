@@ -94,3 +94,15 @@ class FeedRepository(Protocol):
             Feed对象列表
         """
         ...
+
+    async def delete_many(self, feed_ids: list[int]) -> int:
+        """
+        批量删除 Feed。
+
+        Args:
+            feed_ids: Feed ID 列表
+
+        Returns:
+            实际删除的 Feed 数量
+        """
+        ...

@@ -56,6 +56,14 @@ from ..infrastructure.utils import get_plugin_cache_dir, get_plugin_export_dir
 
 PLUGIN_NAME = "astrbot_plugin_rsshub"
 USER_ID_REQUIRED_ERROR = "user_id 不能为空"
+SUGGESTION_DEFAULT_LIMIT = 10
+SUGGESTION_MAX_LIMIT = 20
+SUGGESTION_SCOPES: dict[str, set[str]] = {
+    "subscriptions": {"user_id", "feed_id", "feed_link", "sub_id", "keyword"},
+    "users": {"user_id", "keyword"},
+    "feeds": {"feed_id", "keyword"},
+    "push-history": {"feed_link", "keyword"},
+}
 
 
 class WebApiHandler:
@@ -123,6 +131,7 @@ class WebApiHandler:
             ("GET", "/subscriptions", self.handle_list_subscriptions, "列出所有订阅"),
             ("GET", "/users", self.handle_users, "列出所有用户"),
             ("GET", "/feeds", self.handle_feeds, "列出所有 Feed"),
+            ("GET", "/suggestions", self.handle_suggestions, "Dashboard 智能补全"),
             ("POST", "/subscribe", self.handle_subscribe, "订阅 RSS"),
             ("POST", "/unsubscribe", self.handle_unsubscribe, "取消订阅"),
             (
@@ -634,6 +643,263 @@ class WebApiHandler:
                 }
             )
         return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_suggestions(self):
+        """为 Dashboard 筛选输入提供轻量补全建议。"""
+        scope = str(request.args.get("scope", "") or "").strip()
+        field = str(request.args.get("field", "") or "").strip()
+        query = str(request.args.get("q", "") or "").strip()
+        limit = _coerce_suggestion_limit(request.args.get("limit"))
+
+        if scope not in SUGGESTION_SCOPES:
+            return jsonify({"ok": False, "error": f"不支持的补全范围: {scope}"})
+        if field not in SUGGESTION_SCOPES[scope]:
+            return jsonify({"ok": False, "error": f"不支持的补全字段: {field}"})
+
+        items: list[dict[str, Any]] = []
+        if scope == "subscriptions":
+            items = await self._subscription_suggestions(field, query, limit)
+        elif scope == "users":
+            items = await self._user_suggestions(field, query, limit)
+        elif scope == "feeds":
+            items = await self._feed_suggestions(field, query, limit)
+        elif scope == "push-history":
+            items = await self._push_history_suggestions(field, query, limit)
+
+        return jsonify({"ok": True, "items": items})
+
+    async def _subscription_suggestions(
+        self, field: str, query: str, limit: int
+    ) -> list[dict[str, Any]]:
+        subs = await self._sub_repo.list_for_dashboard()
+        feed_ids = sorted({int(s.feed_id) for s in subs if int(s.feed_id or 0) > 0})
+        feeds = await self._get_feeds_by_ids(feed_ids)
+        suggestions: list[dict[str, Any]] = []
+        for sub in subs:
+            feed = feeds.get(int(sub.feed_id or 0))
+            if field == "user_id":
+                suggestions.append(
+                    _suggestion(
+                        value=getattr(sub, "user_id", ""),
+                        label=getattr(sub, "user_id", ""),
+                        kind="用户",
+                        meta=_compact_meta(
+                            subscription_id=getattr(sub, "id", None),
+                            feed_title=getattr(feed, "title", "") if feed else "",
+                        ),
+                    )
+                )
+            elif field == "feed_id":
+                suggestions.append(
+                    _suggestion(
+                        value=getattr(sub, "feed_id", ""),
+                        label=f"#{getattr(sub, 'feed_id', '')}",
+                        kind="Feed",
+                        meta=_compact_meta(
+                            feed_title=getattr(feed, "title", "") if feed else "",
+                            feed_link=getattr(feed, "link", "") if feed else "",
+                        ),
+                    )
+                )
+            elif field == "feed_link" and feed:
+                suggestions.append(
+                    _suggestion(
+                        value=getattr(feed, "link", ""),
+                        label=getattr(feed, "title", "") or getattr(feed, "link", ""),
+                        kind="Feed URL",
+                        meta=_compact_meta(feed_link=getattr(feed, "link", "")),
+                    )
+                )
+            elif field == "sub_id":
+                suggestions.append(
+                    _suggestion(
+                        value=getattr(sub, "id", ""),
+                        label=f"订阅 #{getattr(sub, 'id', '')}",
+                        kind="订阅",
+                        meta=_compact_meta(
+                            user_id=getattr(sub, "user_id", ""),
+                            feed_title=getattr(feed, "title", "") if feed else "",
+                        ),
+                    )
+                )
+            elif field == "keyword":
+                suggestions.extend(
+                    [
+                        _suggestion(
+                            value=getattr(sub, "title", ""),
+                            label=getattr(sub, "title", ""),
+                            kind="订阅标题",
+                            meta=_compact_meta(
+                                subscription_id=getattr(sub, "id", None)
+                            ),
+                        ),
+                        _suggestion(
+                            value=getattr(sub, "tags", ""),
+                            label=getattr(sub, "tags", ""),
+                            kind="标签",
+                            meta=_compact_meta(
+                                subscription_id=getattr(sub, "id", None)
+                            ),
+                        ),
+                    ]
+                )
+                if feed:
+                    suggestions.extend(
+                        [
+                            _suggestion(
+                                value=getattr(feed, "title", ""),
+                                label=getattr(feed, "title", ""),
+                                kind="Feed 标题",
+                                meta=_compact_meta(feed_link=getattr(feed, "link", "")),
+                            ),
+                            _suggestion(
+                                value=getattr(feed, "link", ""),
+                                label=getattr(feed, "link", ""),
+                                kind="Feed URL",
+                                meta=_compact_meta(
+                                    feed_title=getattr(feed, "title", "")
+                                ),
+                            ),
+                        ]
+                    )
+        return _filter_suggestions(suggestions, query=query, limit=limit)
+
+    async def _user_suggestions(
+        self, field: str, query: str, limit: int
+    ) -> list[dict[str, Any]]:
+        users = await self._user_repo.get_all()
+        suggestions: list[dict[str, Any]] = []
+        for user in users:
+            user_id = getattr(user, "id", "")
+            suggestions.append(
+                _suggestion(
+                    value=user_id,
+                    label=user_id,
+                    kind="用户",
+                    meta=_compact_meta(
+                        default_target_session=getattr(
+                            user, "default_target_session", None
+                        )
+                    ),
+                )
+            )
+            if field == "keyword":
+                suggestions.append(
+                    _suggestion(
+                        value=getattr(user, "default_target_session", ""),
+                        label=getattr(user, "default_target_session", ""),
+                        kind="默认目标",
+                        meta=_compact_meta(user_id=user_id),
+                    )
+                )
+        return _filter_suggestions(suggestions, query=query, limit=limit)
+
+    async def _feed_suggestions(
+        self, field: str, query: str, limit: int
+    ) -> list[dict[str, Any]]:
+        feeds = await self._feed_repo.get_all()
+        suggestions: list[dict[str, Any]] = []
+        for feed in feeds:
+            if field == "feed_id":
+                suggestions.append(
+                    _suggestion(
+                        value=getattr(feed, "id", ""),
+                        label=f"#{getattr(feed, 'id', '')}",
+                        kind="Feed",
+                        meta=_compact_meta(
+                            feed_title=getattr(feed, "title", ""),
+                            feed_link=getattr(feed, "link", ""),
+                        ),
+                    )
+                )
+                continue
+            suggestions.extend(
+                [
+                    _suggestion(
+                        value=getattr(feed, "title", ""),
+                        label=getattr(feed, "title", ""),
+                        kind="Feed 标题",
+                        meta=_compact_meta(feed_id=getattr(feed, "id", None)),
+                    ),
+                    _suggestion(
+                        value=getattr(feed, "link", ""),
+                        label=getattr(feed, "link", ""),
+                        kind="Feed URL",
+                        meta=_compact_meta(
+                            feed_id=getattr(feed, "id", None),
+                            feed_title=getattr(feed, "title", ""),
+                        ),
+                    ),
+                ]
+            )
+        return _filter_suggestions(suggestions, query=query, limit=limit)
+
+    async def _push_history_suggestions(
+        self, field: str, query: str, limit: int
+    ) -> list[dict[str, Any]]:
+        histories = await self._push_history_repo.get_all(
+            limit=limit,
+            keywords=[query] if query else None,
+        )
+        suggestions: list[dict[str, Any]] = []
+        for history in histories:
+            if field == "feed_link":
+                suggestions.append(
+                    _suggestion(
+                        value=getattr(history, "feed_link", ""),
+                        label=getattr(history, "feed_title", "")
+                        or getattr(history, "feed_link", ""),
+                        kind="Feed URL",
+                        meta=_compact_meta(
+                            feed_link=getattr(history, "feed_link", ""),
+                            user_id=getattr(history, "user_id", ""),
+                        ),
+                    )
+                )
+                continue
+            suggestions.extend(
+                [
+                    _suggestion(
+                        value=getattr(history, "entry_title", ""),
+                        label=getattr(history, "entry_title", ""),
+                        kind="条目标题",
+                        meta=_compact_meta(history_id=getattr(history, "id", None)),
+                    ),
+                    _suggestion(
+                        value=getattr(history, "feed_title", ""),
+                        label=getattr(history, "feed_title", ""),
+                        kind="Feed 标题",
+                        meta=_compact_meta(feed_link=getattr(history, "feed_link", "")),
+                    ),
+                    _suggestion(
+                        value=getattr(history, "feed_link", ""),
+                        label=getattr(history, "feed_link", ""),
+                        kind="Feed URL",
+                        meta=_compact_meta(
+                            feed_title=getattr(history, "feed_title", "")
+                        ),
+                    ),
+                ]
+            )
+        return _filter_suggestions(suggestions, query=query, limit=limit)
+
+    async def _get_feeds_by_ids(self, feed_ids: list[int]) -> dict[int, Any]:
+        feeds: dict[int, Any] = {}
+        if not feed_ids:
+            return feeds
+        try:
+            for feed in await self._feed_repo.get_by_ids(feed_ids):
+                feed_id = int(getattr(feed, "id", 0) or 0)
+                if feed_id > 0:
+                    feeds[feed_id] = feed
+            return feeds
+        except AttributeError:
+            pass
+        for feed_id in feed_ids:
+            feed = await self._feed_repo.get_by_id(feed_id)
+            if feed:
+                feeds[feed_id] = feed
+        return feeds
 
     async def handle_delete_feeds(self):
         """删除 Feed，并级联删除对应订阅。"""
@@ -1683,6 +1949,71 @@ def _coerce_int_values(raw_values: Any) -> list[int]:
                 continue
             values.append(parsed_value)
     return list(dict.fromkeys(values))
+
+
+def _coerce_suggestion_limit(raw: Any) -> int:
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        limit = SUGGESTION_DEFAULT_LIMIT
+    return max(1, min(SUGGESTION_MAX_LIMIT, limit))
+
+
+def _suggestion(
+    *,
+    value: Any,
+    label: Any,
+    kind: str,
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_value = str(value or "").strip()
+    return {
+        "value": normalized_value,
+        "label": str(label or normalized_value).strip(),
+        "kind": kind,
+        "meta": meta or {},
+    }
+
+
+def _compact_meta(**kwargs: Any) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in kwargs.items()
+        if value is not None and str(value).strip()
+    }
+
+
+def _filter_suggestions(
+    suggestions: list[dict[str, Any]],
+    *,
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    normalized_query = query.casefold()
+    seen_values: set[str] = set()
+    items: list[dict[str, Any]] = []
+    for suggestion in suggestions:
+        value = str(suggestion.get("value") or "").strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen_values:
+            continue
+        haystack = " ".join(
+            [
+                value,
+                str(suggestion.get("label") or ""),
+                str(suggestion.get("kind") or ""),
+                " ".join(str(item) for item in (suggestion.get("meta") or {}).values()),
+            ]
+        ).casefold()
+        if normalized_query and normalized_query not in haystack:
+            continue
+        seen_values.add(key)
+        items.append(suggestion)
+        if len(items) >= limit:
+            break
+    return items
 
 
 def _ensure_directory(path: Path) -> Path:

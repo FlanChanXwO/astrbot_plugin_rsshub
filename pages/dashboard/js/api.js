@@ -149,6 +149,13 @@ export async function getFeeds(filters = {}) {
   return { items: r.items || [], total: r.total || 0 };
 }
 
+export async function getSuggestions(scope, field, q = '', limit = 10) {
+  const params = { scope, field, limit };
+  setTextParam(params, 'q', q);
+  const r = await apiGet('suggestions', params);
+  return { items: r.items || [] };
+}
+
 export async function unsubscribe(subId, userId, deletePushHistory = false) {
   const payload = { sub_id: subId };
   if (userId) payload.user_id = userId;

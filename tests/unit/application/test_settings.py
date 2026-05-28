@@ -442,6 +442,47 @@ def test_sender_strategies_parse_platform_strategy_objects_without_breaking_enab
     assert config.sender_strategies.aiocqhttp_settings.prefer_local_video is False
 
 
+def test_sender_strategies_keep_onebot_local_video_unset_when_not_configured():
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        RsshubPluginConfig,
+        build_application_settings,
+    )
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {
+            "sender_strategies": {
+                "enabled_platforms": ["aiocqhttp"],
+                "platform_strategies": [
+                    {
+                        "__template_key": "onebot_strategy",
+                    }
+                ],
+            }
+        }
+    )
+    settings = build_application_settings(config)
+
+    assert config.sender_strategies.aiocqhttp_settings.prefer_local_video is None
+    assert settings.sender_strategies.aiocqhttp_settings.prefer_local_video is None
+
+
+def test_sender_strategies_prefer_qq_official_config_over_boolean_flag():
+    from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {
+            "sender_strategies": {
+                "enabled_platforms": ["qq_official"],
+                "qq_official": True,
+                "qq_official_config": {"markdown_mode": "force"},
+            }
+        }
+    )
+
+    assert config.sender_strategies.qq_official is True
+    assert config.sender_strategies.qq_official_settings.markdown_mode == "force"
+
+
 def test_sender_strategies_parse_unified_template_list_and_use_first_item_per_type():
     from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
 
@@ -464,6 +505,14 @@ def test_sender_strategies_parse_unified_template_list_and_use_first_item_per_ty
                         "__template_key": "onebot_strategy",
                         "prefer_local_video": True,
                     },
+                    {
+                        "__template_key": "qq_official_strategy",
+                        "markdown_mode": "force",
+                    },
+                    {
+                        "__template_key": "qq_official_strategy",
+                        "markdown_mode": "plain",
+                    },
                 ],
             }
         }
@@ -472,6 +521,7 @@ def test_sender_strategies_parse_unified_template_list_and_use_first_item_per_ty
     assert config.sender_strategies.telegram_settings.enable_telegraph is True
     assert config.sender_strategies.telegram_settings.telegraph_token == "first-token"
     assert config.sender_strategies.aiocqhttp_settings.prefer_local_video is True
+    assert config.sender_strategies.qq_official_settings.markdown_mode == "force"
 
 
 def test_config_save_writes_non_default_sender_strategy_to_unified_template_list():
@@ -492,7 +542,11 @@ def test_config_save_writes_non_default_sender_strategy_to_unified_template_list
                         "__template_key": "telegram_strategy",
                         "enable_telegraph": True,
                         "telegraph_token": "token-1",
-                    }
+                    },
+                    {
+                        "__template_key": "qq_official_strategy",
+                        "markdown_mode": "force",
+                    },
                 ],
             }
         }
@@ -506,8 +560,59 @@ def test_config_save_writes_non_default_sender_strategy_to_unified_template_list
             "__template_key": "telegram_strategy",
             "enable_telegraph": True,
             "telegraph_token": "token-1",
-        }
+        },
+        {
+            "__template_key": "qq_official_strategy",
+            "markdown_mode": "force",
+        },
     ]
+
+
+def test_config_save_ignores_default_qq_official_markdown_strategy():
+    from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
+
+    class FakeAstrBotConfig(dict):
+        def save_config(self):
+            pass
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {
+            "sender_strategies": {
+                "enabled_platforms": ["qq_official"],
+                "platform_strategies": [
+                    {
+                        "__template_key": "qq_official_strategy",
+                        "markdown_mode": "auto",
+                    }
+                ],
+            }
+        }
+    )
+    astrbot_config = FakeAstrBotConfig()
+
+    config.save(astrbot_config)
+
+    assert astrbot_config["sender_strategies"]["platform_strategies"] == []
+
+
+def test_config_resets_invalid_qq_official_markdown_mode():
+    from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {
+            "sender_strategies": {
+                "enabled_platforms": ["qq_official"],
+                "platform_strategies": [
+                    {
+                        "__template_key": "qq_official_strategy",
+                        "markdown_mode": "bad",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert config.sender_strategies.qq_official_settings.markdown_mode == "auto"
 
 
 def test_config_save_ignores_telegram_onebot_only_strategy_fields():
@@ -585,6 +690,10 @@ def test_application_settings_maps_unified_sender_strategy_templates():
                         "telegraph_token": "telegram-token",
                     },
                     {
+                        "__template_key": "qq_official_strategy",
+                        "markdown_mode": "plain",
+                    },
+                    {
                         "__template_key": "telegram_strategy",
                         "enable_telegraph": False,
                         "telegraph_token": "ignored-token",
@@ -601,6 +710,26 @@ def test_application_settings_maps_unified_sender_strategy_templates():
     assert settings.sender_strategies.aiocqhttp_settings.enable_telegraph is False
     assert settings.sender_strategies.aiocqhttp_settings.telegraph_token == ""
     assert settings.sender_strategies.aiocqhttp_settings.prefer_local_video is True
+    assert settings.sender_strategies.qq_official_settings.markdown_mode == "plain"
+
+
+def test_application_settings_prefer_qq_official_settings_over_boolean_flag():
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        build_application_settings,
+    )
+
+    settings = build_application_settings(
+        {
+            "sender_strategies": {
+                "enabled_platforms": ["qq_official"],
+                "qq_official": True,
+                "qq_official_settings": {"markdown_mode": "plain"},
+            }
+        }
+    )
+
+    assert settings.sender_strategies.qq_official is True
+    assert settings.sender_strategies.qq_official_settings.markdown_mode == "plain"
 
 
 def test_application_settings_maps_ffmpeg_config():

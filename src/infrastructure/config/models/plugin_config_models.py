@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, Field
 
-from ....shared.constants import MEDIA_DOWNLOAD_TIMEOUT_SECONDS
 from .sender_strategy_models import SenderStrategiesConfig
 
 if TYPE_CHECKING:
     from astrbot.api import AstrBotConfig
+
+_DEFAULT_MEDIA_TIMEOUT_SECONDS = 300
 
 
 class BasicConfig(BaseModel):
@@ -50,7 +51,10 @@ class BasicConfig(BaseModel):
         default=True,
         description="兼容旧配置；运行时始终先下载媒体后发送",
     )
-    download_media_timeout: int = Field(default=30, description="媒体下载超时")
+    download_media_timeout: int = Field(
+        default=_DEFAULT_MEDIA_TIMEOUT_SECONDS,
+        description="媒体下载超时",
+    )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> BasicConfig:
@@ -189,7 +193,7 @@ class MediaConfig(BaseModel):
     """兼容旧配置；新配置请使用 HttpConfig.media_timeout。"""
 
     download_media_timeout: int = Field(
-        default=MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+        default=_DEFAULT_MEDIA_TIMEOUT_SECONDS,
         description="媒体下载超时",
     )
 
@@ -206,7 +210,7 @@ class HttpConfig(BaseModel):
     proxy: str = Field(default="", description="代理地址")
     timeout: int = Field(default=30, description="请求超时（秒）")
     media_timeout: int = Field(
-        default=MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+        default=_DEFAULT_MEDIA_TIMEOUT_SECONDS,
         description="媒体下载超时（秒）",
     )
 

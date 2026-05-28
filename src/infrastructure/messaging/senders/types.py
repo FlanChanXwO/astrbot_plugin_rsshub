@@ -14,6 +14,22 @@ from ....domain.entities.content_types import LayoutFragment
 
 
 @dataclass
+class MediaVariant:
+    """同一媒体的可发送变体。
+
+    variant 表示生成来源，例如 original、gif、compressed_gif、transcoded。
+    media_type 表示交给平台组件时的目标类型：image / video / audio / file。
+    """
+
+    variant: str
+    media_type: str
+    path: Path
+    mime: str = ""
+    suffix: str = ""
+    size_bytes: int = 0
+
+
+@dataclass
 class PreparedMedia:
     """预处理后的媒体文件信息"""
 
@@ -21,6 +37,43 @@ class PreparedMedia:
     original_url: str
     local_path: Path | None = None
     download_failed: bool = False
+    detected_mime: str = ""
+    detected_suffix: str = ""
+    detection_source: str = ""
+    generated: bool = False
+    variants: list[MediaVariant] = field(default_factory=list)
+
+    def add_variant(self, variant: MediaVariant) -> None:
+        """追加未重复的本地媒体变体。"""
+        if any(
+            existing.variant == variant.variant and existing.path == variant.path
+            for existing in self.variants
+        ):
+            return
+        self.variants.append(variant)
+
+    def ensure_primary_variant(self) -> None:
+        """把旧字段 local_path 归一到 variants，兼容旧调用方。"""
+        if self.local_path is None:
+            return
+        if any(existing.path == self.local_path for existing in self.variants):
+            return
+        suffix = self.detected_suffix or self.local_path.suffix.lower()
+        size = 0
+        try:
+            size = self.local_path.stat().st_size
+        except OSError:
+            pass
+        self.add_variant(
+            MediaVariant(
+                variant="primary",
+                media_type=self.media_type,
+                path=self.local_path,
+                mime=self.detected_mime,
+                suffix=suffix,
+                size_bytes=size,
+            )
+        )
 
 
 @dataclass

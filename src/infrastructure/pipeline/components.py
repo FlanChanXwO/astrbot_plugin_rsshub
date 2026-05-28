@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from ...domain.entities.content_types import is_generated_media_url
+
 if TYPE_CHECKING:
     from ..messaging.senders.types import PreparedMedia
 
@@ -22,6 +24,7 @@ class MessageComponent:
     file: str = ""
     original_url: str = ""
     name: str = ""
+    fallback_text: str = ""
 
 
 class MessageComponentSorter:
@@ -133,6 +136,11 @@ class MessageComponentSorter:
         failed = list(failed_urls or [])
         if prepared_media:
             for item in prepared_media:
-                if item.download_failed and item.original_url not in failed:
+                if (
+                    item.download_failed
+                    and item.original_url not in failed
+                    and not item.generated
+                    and not is_generated_media_url(item.original_url)
+                ):
                     failed.append(item.original_url)
         return failed

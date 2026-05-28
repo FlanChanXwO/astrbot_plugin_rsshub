@@ -11,18 +11,47 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import aiohttp
 
 from astrbot.core.utils.http_ssl import build_tls_connector
 
+from ...shared.constants import GIF_COMPRESS_TARGET_MAX_BYTES
 from ..utils import get_plugin_cache_dir
 from ..utils.ffmpeg_helper import FFmpegTool
 from ..utils.logger import get_logger
 from ..utils.media_integrity import validate_media_file
+from ..utils.media_type_detector import (
+    MEDIA_TYPE_SUFFIXES,
+    detect_media_bytes,
+    detect_media_file,
+    detect_media_hint,
+    guess_suffix_from_url,
+    suffix_from_content_type,
+    suffix_from_file_header,
+    suffix_from_query,
+)
 
 logger = get_logger()
+
+_MEDIA_FORMAT_SUFFIXES = MEDIA_TYPE_SUFFIXES
+_MEDIA_REQUEST_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_DIAGNOSTIC_RESPONSE_HEADERS: tuple[str, ...] = (
+    "server",
+    "cf-ray",
+    "cf-cache-status",
+    "content-type",
+    "content-length",
+)
 
 
 class MediaDownloader:
@@ -72,39 +101,32 @@ class MediaDownloader:
         self._cache_gc_last_run = 0.0
 
     @staticmethod
+    def _suffix_from_format_value(value: str) -> str:
+        media_format = (
+            unquote(str(value or "")).strip().lower().lstrip(".").split("&", 1)[0]
+        )
+        return _MEDIA_FORMAT_SUFFIXES.get(media_format, "")
+
+    @staticmethod
+    def _suffix_from_query(url: str) -> str:
+        return suffix_from_query(url)
+
+    @staticmethod
+    def _suffix_from_content_type(content_type: str | None) -> str:
+        return suffix_from_content_type(content_type)
+
+    @staticmethod
+    def _suffix_from_bytes(data: bytes) -> str:
+        detection = detect_media_bytes(data)
+        return "" if detection.suffix == ".bin" else detection.suffix
+
+    @staticmethod
+    def _suffix_from_file_header(path: Path) -> str:
+        return suffix_from_file_header(path)
+
+    @staticmethod
     def _guess_suffix(url: str) -> str:
-        lowered = url.lower()
-        if ".m3u8" in lowered:
-            return ".m3u8"
-        if ".jpg" in lowered or ".jpeg" in lowered:
-            return ".jpg"
-        if ".png" in lowered:
-            return ".png"
-        if ".gif" in lowered:
-            return ".gif"
-        if ".webp" in lowered:
-            return ".webp"
-        if ".mp4" in lowered:
-            return ".mp4"
-        if ".webm" in lowered:
-            return ".webm"
-        if ".mov" in lowered:
-            return ".mov"
-        if ".mkv" in lowered:
-            return ".mkv"
-        if ".avi" in lowered:
-            return ".avi"
-        if ".mp3" in lowered:
-            return ".mp3"
-        if ".ogg" in lowered:
-            return ".ogg"
-        if ".wav" in lowered:
-            return ".wav"
-        if ".m4a" in lowered:
-            return ".m4a"
-        if ".aac" in lowered:
-            return ".aac"
-        return ".bin"
+        return guess_suffix_from_url(url)
 
     @staticmethod
     def _expand_download_candidates(url: str) -> list[str]:
@@ -119,6 +141,15 @@ class MediaDownloader:
         except Exception:
             pass
         return candidates
+
+    @staticmethod
+    def _diagnostic_headers(resp: aiohttp.ClientResponse) -> str:
+        parts = []
+        for header in _DIAGNOSTIC_RESPONSE_HEADERS:
+            value = resp.headers.get(header)
+            if value:
+                parts.append(f"{header}={value}")
+        return ", ".join(parts)
 
     async def download_to_temp(
         self,
@@ -153,23 +184,35 @@ class MediaDownloader:
                     async with session.get(
                         candidate_url,
                         proxy=proxy or None,
+                        headers=_MEDIA_REQUEST_HEADERS,
                         allow_redirects=True,
                         max_redirects=10,
                     ) as resp:
                         if resp.status >= 400:
+                            diagnostics = self._diagnostic_headers(resp)
+                            header_detail = (
+                                f", headers=({diagnostics})" if diagnostics else ""
+                            )
                             raise RuntimeError(
                                 f"download failed: status={resp.status}, "
-                                f"url={candidate_url}"
+                                f"url={candidate_url}{header_detail}"
                             )
                         data = await resp.read()
                         if not data:
                             raise RuntimeError(
                                 f"download failed: empty response, url={candidate_url}"
                             )
+                        detection = detect_media_bytes(data)
+                        if detection.suffix == ".bin":
+                            detection = detect_media_hint(
+                                url=candidate_url,
+                                content_type=resp.headers.get("Content-Type"),
+                            )
+                        suffix = detection.suffix or ".bin"
 
                     fd, tmp_name = tempfile.mkstemp(
                         prefix="rsshub_media_",
-                        suffix=self._guess_suffix(candidate_url),
+                        suffix=suffix,
                     )
                     try:
                         with os.fdopen(fd, "wb") as fp:
@@ -382,41 +425,46 @@ class MediaDownloader:
         url: str,
         *,
         media_type: str | None,
+        warning_label: str = "Media cache validation failed",
     ) -> Path | None:
-        cached = self._read_cache(url)
+        async with self._cache_io_lock:
+            cached = self._read_cache(url)
         if cached is None:
             return None
 
+        validation_type = self._validation_type_for_path(cached, media_type)
         validation = await validate_media_file(
             cached,
-            media_type=media_type,
+            media_type=validation_type,
             timeout_seconds=10,
         )
         if validation.ok:
             return cached
 
         logger.warning(
-            "Media cache validation failed, removing cache: url=%s, path=%s, detail=%s",
+            "%s, removing cache: url=%s, path=%s, detail=%s",
+            warning_label,
             url,
             cached,
             validation.detail,
         )
-        self._delete_cache_entry(url)
+        async with self._cache_io_lock:
+            latest = self._read_cache(url)
+            if latest == cached:
+                self._delete_cache_entry(url)
         return None
 
     @staticmethod
     def _validation_type_for_path(path: Path, media_type: str | None) -> str | None:
-        if str(media_type or "").strip().lower() != "video":
-            return media_type
-        if path.suffix.lower() == ".gif":
-            return "image"
+        detected_type = detect_media_file(path).media_type
+        if detected_type in {"image", "video", "audio"}:
+            return detected_type
         return media_type
 
     def _write_cache(self, url: str, source: Path) -> Path:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        actual_suffix = (
-            source.suffix.lower() if source.suffix else self._guess_suffix(url)
-        )
+        detection = detect_media_file(source)
+        actual_suffix = detection.suffix or ".bin"
         cache_path = self._cache_file_path(url, suffix=actual_suffix)
         meta_path = self._cache_meta_path(url)
         cache_path.write_bytes(source.read_bytes())
@@ -434,6 +482,28 @@ class MediaDownloader:
             expire_ts,
         )
         return cache_path
+
+    def _normalize_detected_suffix(self, source: Path) -> Path:
+        current_suffix = source.suffix.lower()
+        detection = detect_media_file(source)
+        detected_suffix = detection.suffix
+        if current_suffix and current_suffix == detected_suffix:
+            return source
+        if not detected_suffix or detected_suffix == ".bin":
+            return source
+
+        fd, tmp_name = tempfile.mkstemp(
+            prefix="rsshub_media_detected_",
+            suffix=detected_suffix,
+        )
+        os.close(fd)
+        normalized = Path(tmp_name)
+        try:
+            normalized.write_bytes(source.read_bytes())
+        except Exception:
+            normalized.unlink(missing_ok=True)
+            raise
+        return normalized
 
     async def _download_m3u8_to_cache(
         self,
@@ -459,15 +529,14 @@ class MediaDownloader:
 
         cache_url = f"{url}#mp4"
 
-        async with self._cache_io_lock:
-            cached = await self._read_valid_cache(cache_url, media_type="video")
-            if cached is not None:
-                logger.debug(
-                    "Media cache return existing m3u8: url=%s, path=%s",
-                    cache_url,
-                    cached,
-                )
-                return cached
+        cached = await self._read_valid_cache(cache_url, media_type="video")
+        if cached is not None:
+            logger.debug(
+                "Media cache return existing m3u8: url=%s, path=%s",
+                cache_url,
+                cached,
+            )
+            return cached
 
         cache_digest = self._cache_file_prefix(cache_url)
         cache_path = self._cache_dir / f"{cache_digest}.mp4"
@@ -564,50 +633,27 @@ class MediaDownloader:
         """
         await self._run_periodic_cache_gc()
 
-        is_m3u8 = self._guess_suffix(url) == ".m3u8"
+        media_hint = detect_media_hint(url=url, declared_media_type=media_type)
+        is_m3u8 = media_hint.suffix == ".m3u8"
         if is_m3u8:
             return await self._download_m3u8_to_cache(
                 url=url, proxy=proxy, m3u8_timeout=m3u8_timeout
             )
 
-        is_video = self._guess_suffix(url) in {
-            ".mp4",
-            ".webm",
-            ".mov",
-            ".mkv",
-            ".avi",
-        }
+        is_video = media_hint.media_type == "video"
 
         cache_url = url
         if try_convert_gif and is_video:
             cache_url = f"{url}#gif"
 
-        async with self._cache_io_lock:
-            cached = self._read_cache(cache_url)
-            if cached is not None:
-                validation_type = self._validation_type_for_path(cached, media_type)
-                validation = await validate_media_file(
-                    cached,
-                    media_type=validation_type,
-                    timeout_seconds=10,
-                )
-                if not validation.ok:
-                    logger.warning(
-                        "Media cache validation failed, removing cache: "
-                        "url=%s, path=%s, detail=%s",
-                        cache_url,
-                        cached,
-                        validation.detail,
-                    )
-                    self._delete_cache_entry(cache_url)
-                    cached = None
-            if cached is not None:
-                logger.debug(
-                    "Media cache return existing: url=%s, path=%s",
-                    cache_url,
-                    cached,
-                )
-                return cached
+        cached = await self._read_valid_cache(cache_url, media_type=media_type)
+        if cached is not None:
+            logger.debug(
+                "Media cache return existing: url=%s, path=%s",
+                cache_url,
+                cached,
+            )
+            return cached
 
         logger.debug(
             "Media cache download start: url=%s, timeout_seconds=%s, "
@@ -629,7 +675,8 @@ class MediaDownloader:
             tmp_path.exists(),
         )
 
-        converted_path = tmp_path
+        normalized_path = self._normalize_detected_suffix(tmp_path)
+        converted_path = normalized_path
         if try_convert_gif and is_video and tmp_path.exists():
             try:
                 has_audio = await FFmpegTool.has_audio_stream(
@@ -669,54 +716,207 @@ class MediaDownloader:
                 )
 
         try:
-            async with self._cache_io_lock:
-                cached = self._read_cache(cache_url)
-                if cached is not None:
-                    validation_type = self._validation_type_for_path(cached, media_type)
-                    validation = await validate_media_file(
-                        cached,
-                        media_type=validation_type,
-                        timeout_seconds=10,
-                    )
-                    if not validation.ok:
-                        logger.warning(
-                            "Media cache peer write validation failed, "
-                            "removing cache: url=%s, path=%s, detail=%s",
-                            cache_url,
-                            cached,
-                            validation.detail,
-                        )
-                        self._delete_cache_entry(cache_url)
-                        cached = None
-                if cached is not None:
-                    logger.debug(
-                        "Media cache filled by peer task: url=%s, path=%s",
-                        cache_url,
-                        cached,
-                    )
-                    return cached
-                validation_type = (
-                    "image" if converted_path.suffix.lower() == ".gif" else media_type
-                )
-                validation = await validate_media_file(
-                    converted_path,
-                    media_type=validation_type,
-                    timeout_seconds=10,
-                )
-                if not validation.ok:
-                    raise RuntimeError(
-                        f"media validation failed before cache: url={url}, "
-                        f"detail={validation.detail}"
-                    )
-                written = self._write_cache(cache_url, converted_path)
+            cached = await self._read_valid_cache(
+                cache_url,
+                media_type=media_type,
+                warning_label="Media cache peer write validation failed",
+            )
+            if cached is not None:
                 logger.debug(
-                    "Media cache return new write: url=%s, path=%s",
+                    "Media cache filled by peer task: url=%s, path=%s",
                     cache_url,
-                    written,
+                    cached,
                 )
-                return written
+                return cached
+
+            validation_type = (
+                "image" if converted_path.suffix.lower() == ".gif" else media_type
+            )
+            validation = await validate_media_file(
+                converted_path,
+                media_type=validation_type,
+                timeout_seconds=10,
+            )
+            if not validation.ok:
+                raise RuntimeError(
+                    f"media validation failed before cache: url={url}, "
+                    f"detail={validation.detail}"
+                )
+
+            async with self._cache_io_lock:
+                written = self._write_cache(cache_url, converted_path)
+            logger.debug(
+                "Media cache return new write: url=%s, path=%s",
+                cache_url,
+                written,
+            )
+            return written
         finally:
-            if converted_path != tmp_path:
-                self.safe_unlink(tmp_path)
-            if converted_path == tmp_path:
-                self.safe_unlink(converted_path)
+            cleanup_paths: list[Path] = []
+            for path in (converted_path, normalized_path, tmp_path):
+                if path not in cleanup_paths:
+                    cleanup_paths.append(path)
+            for path in cleanup_paths:
+                self.safe_unlink(path)
+
+    async def get_or_download_prepared(
+        self,
+        *,
+        url: str,
+        timeout_seconds: int = 30,
+        proxy: str = "",
+        media_type: str | None = None,
+        try_convert_gif: bool = False,
+        gif_transcode_timeout: int = 60,
+        m3u8_timeout: int = 120,
+    ):
+        """下载媒体并返回 PreparedMedia，保留原始视频与 GIF 变体。"""
+        from ..messaging.senders.types import MediaVariant, PreparedMedia
+
+        local_path = await self.get_or_download(
+            url=url,
+            timeout_seconds=timeout_seconds,
+            proxy=proxy,
+            media_type=media_type,
+            try_convert_gif=False,
+            gif_transcode_timeout=gif_transcode_timeout,
+            m3u8_timeout=m3u8_timeout,
+        )
+        detection = detect_media_file(local_path)
+        effective_type = (
+            detection.media_type
+            if detection.media_type in {"image", "video", "audio"}
+            else (media_type or "file")
+        )
+        prepared = PreparedMedia(
+            media_type=effective_type,
+            original_url=url,
+            local_path=local_path,
+            detected_mime=detection.mime,
+            detected_suffix=detection.suffix,
+            detection_source=detection.source,
+        )
+        prepared.add_variant(
+            MediaVariant(
+                variant="original" if effective_type == "video" else "primary",
+                media_type=effective_type,
+                path=local_path,
+                mime=detection.mime,
+                suffix=detection.suffix,
+                size_bytes=self._safe_size(local_path),
+            )
+        )
+
+        if try_convert_gif and effective_type == "video" and local_path.exists():
+            await self._append_gif_variants(
+                prepared,
+                local_path=local_path,
+                timeout_seconds=gif_transcode_timeout,
+            )
+            gif_variant = next(
+                (
+                    variant
+                    for variant in prepared.variants
+                    if variant.variant in {"gif", "compressed_gif"}
+                ),
+                None,
+            )
+            if gif_variant is not None:
+                prepared.local_path = gif_variant.path
+                prepared.media_type = "image"
+                prepared.detected_mime = gif_variant.mime
+                prepared.detected_suffix = gif_variant.suffix
+                prepared.detection_source = "gif_variant"
+        return prepared
+
+    async def _append_gif_variants(
+        self,
+        prepared,
+        *,
+        local_path: Path,
+        timeout_seconds: int,
+    ) -> None:
+        from ..messaging.senders.types import MediaVariant
+
+        try:
+            has_audio = await FFmpegTool.has_audio_stream(
+                local_path,
+                timeout_seconds=10,
+                auto_install_ffmpeg=True,
+            )
+            if has_audio:
+                return
+            gif_path = await FFmpegTool.transcode_to_gif(
+                local_path,
+                timeout_seconds=timeout_seconds,
+                auto_install_ffmpeg=True,
+            )
+            if (
+                gif_path
+                and gif_path.exists()
+                and await self._is_valid_gif_variant(gif_path)
+            ):
+                detection = detect_media_file(gif_path)
+                prepared.add_variant(
+                    MediaVariant(
+                        variant="gif",
+                        media_type="image",
+                        path=gif_path,
+                        mime=detection.mime,
+                        suffix=detection.suffix or ".gif",
+                        size_bytes=self._safe_size(gif_path),
+                    )
+                )
+            gif_size = self._safe_size(gif_path) if gif_path else 0
+            if gif_size > GIF_COMPRESS_TARGET_MAX_BYTES:
+                compressed_path = await FFmpegTool.transcode_to_gif_under_limit(
+                    local_path,
+                    max_bytes=GIF_COMPRESS_TARGET_MAX_BYTES,
+                    timeout_seconds=timeout_seconds,
+                    auto_install_ffmpeg=True,
+                )
+                if (
+                    compressed_path
+                    and compressed_path.exists()
+                    and await self._is_valid_gif_variant(compressed_path)
+                ):
+                    detection = detect_media_file(compressed_path)
+                    prepared.add_variant(
+                        MediaVariant(
+                            variant="compressed_gif",
+                            media_type="image",
+                            path=compressed_path,
+                            mime=detection.mime,
+                            suffix=detection.suffix or ".gif",
+                            size_bytes=self._safe_size(compressed_path),
+                        )
+                    )
+        except Exception as ex:
+            logger.warning(
+                "GIF variant generation failed, keeping original video: url=%s, err=%s",
+                prepared.original_url,
+                ex,
+            )
+
+    @staticmethod
+    async def _is_valid_gif_variant(path: Path) -> bool:
+        validation = await validate_media_file(
+            path,
+            media_type="image",
+            timeout_seconds=10,
+        )
+        if validation.ok:
+            return True
+        logger.warning(
+            "GIF variant validation failed, skip variant: path=%s, detail=%s",
+            path,
+            validation.detail,
+        )
+        return False
+
+    @staticmethod
+    def _safe_size(path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0

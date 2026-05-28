@@ -6,12 +6,11 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...shared.constants import MEDIA_MIN_VALID_BYTES
 from .ffmpeg_helper import FFmpegTool
 from .logger import get_logger
 
 logger = get_logger()
-_MIN_VALID_BYTES = MEDIA_MIN_VALID_BYTES
+_MIN_VALID_BYTES = 1
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
@@ -42,7 +41,7 @@ class MediaValidationResult:
     detail: str = ""
 
 
-def configure_media_integrity(*, min_valid_bytes: int = MEDIA_MIN_VALID_BYTES) -> None:
+def configure_media_integrity(*, min_valid_bytes: int = 1) -> None:
     """Configure runtime media integrity thresholds."""
     global _MIN_VALID_BYTES
     _MIN_VALID_BYTES = max(1, int(min_valid_bytes))

@@ -23,12 +23,7 @@
 - QQ Official Markdown 配置暂时保留为兼容入口，但主动推送临时统一纯文本，避免 Markdown 原文在 QQ 官方平台直接暴露。
 - 媒体缓存 GC、媒体完整性阈值和平台降级策略收口为内置常量，不再作为用户配置项暴露。
 - 旧 `basic_config.proxy`、`basic_config.timeout`、`media_config.download_media_timeout` 和 `m3u8_download_timeout` 会在启动配置自愈时迁移到 `http_config`。
-- Plugin Pages 推送历史手动重试不再新增历史行，而是复用原记录保存的文本、媒体 URL、目标会话和来源信息重发，并覆盖原记录的状态、失败原因与更新时间。
-- 优化帮助图片样式，更加自然好看
-- `/rsshelp` 帮助图改为按 AstrBot 时区或本机时间自动选择 light/dark 版本；帮助图片生成脚本默认同时输出 `rsshelp_light.png` 与 `rsshelp_dark.png`。
-- 帮助图片生成模板切换为外部字体与主题 CSS，移除旧的单文件 `rsshelp.png` 产物。
-- Plugin Pages 多值筛选改为标签式输入，筛选条件变化时自动刷新列表，不再依赖「应用筛选」按钮。
-- 项目维护文档重新拆分为 `docs/dev/` 与 `docs/project/`，精简 `AGENTS.md` / `CLAUDE.md` 入口规则。
+- 表格图片渲染从 `infrastructure.media` 归位到 `infrastructure.rendering`，媒体包只保留下载、指纹和发送前媒体处理职责。
 
 ### Fixed
 
@@ -36,19 +31,7 @@
 - 修复坏媒体文件可能进入成功缓存的问题；命中缓存和写入缓存前都会做基础完整性校验，坏缓存会被删除并触发重新下载。
 - 修复 m3u8/HLS 合并输出校验不足的问题；FFmpeg 输出必须通过视频流与时长校验后才会写入成功缓存。
 - 修复 QQ Official 单图+文本合发失败时可能静默丢失媒体的问题；失败会按内置策略优先文件降级，并在结果/文本中保留可见的原始媒体链接。
-- 修复 QQ Official 单个小视频被误判为文件发送的回归风险；真实预下载入口和原始顺序排版都会先尝试视频组件。
-- 修复 QQ Official 多媒体默认被阈值策略提前降级为文件的问题；默认阈值改为不按数量预降级。
-- 修复 Twitter/PBS 这类 `?format=jpg` 无扩展名图片被缓存为 `.bin` 后校验失败的问题；下载器现在会从本地文件头、`filetype`、包装 URL、内层 URL 和响应 `Content-Type` 推断真实媒体后缀。
-- 修复媒体类型过度依赖 URL 扩展名的问题；发送前会以预下载后的本地文件探测结果修正 image/video/audio 类型。
-- 修复 Plugin Pages 推送历史跳转相关订阅时使用历史 `sub_id` 导致 ID 复用后误筛订阅的问题；现在改为按历史保存的 Feed 链接和用户精确定位。
-- 改进 QQ Official 发送失败诊断，失败详情会带上发送阶段前缀，媒体预处理日志也会标注下载/校验阶段。
-- 修复用户表为空但订阅/推送历史仍引用用户导致 Pages 删除用户语义异常的问题；删除用户现在会级联删除订阅，并可选清理历史。
-- 修复 Plugin Pages 订阅、Feed、用户和推送历史筛选参数未正确生效的问题，关键词搜索改为大小写不敏感并覆盖标题字段。
-- 修复 `/rsshelp` 命令入口把帮助图路径和 AstrBot 兼容逻辑堆在 `main.py` 的问题，入口现在委托到 `HelpImageCommand` 与 `astrbot_compat`。
-- 修复 `GreedyStr` 从 `astrbot.core.star.filter` 错误导入的问题，改为从 `astrbot.core.star.filter.command` 兼容导入。
-
-<details>
-<summary>历史更新记录</summary>
+- 修复表格图片缓存并发写入、original layout 占位文本、generated media 缺失时暴露内部标识，以及关闭媒体时表格正文丢失的问题。
 
 ## [2.0.2] - 2026-05-23
 

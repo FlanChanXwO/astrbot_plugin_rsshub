@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.star.star_tools import StarTools
 
+from ....domain.entities.content_types import is_generated_media_url
 from ....shared.constants import (
     ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
@@ -22,13 +24,20 @@ from ....shared.constants import (
 from ...pipeline import MessageComponent, MessageFormatter
 from ...utils import get_logger
 from ...utils.lock import locked
-from .types import MessageContext, PreparedMedia, SendRequest, SendResult
+from ...utils.media_type_detector import detect_media_file
+from .types import MediaVariant, MessageContext, PreparedMedia, SendRequest, SendResult
 
 if TYPE_CHECKING:
     pass
 
 logger = get_logger()
 MAX_SEND_ERROR_DETAIL_LENGTH = 512
+
+
+@dataclass
+class _MediaFallbackOutcome:
+    ok: bool
+    failures: list[SendResult]
 
 
 class DefaultMessageSender:
@@ -172,7 +181,8 @@ class DefaultMessageSender:
                 return transcoded_path
         except Exception as ex:
             logger.warning(
-                "Video transcode failed, using original media: path=%s, err=%s",
+                "prepare_transcode_video: Video transcode failed, using original "
+                "media: path=%s, err=%s",
                 media_path,
                 ex,
             )
@@ -188,6 +198,29 @@ class DefaultMessageSender:
         if MAX_SEND_ERROR_DETAIL_LENGTH <= 3:
             return text[:MAX_SEND_ERROR_DETAIL_LENGTH]
         return text[: MAX_SEND_ERROR_DETAIL_LENGTH - 3] + "..."
+
+    @classmethod
+    def _stage_error_detail(cls, stage: str, detail: str | None) -> str:
+        normalized_stage = str(stage or "").strip()
+        normalized_detail = str(detail or "").strip() or "send_failed"
+        if not normalized_stage:
+            return cls._normalize_error_detail(normalized_detail)
+        prefix = f"{normalized_stage}:"
+        if normalized_detail.startswith(prefix):
+            return cls._normalize_error_detail(normalized_detail)
+        return cls._normalize_error_detail(f"{prefix} {normalized_detail}")
+
+    @classmethod
+    def _result_with_stage(cls, result: SendResult, stage: str) -> SendResult:
+        if result.ok:
+            return result
+        return SendResult(
+            ok=False,
+            needs_rebind=result.needs_rebind,
+            transient=result.transient,
+            detail=cls._stage_error_detail(stage, result.detail),
+            http_status=result.http_status,
+        )
 
     async def prepare_media(
         self,
@@ -212,6 +245,11 @@ class DefaultMessageSender:
             if media_type not in {"image", "audio", "video", "file"}:
                 continue
 
+            if is_generated_media_url(media_url):
+                prepared.append(self._prepare_generated_media(media_type, media_url))
+                seen_urls.add(media_url)
+                continue
+
             if media_url in seen_urls:
                 prepared.append(
                     PreparedMedia(
@@ -224,24 +262,67 @@ class DefaultMessageSender:
             seen_urls.add(media_url)
 
             try:
+                try_convert_gif = media_type == "video" and self._should_transcode_gif()
+                if hasattr(downloader, "get_or_download_prepared"):
+                    prepared_item = await downloader.get_or_download_prepared(
+                        url=media_url,
+                        timeout_seconds=timeout,
+                        proxy=proxy,
+                        media_type=media_type,
+                        try_convert_gif=try_convert_gif,
+                        gif_transcode_timeout=self._get_gif_transcode_timeout(),
+                    )
+                    if media_type == "video" and prepared_item.local_path is not None:
+                        local_path = await self._maybe_transcode_video_to_mp4(
+                            prepared_item.local_path
+                        )
+                        if local_path != prepared_item.local_path:
+                            detection = detect_media_file(local_path)
+                            prepared_item.local_path = local_path
+                            prepared_item.media_type = detection.media_type or "video"
+                            prepared_item.detected_mime = detection.mime
+                            prepared_item.detected_suffix = detection.suffix
+                            prepared_item.detection_source = detection.source
+                            prepared_item.add_variant(
+                                MediaVariant(
+                                    variant="transcoded",
+                                    media_type=prepared_item.media_type,
+                                    path=local_path,
+                                    mime=detection.mime,
+                                    suffix=detection.suffix,
+                                    size_bytes=self._safe_file_size(local_path),
+                                )
+                            )
+                    prepared_item.ensure_primary_variant()
+                    prepared.append(prepared_item)
+                    continue
+
                 local_path = await downloader.get_or_download(
                     url=media_url,
                     timeout_seconds=timeout,
                     proxy=proxy,
                     media_type=media_type,
-                    try_convert_gif=media_type == "video"
-                    and self._should_transcode_gif(),
+                    try_convert_gif=try_convert_gif,
                     gif_transcode_timeout=self._get_gif_transcode_timeout(),
                 )
                 if media_type == "video":
                     local_path = await self._maybe_transcode_video_to_mp4(local_path)
-                prepared.append(
-                    PreparedMedia(
-                        media_type=media_type,
-                        original_url=media_url,
-                        local_path=local_path,
-                    )
+                detection = detect_media_file(local_path)
+                effective_media_type = (
+                    detection.media_type
+                    if detection.media_type in {"image", "video", "audio"}
+                    else media_type
                 )
+                prepared_item = PreparedMedia(
+                    media_type=effective_media_type,
+                    original_url=media_url,
+                    local_path=local_path,
+                    detected_mime=detection.mime,
+                    detected_suffix=detection.suffix,
+                    detection_source=detection.source,
+                )
+                prepared_item.ensure_primary_variant()
+                prepared.append(prepared_item)
             except Exception as ex:
                 prepared.append(
                     PreparedMedia(
@@ -251,13 +332,53 @@ class DefaultMessageSender:
                     )
                 )
                 logger.warning(
-                    "Prepare media failed: type=%s, url=%s, err=%s",
+                    "prepare_media: Prepare media failed: stage=download_or_validation, "
+                    "type=%s, url=%s, err=%s",
                     media_type,
                     media_url,
                     ex,
                 )
 
         return prepared
+
+    @staticmethod
+    def _prepare_generated_media(media_type: str, media_url: str) -> PreparedMedia:
+        """把插件本地生成媒体转成 PreparedMedia，不经过 HTTP 下载。"""
+        from ...rendering import resolve_table_image_path
+
+        local_path = resolve_table_image_path(media_url)
+        if local_path is None or not local_path.exists():
+            return PreparedMedia(
+                media_type=media_type,
+                original_url=media_url,
+                download_failed=True,
+                generated=True,
+            )
+
+        detection = detect_media_file(local_path)
+        effective_media_type = (
+            detection.media_type
+            if detection.media_type in {"image", "video", "audio"}
+            else media_type
+        )
+        prepared = PreparedMedia(
+            media_type=effective_media_type,
+            original_url=media_url,
+            local_path=local_path,
+            detected_mime=detection.mime,
+            detected_suffix=detection.suffix,
+            detection_source=detection.source,
+            generated=True,
+        )
+        prepared.ensure_primary_variant()
+        return prepared
+
+    @staticmethod
+    def _safe_file_size(path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
 
     @staticmethod
     def _is_transient_network_error(err: Exception) -> bool:
@@ -277,7 +398,11 @@ class DefaultMessageSender:
         prepared_media: list[PreparedMedia],
     ) -> list[str]:
         """从 PreparedMedia 中收集下载失败的 URL"""
-        return [item.original_url for item in prepared_media if item.download_failed]
+        return [
+            item.original_url
+            for item in prepared_media
+            if item.download_failed and not item.generated
+        ]
 
     async def _prepare_effective_media(
         self,
@@ -302,20 +427,26 @@ class DefaultMessageSender:
         *,
         failed_urls: list[str] | None = None,
         platform: str | None = None,
+        prefer_local_video: bool = True,
     ) -> list[MessageComponent]:
         effective_failed_urls = (
             list(failed_urls)
             if failed_urls is not None
             else self._collect_failed_urls(prepared_media or [])
         )
-        return self._formatter.build_components(
+        components = self._formatter.build_components(
             prepared_media=prepared_media,
-            text=request.message,
+            text=self._message_with_unavailable_generated_fallbacks(
+                request,
+                prepared_media,
+            ),
             failed_urls=effective_failed_urls,
             platform=platform
             if platform is not None
             else (context.platform_name if context else ""),
+            prefer_local_video=prefer_local_video,
         )
+        return self._attach_generated_fallbacks(components, request)
 
     @staticmethod
     def _is_media_component(component: MessageComponent) -> bool:
@@ -324,8 +455,250 @@ class DefaultMessageSender:
     def _component_to_chain(self, component: MessageComponent) -> list:
         return self._formatter._components_to_chain([component])
 
+    @staticmethod
+    def _candidate_to_component(candidate) -> MessageComponent:
+        if candidate.action == "file":
+            return MessageComponent(
+                kind="tail",
+                media_type="file",
+                file=candidate.file,
+                original_url=candidate.original_url,
+                name=candidate.name,
+            )
+        return MessageComponent(
+            kind="media",
+            media_type=candidate.media_type,
+            file=candidate.file,
+            original_url=candidate.original_url,
+            name=candidate.name,
+        )
+
+    def _component_to_file_candidate(self, component: MessageComponent):
+        from ..media_send_planner import SEND_ACTION_FILE, MediaSendCandidate
+
+        return MediaSendCandidate(
+            action=SEND_ACTION_FILE,
+            media_type="file",
+            file=component.file,
+            original_url=component.original_url,
+            name=component.name or Path(component.file).name or "attachment",
+            stage="send_file",
+        )
+
+    def _apply_first_send_candidates(
+        self,
+        components: list[MessageComponent],
+        prepared_media_by_url: dict[str, PreparedMedia] | None,
+        *,
+        platform: str,
+        prefer_local_video: bool = True,
+    ) -> list[MessageComponent]:
+        """发送前按平台策略把组件改写为第一个可发送候选。"""
+        if not prepared_media_by_url:
+            return components
+
+        from ..media_send_planner import MediaSendPlanner
+
+        rewritten: list[MessageComponent] = []
+        for component in components:
+            if component.kind != "media" or not component.original_url:
+                rewritten.append(component)
+                continue
+            prepared = prepared_media_by_url.get(component.original_url)
+            if prepared is None:
+                rewritten.append(component)
+                continue
+            first_candidate = next(
+                (
+                    candidate
+                    for candidate in MediaSendPlanner.candidates_for(
+                        prepared,
+                        platform=platform,
+                        prefer_local_video=prefer_local_video,
+                    )
+                    if candidate.action != "link"
+                ),
+                None,
+            )
+            if first_candidate is None:
+                rewritten.append(component)
+                continue
+            rewritten.append(
+                replace(
+                    self._candidate_to_component(first_candidate),
+                    fallback_text=component.fallback_text,
+                )
+            )
+        return rewritten
+
+    async def _send_media_candidate(
+        self,
+        session_id: str,
+        candidate,
+        *,
+        use_markdown: bool | None = None,
+    ) -> SendResult:
+        if candidate.action == "link":
+            return SendResult(ok=False, detail="link_candidate")
+        component = self._candidate_to_component(candidate)
+        chain = self._component_to_chain(component)
+        if not chain:
+            return SendResult(ok=False, detail="empty_candidate")
+        return await self._send_chain(session_id, chain, use_markdown=use_markdown)
+
+    async def _send_component_fallback_candidates(
+        self,
+        session_id: str,
+        component: MessageComponent,
+        *,
+        prepared_media_by_url: dict[str, PreparedMedia] | None = None,
+        platform: str | None = None,
+        prefer_local_video: bool = True,
+        skip_first_file: str = "",
+        use_markdown: bool | None = None,
+    ) -> _MediaFallbackOutcome:
+        """按平台候选链为一个失败媒体继续尝试兜底发送。"""
+        from ..media_send_planner import MediaSendPlanner
+
+        prepared = (
+            prepared_media_by_url.get(component.original_url)
+            if prepared_media_by_url and component.original_url
+            else None
+        )
+        if prepared is not None:
+            candidates = MediaSendPlanner.candidates_for(
+                prepared,
+                platform=platform,
+                prefer_local_video=prefer_local_video,
+            )
+        else:
+            candidates = [self._component_to_file_candidate(component)]
+
+        failures: list[SendResult] = []
+        for candidate in candidates:
+            if candidate.action == "link":
+                continue
+            if (
+                skip_first_file
+                and candidate.file == skip_first_file
+                and (
+                    (
+                        candidate.action == "media"
+                        and candidate.media_type == component.media_type
+                    )
+                    or (component.kind == "tail" and candidate.action == "file")
+                )
+            ):
+                continue
+            result = await self._send_media_candidate(
+                session_id,
+                candidate,
+                use_markdown=use_markdown,
+            )
+            if result.ok:
+                return _MediaFallbackOutcome(ok=True, failures=failures)
+            self._merge_send_failure(
+                failures,
+                result,
+                stage=candidate.stage or f"send_{candidate.action}",
+            )
+        return _MediaFallbackOutcome(ok=False, failures=failures)
+
     def _append_failed_links(self, text: str, failed_urls: list[str]) -> str:
         return self._formatter._append_failed_links(text, failed_urls)
+
+    @staticmethod
+    def _generated_fallbacks_by_url(request: SendRequest) -> dict[str, str]:
+        """收集 generated media 的纯文本降级；成功发图时不会展示。"""
+        fallbacks: dict[str, str] = {}
+        for fragment in request.layout or []:
+            url = str(fragment.url or "").strip()
+            fallback = str(getattr(fragment, "fallback_text", "") or "").strip()
+            if url and fallback and is_generated_media_url(url):
+                fallbacks.setdefault(url, fallback)
+        return fallbacks
+
+    @staticmethod
+    def _append_text_fallbacks(text: str, fallback_texts: list[str]) -> str:
+        base = str(text or "").strip()
+        parts = [base] if base else []
+        seen = {base} if base else set()
+        for fallback in fallback_texts:
+            normalized = str(fallback or "").strip()
+            if not normalized or normalized in seen or normalized in base:
+                continue
+            parts.append(normalized)
+            seen.add(normalized)
+        return "\n\n".join(parts)
+
+    def _message_with_unavailable_generated_fallbacks(
+        self,
+        request: SendRequest,
+        prepared_media: list[PreparedMedia] | None,
+    ) -> str:
+        fallback_by_url = self._generated_fallbacks_by_url(request)
+        if not fallback_by_url or not prepared_media:
+            return request.message
+
+        fallback_texts: list[str] = []
+        for item in prepared_media:
+            url = str(item.original_url or "").strip()
+            if not item.download_failed:
+                continue
+            if not (item.generated or is_generated_media_url(url)):
+                continue
+            fallback = fallback_by_url.get(url, "")
+            if fallback:
+                fallback_texts.append(fallback)
+        return self._append_text_fallbacks(request.message, fallback_texts)
+
+    def _message_with_all_generated_fallbacks(self, request: SendRequest) -> str:
+        return self._append_text_fallbacks(
+            request.message,
+            list(self._generated_fallbacks_by_url(request).values()),
+        )
+
+    def _attach_generated_fallbacks(
+        self,
+        components: list[MessageComponent],
+        request: SendRequest,
+    ) -> list[MessageComponent]:
+        fallback_by_url = self._generated_fallbacks_by_url(request)
+        if not fallback_by_url:
+            return components
+        attached: list[MessageComponent] = []
+        for component in components:
+            fallback = fallback_by_url.get(component.original_url, "")
+            if fallback and not component.fallback_text:
+                attached.append(replace(component, fallback_text=fallback))
+            else:
+                attached.append(component)
+        return attached
+
+    async def _retry_text_with_generated_fallbacks(
+        self,
+        request: SendRequest,
+        failed_result: SendResult,
+        *,
+        use_markdown: bool | None = None,
+    ) -> SendResult:
+        fallback_text = self._message_with_all_generated_fallbacks(request)
+        if (
+            not fallback_text
+            or fallback_text.strip() == str(request.message or "").strip()
+        ):
+            return failed_result
+
+        from astrbot.api.message_components import Plain
+
+        retry_result = await self._send_chain(
+            request.session_id,
+            [Plain(fallback_text)],
+            use_markdown=use_markdown,
+        )
+        if retry_result.ok:
+            return retry_result
+        return failed_result
 
     @staticmethod
     def _is_original_style(context: MessageContext | None) -> bool:
@@ -348,11 +721,18 @@ class DefaultMessageSender:
                     components.append(MessageComponent(kind="text", text=text))
                 continue
             if kind in {"image", "video", "audio", "file"} and fragment.url:
+                fallback_text = str(
+                    getattr(fragment, "fallback_text", "") or ""
+                ).strip()
                 info = MediaDispatchResolver.resolve_layout_fragment(
                     fragment,
                     prepared_media_by_url=prepared_media_by_url,
                 )
                 if not info.media_type:
+                    if fallback_text and is_generated_media_url(fragment.url):
+                        components.append(
+                            MessageComponent(kind="text", text=fallback_text)
+                        )
                     continue
                 components.append(
                     MessageComponent(
@@ -361,6 +741,7 @@ class DefaultMessageSender:
                         file=info.file,
                         original_url=info.original_url,
                         name=info.name,
+                        fallback_text=fallback_text,
                     )
                 )
         return components
@@ -374,15 +755,35 @@ class DefaultMessageSender:
         component: MessageComponent,
     ) -> None:
         url = str(component.original_url or "").strip()
+        if is_generated_media_url(url):
+            return
         if url and url not in failed_urls:
             failed_urls.append(url)
+
+    @staticmethod
+    def _record_failed_media_fallback(
+        failed_urls: list[str],
+        failed_fallbacks: list[str],
+        component: MessageComponent,
+    ) -> None:
+        url = str(component.original_url or "").strip()
+        fallback = str(component.fallback_text or "").strip()
+        if fallback and is_generated_media_url(url):
+            if fallback not in failed_fallbacks:
+                failed_fallbacks.append(fallback)
+            return
+        DefaultMessageSender._record_failed_url(failed_urls, component)
 
     @staticmethod
     def _merge_send_failure(
         failures: list[SendResult],
         result: SendResult,
+        *,
+        stage: str | None = None,
     ) -> None:
         if not result.ok:
+            if stage:
+                result = DefaultMessageSender._result_with_stage(result, stage)
             failures.append(result)
 
     def _partial_send_result(self, failures: list[SendResult]) -> SendResult:
@@ -406,6 +807,10 @@ class DefaultMessageSender:
         components: list[MessageComponent],
         *,
         default_text: str = "",
+        use_markdown: bool | None = None,
+        prepared_media_by_url: dict[str, PreparedMedia] | None = None,
+        platform: str | None = None,
+        prefer_local_video: bool = True,
     ) -> SendResult:
         media_components = [
             component for component in components if self._is_media_component(component)
@@ -415,29 +820,58 @@ class DefaultMessageSender:
         ]
 
         failed_urls: list[str] = []
+        failed_fallbacks: list[str] = []
         failures: list[SendResult] = []
 
         for component in media_components:
             chain = self._component_to_chain(component)
             if not chain:
                 continue
-            result = await self._send_chain(session_id, chain)
+            result = await self._send_chain(
+                session_id,
+                chain,
+                use_markdown=use_markdown,
+            )
             if not result.ok:
-                self._record_failed_url(failed_urls, component)
-                self._merge_send_failure(failures, result)
+                self._merge_send_failure(
+                    failures,
+                    result,
+                    stage=f"send_{component.media_type or component.kind}",
+                )
+                fallback = await self._send_component_fallback_candidates(
+                    session_id,
+                    component,
+                    prepared_media_by_url=prepared_media_by_url,
+                    platform=platform,
+                    prefer_local_video=prefer_local_video,
+                    skip_first_file=component.file,
+                    use_markdown=use_markdown,
+                )
+                failures.extend(fallback.failures)
+                if not fallback.ok:
+                    self._record_failed_media_fallback(
+                        failed_urls,
+                        failed_fallbacks,
+                        component,
+                    )
 
         text = "\n".join(
             component.text for component in text_components if component.text
         ).strip()
         if not text:
             text = default_text
+        text = self._append_text_fallbacks(text, failed_fallbacks)
         text = self._append_failed_links(text, failed_urls)
 
         if text:
             from astrbot.api.message_components import Plain
 
-            result = await self._send_chain(session_id, [Plain(text)])
-            self._merge_send_failure(failures, result)
+            result = await self._send_chain(
+                session_id,
+                [Plain(text)],
+                use_markdown=use_markdown,
+            )
+            self._merge_send_failure(failures, result, stage="send_text")
         elif not media_components:
             return SendResult(ok=False, detail="empty_message")
 
@@ -450,9 +884,14 @@ class DefaultMessageSender:
         *,
         combine_image_text: bool,
         default_text: str = "",
+        use_markdown: bool | None = None,
+        prepared_media_by_url: dict[str, PreparedMedia] | None = None,
+        platform: str | None = None,
+        prefer_local_video: bool = True,
     ) -> SendResult:
         failures: list[SendResult] = []
         failed_urls: list[str] = []
+        failed_fallbacks: list[str] = []
         pending_image: MessageComponent | None = None
         sent_any = False
 
@@ -462,11 +901,34 @@ class DefaultMessageSender:
             if not chain:
                 return
             sent_any = True
-            result = await self._send_chain(session_id, chain)
+            result = await self._send_chain(
+                session_id,
+                chain,
+                use_markdown=use_markdown,
+            )
             if not result.ok:
+                self._merge_send_failure(
+                    failures,
+                    result,
+                    stage=f"send_{component.media_type or component.kind}",
+                )
                 if self._is_media_component(component):
-                    self._record_failed_url(failed_urls, component)
-                self._merge_send_failure(failures, result)
+                    fallback = await self._send_component_fallback_candidates(
+                        session_id,
+                        component,
+                        prepared_media_by_url=prepared_media_by_url,
+                        platform=platform,
+                        prefer_local_video=prefer_local_video,
+                        skip_first_file=component.file,
+                        use_markdown=use_markdown,
+                    )
+                    failures.extend(fallback.failures)
+                    if not fallback.ok:
+                        self._record_failed_media_fallback(
+                            failed_urls,
+                            failed_fallbacks,
+                            component,
+                        )
 
         async def flush_pending_image() -> None:
             nonlocal pending_image
@@ -494,10 +956,33 @@ class DefaultMessageSender:
                 pending_image = None
                 if chain:
                     sent_any = True
-                    result = await self._send_chain(session_id, chain)
+                    result = await self._send_chain(
+                        session_id,
+                        chain,
+                        use_markdown=use_markdown,
+                    )
                     if not result.ok:
-                        self._record_failed_url(failed_urls, paired_image)
-                        self._merge_send_failure(failures, result)
+                        self._merge_send_failure(
+                            failures,
+                            result,
+                            stage="send_image_text",
+                        )
+                        fallback = await self._send_component_fallback_candidates(
+                            session_id,
+                            paired_image,
+                            prepared_media_by_url=prepared_media_by_url,
+                            platform=platform,
+                            prefer_local_video=prefer_local_video,
+                            skip_first_file=paired_image.file,
+                            use_markdown=use_markdown,
+                        )
+                        failures.extend(fallback.failures)
+                        if not fallback.ok:
+                            self._record_failed_media_fallback(
+                                failed_urls,
+                                failed_fallbacks,
+                                paired_image,
+                            )
                 continue
 
             await flush_pending_image()
@@ -507,16 +992,40 @@ class DefaultMessageSender:
         if not sent_any and default_text:
             from astrbot.api.message_components import Plain
 
-            result = await self._send_chain(session_id, [Plain(default_text)])
-            self._merge_send_failure(failures, result)
+            result = await self._send_chain(
+                session_id,
+                [Plain(default_text)],
+                use_markdown=use_markdown,
+            )
+            self._merge_send_failure(failures, result, stage="send_text")
         elif not sent_any:
             return SendResult(ok=False, detail="empty_message")
+
+        fallback_text = self._append_text_fallbacks("", failed_fallbacks)
+        fallback_text = self._append_failed_links(fallback_text, failed_urls)
+        if fallback_text:
+            from astrbot.api.message_components import Plain
+
+            result = await self._send_chain(
+                session_id,
+                [Plain(fallback_text)],
+                use_markdown=use_markdown,
+            )
+            self._merge_send_failure(failures, result, stage="send_text_fallback")
         return self._partial_send_result(failures)
 
     @locked("'global_web'")
-    async def _send_chain(self, session_id: str, chain: list) -> SendResult:
+    async def _send_chain(
+        self,
+        session_id: str,
+        chain: list,
+        *,
+        use_markdown: bool | None = None,
+    ) -> SendResult:
         """发送消息链（使用全局网络锁）"""
         message_chain = MessageChain(chain=chain)
+        if use_markdown is not None:
+            message_chain.use_markdown(use_markdown)
 
         try:
             sent = await StarTools.send_message(session_id, message_chain)
@@ -526,7 +1035,12 @@ class DefaultMessageSender:
             else:
                 logger.warning("Message send returned False: session=%s", session_id)
                 return SendResult(
-                    ok=False, needs_rebind=True, detail="platform_or_session"
+                    ok=False,
+                    needs_rebind=True,
+                    detail=self._stage_error_detail(
+                        "platform_send",
+                        "platform_or_session",
+                    ),
                 )
         except Exception as ex:
             logger.error(
@@ -538,7 +1052,7 @@ class DefaultMessageSender:
             return SendResult(
                 ok=False,
                 transient=True,
-                detail=self._normalize_error_detail(str(ex)),
+                detail=self._stage_error_detail("platform_send", str(ex)),
             )
 
     async def send_to_user(
@@ -562,7 +1076,10 @@ class DefaultMessageSender:
 
             chain = self._formatter.build_chain(
                 prepared_media=effective_prepared,
-                text=request.message,
+                text=self._message_with_unavailable_generated_fallbacks(
+                    request,
+                    effective_prepared,
+                ),
                 failed_urls=failed_urls,
                 platform=platform,
             )
@@ -570,7 +1087,10 @@ class DefaultMessageSender:
             if not chain:
                 return SendResult(ok=False, detail="empty_message")
 
-            return await self._send_chain(session_id, chain)
+            result = await self._send_chain(session_id, chain)
+            if result.ok:
+                return result
+            return await self._retry_text_with_generated_fallbacks(request, result)
 
         except Exception as err:
             logger.error(
@@ -579,7 +1099,7 @@ class DefaultMessageSender:
             return SendResult(
                 ok=False,
                 transient=self._is_transient_network_error(err),
-                detail=self._normalize_error_detail(str(err)),
+                detail=self._stage_error_detail("send_to_user", str(err)),
             )
 
     async def send_to_group(

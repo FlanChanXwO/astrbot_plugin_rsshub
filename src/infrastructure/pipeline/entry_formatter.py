@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ...application.services.html_parser import HTMLParser
+from ..utils import get_logger
+
+logger = get_logger()
 
 
 class EntryOutputFormat(str, Enum):
@@ -54,7 +57,14 @@ class EntryTextFormatter:
         output_format: EntryOutputFormat | str = EntryOutputFormat.PLAIN,
     ) -> str:
         options = options or EffectivePushOptions()
-        output_format = EntryOutputFormat(output_format)
+        try:
+            output_format = EntryOutputFormat(output_format)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid entry output format %r, fallback to plain",
+                output_format,
+            )
+            output_format = EntryOutputFormat.PLAIN
         body = await self.clean_text(entry.content or entry.summary or "")
         title = await self.clean_text(entry.title)
         author = await self.clean_text(entry.author)

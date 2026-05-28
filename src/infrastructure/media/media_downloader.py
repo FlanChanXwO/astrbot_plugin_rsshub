@@ -673,7 +673,8 @@ class MediaDownloader:
             tmp_path.exists(),
         )
 
-        converted_path = self._normalize_detected_suffix(tmp_path)
+        normalized_path = self._normalize_detected_suffix(tmp_path)
+        converted_path = normalized_path
         if try_convert_gif and is_video and tmp_path.exists():
             try:
                 has_audio = await FFmpegTool.has_audio_stream(
@@ -749,6 +750,9 @@ class MediaDownloader:
             )
             return written
         finally:
-            if converted_path != tmp_path:
-                self.safe_unlink(converted_path)
-            self.safe_unlink(tmp_path)
+            cleanup_paths: list[Path] = []
+            for path in (converted_path, normalized_path, tmp_path):
+                if path not in cleanup_paths:
+                    cleanup_paths.append(path)
+            for path in cleanup_paths:
+                self.safe_unlink(path)

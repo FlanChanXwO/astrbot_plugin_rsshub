@@ -8,6 +8,9 @@ from astrbot_plugin_rsshub.src.infrastructure.media.media_downloader import (
     MediaDownloader,
 )
 from astrbot_plugin_rsshub.src.infrastructure.utils.ffmpeg_helper import FFmpegTool
+from astrbot_plugin_rsshub.src.infrastructure.utils.media_integrity import (
+    MediaValidationResult,
+)
 
 _VALID_GIF = (
     b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00"
@@ -342,6 +345,62 @@ async def test_media_downloader_uses_declared_video_type_for_gif_cache_key(
 
     assert path.suffix == ".mp4"
     assert downloader._read_cache("https://example.com/media/opaque#gif") == path
+
+
+@pytest.mark.asyncio
+async def test_media_downloader_cleans_normalized_temp_when_gif_replaces_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_download(self, **kwargs):
+        path = tmp_path / "source"
+        path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+        return path
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_transcode_to_gif(*_args, **_kwargs):
+        gif_path = tmp_path / "converted.gif"
+        gif_path.write_bytes(_VALID_GIF)
+        return gif_path
+
+    async def fake_validate_media_file(*_args, **_kwargs):
+        return MediaValidationResult(True)
+
+    unlinked: list[Path] = []
+    original_safe_unlink = MediaDownloader.safe_unlink
+
+    def record_unlink(path: Path | None) -> None:
+        if path is not None:
+            unlinked.append(path)
+        original_safe_unlink(path)
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "transcode_to_gif", fake_transcode_to_gif)
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.media.media_downloader.validate_media_file",
+        fake_validate_media_file,
+    )
+    monkeypatch.setattr(
+        MediaDownloader,
+        "safe_unlink",
+        staticmethod(record_unlink),
+    )
+
+    path = await MediaDownloader(cache_dir=tmp_path).get_or_download(
+        url="https://example.com/media/opaque",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    normalized_paths = [
+        item for item in unlinked if item.name.startswith("rsshub_media_detected_")
+    ]
+    assert path.suffix == ".gif"
+    assert normalized_paths
+    assert all(not item.exists() for item in normalized_paths)
 
 
 @pytest.mark.asyncio

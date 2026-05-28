@@ -221,6 +221,25 @@ async def test_entry_text_formatter_can_render_lightweight_markdown():
 
 
 @pytest.mark.asyncio
+async def test_entry_text_formatter_invalid_output_format_falls_back_to_plain():
+    formatter = EntryTextFormatter()
+
+    text = await formatter.format_entry(
+        EntryFormatInput(
+            title="Title",
+            content="Body",
+            link="https://example.com/post",
+            feed_title="Feed",
+        ),
+        EffectivePushOptions(),
+        output_format="bad-format",
+    )
+
+    assert text.startswith("Title\n\nBody")
+    assert "via https://example.com/post | Feed" in text
+
+
+@pytest.mark.asyncio
 async def test_entry_text_formatter_omits_empty_via_suffix():
     formatter = EntryTextFormatter()
 

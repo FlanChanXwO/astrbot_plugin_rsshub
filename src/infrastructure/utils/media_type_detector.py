@@ -78,6 +78,10 @@ MEDIA_MIME_PREFIXES = {
     "audio/": "audio",
 }
 
+FTYP_AUDIO_BRANDS = {b"M4A ", b"M4B ", b"M4P ", b"mp4a"}
+FTYP_QUICKTIME_BRANDS = {b"qt  "}
+FTYP_MP4_BRANDS = {b"avc1", b"dash", b"iso2", b"isom", b"mp41", b"mp42", b"MSNV"}
+
 
 @dataclass(frozen=True)
 class MediaTypeDetection:
@@ -137,6 +141,13 @@ def suffix_from_bytes(data: bytes) -> str:
     if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return ".webp"
     if len(data) >= 12 and data[4:8] == b"ftyp":
+        major_brand = data[8:12]
+        if major_brand in FTYP_AUDIO_BRANDS:
+            return ".m4a"
+        if major_brand in FTYP_QUICKTIME_BRANDS:
+            return ".mov"
+        if major_brand in FTYP_MP4_BRANDS:
+            return ".mp4"
         return ".mp4"
     return ""
 

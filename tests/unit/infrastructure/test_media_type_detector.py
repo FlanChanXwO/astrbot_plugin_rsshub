@@ -30,6 +30,28 @@ def test_detect_media_file_uses_header_for_mp4_without_suffix(tmp_path: Path):
     assert detection.source in {"filetype", "header"}
 
 
+def test_detect_media_file_distinguishes_m4a_ftyp_brand(tmp_path: Path):
+    path = tmp_path / "opaque"
+    path.write_bytes(b"\x00\x00\x00\x18ftypM4A " + (b"\x00" * 300))
+
+    detection = detect_media_file(path)
+
+    assert detection.media_type == "audio"
+    assert detection.suffix == ".m4a"
+    assert detection.source in {"filetype", "header"}
+
+
+def test_detect_media_file_distinguishes_quicktime_ftyp_brand(tmp_path: Path):
+    path = tmp_path / "opaque"
+    path.write_bytes(b"\x00\x00\x00\x18ftypqt  " + (b"\x00" * 300))
+
+    detection = detect_media_file(path)
+
+    assert detection.media_type == "video"
+    assert detection.suffix == ".mov"
+    assert detection.source in {"filetype", "header"}
+
+
 def test_detect_media_hint_prefers_content_type_over_url():
     detection = detect_media_hint(
         url="https://example.com/not-real.jpg",

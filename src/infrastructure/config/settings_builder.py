@@ -146,12 +146,12 @@ def _build_sender_strategy_settings(value: Any) -> SenderStrategySettings:
     )
     if not isinstance(qq_official_source, dict):
         qq_official_source = _first_template_item(
-            _get_value(value, "qq_official", None)
+            _get_value(value, "qq_official_settings", None)
+            or _get_value(value, "qq_official_config", None)
         )
     if not isinstance(qq_official_source, dict):
         qq_official_source = _first_template_item(
-            _get_value(value, "qq_official_settings", None)
-            or _get_value(value, "qq_official_config", None)
+            _get_value(value, "qq_official", None)
         )
     markdown_mode = str(
         _get_value(

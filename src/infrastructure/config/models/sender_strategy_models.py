@@ -130,9 +130,18 @@ class SenderStrategiesConfig(BaseModel):
                 _PLATFORM_STRATEGY_TEMPLATE_KEYS["qq_official"],
             )
             if qq_official_source is None:
-                qq_official_source = data.get("qq_official") or data.get(
-                    "qq_official_config"
-                )
+                qq_official_value = data.get("qq_official")
+                qq_official_config = data.get("qq_official_config")
+                if isinstance(qq_official_value, dict):
+                    qq_official_source = qq_official_value
+                elif isinstance(qq_official_config, dict):
+                    qq_official_source = qq_official_config
+                else:
+                    qq_official_source = (
+                        qq_official_value
+                        if qq_official_value is not None
+                        else qq_official_config
+                    )
             return cls.model_validate(
                 {
                     **known_values,

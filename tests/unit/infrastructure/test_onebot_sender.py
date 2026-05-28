@@ -304,7 +304,7 @@ async def test_onebot_sender_explicit_prefer_local_video_false_uses_original_url
     sender = OneBotMessageSender()
     calls: list[tuple[str, list]] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **_kwargs):
         calls.append((session_id, chain))
         return SendResult(ok=True)
 
@@ -354,7 +354,7 @@ async def test_onebot_sender_ignores_telegraph_strategy(monkeypatch):
     sender = OneBotMessageSender()
     calls: list[tuple[str, list]] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **_kwargs):
         calls.append((session_id, chain))
         return SendResult(ok=True)
 
@@ -479,7 +479,7 @@ async def test_onebot_merged_forward_uses_image_for_gif(monkeypatch):
     sender = OneBotMessageSender()
     calls: list[tuple[str, list]] = []
 
-    async def fake_send_chain(session_id: str, chain: list):
+    async def fake_send_chain(session_id: str, chain: list, **_kwargs):
         calls.append((session_id, chain))
         return SendResult(ok=True)
 

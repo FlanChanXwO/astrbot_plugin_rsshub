@@ -213,6 +213,8 @@ Telegraph 不是显式 `send_mode`。它只会在 Telegram sender 自动策略�
 
 QQ Official 的 Markdown 配置会保留并继续通过 AstrBot core 的 `MessageChain.use_markdown_` 作为唯一接入点，不会手写 botpy payload。由于当前主动推送链路可能在普通 payload 中泄露 Markdown 原文，插件侧临时统一生成纯文本并显式关闭 QQ Official Markdown；待 AstrBot core 对主动推送的消息级 Markdown 行为稳定后再恢复三态策略。Telegram 文本推送会生成轻量 Markdown 内容，并交给 AstrBot Telegram adapter 的 Plain 文本 MarkdownV2 转换路径；媒体 caption 是否使用 Markdown 取决于 AstrBot adapter，本插件不额外承诺。
 
+QQ Official 未公开稳定的媒体上传大小上限；插件按项目实测把图片、GIF 和视频媒体组件上传软阈值统一设为 10 MiB，文件链路不套用这个媒体阈值。该值只用于发送前候选分流和降级判断，不代表官方公布限制。
+
 发送前会先下载媒体到本地成功缓存，再根据本地文件头/`filetype` 探测结果修正图片、视频、音频类型，然后生成平台无关消息组件并由排序器统一整理顺序；下载失败不会写入失败缓存，下一次推送会重新尝试。OneBot 经典排版按合并转发发送；原始顺序排版会按 RSS/HTML 解析出的布局片段逐条发送，适合 AI 日报这类多图长文。OneBot 默认使用本地视频文件，`prefer_local_video=false` 仅作为兼容覆盖项。
 
 ## 📝 使用方法

@@ -44,12 +44,12 @@
 | --- | ---: | ---: | ---: | ---: | --- | --- |
 | Telegram Bot API | `sendPhoto` 上传最大 10 MiB；HTTP URL photo 约 5 MiB | `sendAnimation` 最大 50 MiB | `sendVideo` 最大 50 MiB | `sendDocument` 最大 50 MiB | GIF 不走 photo，优先 animation；大静态图超 10 MiB 后按文件发送。 | Telegram 官方 Bot API 明确区分 photo、animation、video、document；Local Bot API Server 是例外，不作为默认阈值。 |
 | QQ 客户端 / OneBot 逆向实现参考 | NapCat 图片/GIF 未查到公开硬阈值；普通客户端大图也可能按文件链路发送 | NapCat GIF 未查到公开硬阈值；QQ 自定义表情和普通图片发送限制不是同一条链路 | NapCat 文档写视频 100 MiB，超过建议走群文件 | 离线文件单文件 4 GiB；非会员离线流量 2 GiB/天；在线直传、群文件和 NTQQ 实现会受客户端、账号、群空间和风控影响 | OneBot 可以把 QQ 用户文件能力作为 fallback 参考：媒体消息发不出时优先改走文件链路，而不是直接判失败。 | OneBot 是 QQ 协议逆向/适配层，实际能力接近 QQ 客户端链路，但每个实现接入的上传 API 不同。本文默认以 NapCat 表现评估 OneBot 风险；go-cqhttp 的图片 30 MiB、GIF 300 帧只保留为旧实现资料。 |
-| QQ Official | 官方未公开稳定上限；插件暂定单图 20 MiB | 官方未公开稳定上限；插件暂定 GIF 10 MiB | 官方未公开稳定上限；插件暂定视频 100 MiB | `file_type=4` 历史上有“不开放”口径，当前能力需实测 | 图片按 20 MiB 软上限评估；GIF 按 10 MiB 软上限评估；视频按 100 MiB 软上限评估；遇到 413/业务码保留原始错误并降级。 | QQ Bot OpenAPI 文档未给出图片/GIF/视频统一大小上限；`413 Request Entity Too Large` 更像上传网关限制。 |
+| QQ Official | 官方未公开稳定上限；插件按实测 10 MiB 软阈值处理 | 官方未公开稳定上限；插件按实测 10 MiB 软阈值处理 | 官方未公开稳定上限；插件按实测 10 MiB 软阈值处理 | `file_type=4` 历史上有“不开放”口径，当前能力需实测 | 除文件外，图片/GIF/视频媒体组件上传统一按 10 MiB 软上限评估；遇到 413/业务码保留原始错误并降级。 | QQ Bot OpenAPI 文档未给出图片/GIF/视频统一大小上限；10 MiB 来自 2026-05-29 项目实测，不是官方公布值。 |
 | Weixin OC / 微信系 | 企业微信临时素材 image 常见 10 MiB；普通会话大图可能转文件 | 普通企业微信会话 GIF 超 5 MiB 常转文件；API 图片素材通常不承诺 GIF | 企业微信临时素材 video 10 MiB | 企业微信临时素材 file 20 MiB | Weixin OC 保持逐条发送，不尝试复杂图文合链；超限由平台错误和降级文本暴露。 | 微信入口差异很大：企业微信应用消息、临时素材、普通会话、公众号素材不是同一套限制。 |
 
 这些数值统一按“软阈值”管理，只用于发送前分流、日志解释和降级判断，不应让正常可发送媒体被静默丢弃。软阈值不能被当作平台硬限制，也不能在数据层截断、丢弃或提前判定推送失败；真实发送失败仍应暴露平台错误，并进入可观测的降级链路。新增硬拒绝前必须有平台文档、稳定实测或用户配置作为依据。
 
-软阈值集中由 `src/shared/constants.py` 归口，发送候选链路由 `MediaSendPlanner` 统一消费，不要散落在具体 sender 或文档表格里复制多份。当前固定口径包括：Telegram photo 默认 10 MiB 后改按文件发送、OneBot 默认优先本地视频、QQ Official 默认不按媒体数量预先降级。QQ Official 表格里的 20 MiB / 10 MiB / 100 MiB 是 2026-05-27 的调查与实测参考，不是平台硬门槛。
+软阈值集中由 `src/shared/constants.py` 归口，发送候选链路由 `MediaSendPlanner` 统一消费，不要散落在具体 sender 或文档表格里复制多份。当前固定口径包括：Telegram photo 默认 10 MiB 后改按文件发送、OneBot 默认优先本地视频、QQ Official 默认不按媒体数量预先降级。QQ Official 表格里的 10 MiB 是 2026-05-29 的项目实测参考，不是平台官方硬门槛。
 
 ## 媒体下载与缓存
 

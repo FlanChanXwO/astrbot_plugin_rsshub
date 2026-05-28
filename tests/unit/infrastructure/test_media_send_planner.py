@@ -14,6 +14,8 @@ from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
 )
 from astrbot_plugin_rsshub.src.shared.constants import (
     QQ_OFFICIAL_GIF_MAX_BYTES,
+    QQ_OFFICIAL_IMAGE_MAX_BYTES,
+    QQ_OFFICIAL_NON_FILE_MEDIA_MAX_BYTES,
     QQ_OFFICIAL_VIDEO_MAX_BYTES,
     WEIXIN_GIF_MAX_BYTES,
 )
@@ -22,6 +24,13 @@ from astrbot_plugin_rsshub.src.shared.constants import (
 def _touch(path: Path, size: int) -> Path:
     path.write_bytes(b"x" * size)
     return path
+
+
+def test_qq_official_non_file_media_share_measured_limit():
+    assert QQ_OFFICIAL_NON_FILE_MEDIA_MAX_BYTES == 10 * 1024 * 1024
+    assert QQ_OFFICIAL_IMAGE_MAX_BYTES == QQ_OFFICIAL_NON_FILE_MEDIA_MAX_BYTES
+    assert QQ_OFFICIAL_GIF_MAX_BYTES == QQ_OFFICIAL_NON_FILE_MEDIA_MAX_BYTES
+    assert QQ_OFFICIAL_VIDEO_MAX_BYTES == QQ_OFFICIAL_NON_FILE_MEDIA_MAX_BYTES
 
 
 def test_qq_official_gif_uses_compressed_then_original_video(tmp_path: Path):

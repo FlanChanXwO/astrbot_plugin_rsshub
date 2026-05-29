@@ -83,8 +83,9 @@
 
 | 配置 | 作用范围 | 备注 |
 | --- | --- | --- |
-| `http_config.proxy` | 媒体预下载和 FFmpeg 下载 | 这是全局 HTTP 代理来源，不存在 content 级代理配置。 |
+| `http_config.proxy` | 媒体预下载、FFmpeg 下载和 Telegram Telegraph API | 这是全局 HTTP/SOCKS 代理来源，不存在 content 级代理配置。 |
 | 裸 `host:port` 代理 | 标准化为 `http://host:port` | 避免不同 HTTP 客户端对无 scheme 值表现不一致。 |
+| SOCKS 代理 | `socks4://` / `socks5://` / `socks5h://` | Telegraph API 通过 `aiohttp-socks` 连接；SOCKS 代理必须带明确 scheme。 |
 | `http_config.media_timeout` | 媒体预下载和 FFmpeg 下载超时 | 上限和默认值属于配置模型 / schema 约束。 |
 
 ## 常量放置

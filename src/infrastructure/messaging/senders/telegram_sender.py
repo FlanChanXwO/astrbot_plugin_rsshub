@@ -171,6 +171,7 @@ class TelegramMessageSender(DefaultMessageSender):
         client = TelegraphClient(
             access_token=token,
             timeout_seconds=self._get_timeout_seconds(),
+            proxy=self._get_proxy(),
         )
         page_title = (
             str(getattr(context, "entry_title", "") or "").strip() if context else ""

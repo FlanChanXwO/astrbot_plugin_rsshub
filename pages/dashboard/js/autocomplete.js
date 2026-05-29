@@ -46,6 +46,18 @@ export function createAutocompleteMethods(getSuggestions) {
       );
     },
 
+    isTagFilterPanelOpen(groupName, fieldName) {
+      const field = this[groupName]?.[fieldName];
+      if (!this.isTagFilterField(groupName, fieldName)) return false;
+      if (this.autocomplete.openKey !== this.autocompleteKey(groupName, fieldName)) return false;
+      return (
+        field.values.length > 0 ||
+        this.autocomplete.loading ||
+        this.autocomplete.items.length > 0 ||
+        Boolean(String(field.input || '').trim())
+      );
+    },
+
     autocompleteItems(groupName, fieldName) {
       return this.isAutocompleteOpen(groupName, fieldName)
         ? this.autocomplete.items

@@ -20,8 +20,8 @@ from .src.infrastructure.config import ApplicationSettings
 from .src.infrastructure.schedule import RSSScheduler
 from .src.infrastructure.utils import get_logger
 from .src.interfaces import WebApiHandler
-from .src.interfaces.astrbot_compat import GreedyStr, all_message_event_filter
 from .src.interfaces import handlers as _h
+from .src.interfaces.astrbot_compat import GreedyStr, all_message_event_filter
 
 logger = get_logger()
 

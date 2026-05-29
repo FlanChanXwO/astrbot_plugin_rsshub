@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 try:
     from astrbot.core.star.filter.command import GreedyStr
 except Exception:  # pragma: no cover - 旧测试桩或旧 AstrBot 环境

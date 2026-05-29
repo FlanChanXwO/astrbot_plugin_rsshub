@@ -72,8 +72,10 @@ def _patch_components(monkeypatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_sender_behavior():
+    DefaultMessageSender.configure_runtime(timeout_seconds=30, proxy="")
     DefaultMessageSender.configure_behavior()
     yield
+    DefaultMessageSender.configure_runtime(timeout_seconds=30, proxy="")
     DefaultMessageSender.configure_behavior()
 
 
@@ -982,13 +984,25 @@ async def test_telegram_gif_over_photo_limit_stays_animation(monkeypatch, tmp_pa
 async def test_telegram_telegraph_uses_entry_title_and_plain_url(monkeypatch):
     _patch_components(monkeypatch)
     created: dict[str, object] = {}
+    client_kwargs: dict[str, object] = {}
 
     async def fake_create_page(self, **kwargs):
         created.update(kwargs)
         return "https://telegra.ph/entry-title"
 
+    original_init = TelegraphClient.__init__
+
+    def fake_init(self, **kwargs):
+        client_kwargs.update(kwargs)
+        original_init(self, **kwargs)
+
+    monkeypatch.setattr(TelegraphClient, "__init__", fake_init)
     monkeypatch.setattr(TelegraphClient, "create_media_page", fake_create_page)
 
+    DefaultMessageSender.configure_runtime(
+        timeout_seconds=30,
+        proxy="socks5://127.0.0.1:7890",
+    )
     sender = TelegramMessageSender()
     calls: list[list] = []
 
@@ -1032,6 +1046,7 @@ async def test_telegram_telegraph_uses_entry_title_and_plain_url(monkeypatch):
         "https://example.com/1.webp",
         "https://example.com/2.webp",
     ]
+    assert client_kwargs["proxy"] == "socks5://127.0.0.1:7890"
     assert len(calls) == 1
     assert isinstance(calls[0][0], _Plain)
     assert "https://telegra.ph/entry-title" in calls[0][0].text

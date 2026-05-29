@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import aiohttp
+from aiohttp_socks import ProxyConnector
 
 from ...utils import get_logger
 
@@ -21,9 +22,18 @@ class TelegraphClient:
 
     API_BASE_URL = "https://api.telegra.ph"
 
-    def __init__(self, *, access_token: str, timeout_seconds: int = 30) -> None:
+    _SOCKS_PROXY_SCHEMES = {"socks4", "socks5", "socks5h"}
+
+    def __init__(
+        self,
+        *,
+        access_token: str,
+        timeout_seconds: int = 30,
+        proxy: str = "",
+    ) -> None:
         self._access_token = str(access_token or "").strip()
         self._timeout_seconds = max(1, int(timeout_seconds or 30))
+        self._proxy = str(proxy or "").strip()
 
     @property
     def enabled(self) -> bool:
@@ -55,10 +65,17 @@ class TelegraphClient:
         }
 
         timeout = aiohttp.ClientTimeout(total=self._timeout_seconds)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        session_kwargs: dict[str, object] = {"timeout": timeout}
+        post_kwargs: dict[str, object] = {"data": payload}
+        if self._is_socks_proxy(self._proxy):
+            session_kwargs["connector"] = ProxyConnector.from_url(self._proxy)
+        elif self._proxy:
+            post_kwargs["proxy"] = self._proxy
+
+        async with aiohttp.ClientSession(**session_kwargs) as session:
             async with session.post(
                 f"{self.API_BASE_URL}/createPage",
-                data=payload,
+                **post_kwargs,
             ) as resp:
                 data = await resp.json(content_type=None)
 
@@ -69,6 +86,11 @@ class TelegraphClient:
         if not url:
             raise RuntimeError("telegraph createPage returned empty url")
         return url
+
+    @classmethod
+    def _is_socks_proxy(cls, proxy: str) -> bool:
+        parsed = urlparse(str(proxy or "").strip())
+        return parsed.scheme.lower() in cls._SOCKS_PROXY_SCHEMES
 
     @staticmethod
     def _build_html(

@@ -42,7 +42,7 @@ flowchart TD
 | `status` | 精确匹配 | push-history | 对应 push history 状态。 |
 | `keyword` | 大小写不敏感模糊匹配 | subscriptions、users/detail、feeds、push-history | subscriptions 会匹配订阅标题、标签、用户 ID、Feed 标题、Feed 链接。 |
 
-Dashboard 的筛选 UI 使用标签输入：按 Enter 提交一个值，任一筛选条件变化后立即重新查询，不再保留“应用筛选”按钮。
+Dashboard 的 ID/URL 筛选 UI 使用紧凑多选输入：输入框内只显示已选数量，按 Enter 提交一个值，聚焦后通过浮层管理已选项和补全建议。任一筛选条件变化后立即重新查询，不再保留“应用筛选”按钮。
 
 ## 端点总览
 

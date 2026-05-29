@@ -31,8 +31,7 @@ export const filterModule = {
   },
 
   addFilterTag(groupName, fieldName) {
-    const group = this[groupName];
-    const filter = group?.[fieldName];
+    const filter = this[groupName]?.[fieldName];
     if (!filter) return;
     const values = splitTagInputValue(filter.input);
     if (values.length === 0) return;
@@ -43,15 +42,20 @@ export const filterModule = {
         changed = true;
       }
     }
+    filter.input = '';
     if (changed) {
       this.scheduleFilterRefresh(groupName);
     }
-    filter.input = '';
   },
 
   handleFilterKeydown(event, groupName, fieldName) {
     if (event.isComposing) return;
     if (this.handleAutocompleteKeydown(event, groupName, fieldName)) return;
+    if (event.key === 'Escape' && this.isTagFilterPanelOpen(groupName, fieldName)) {
+      event.preventDefault();
+      this.closeAutocomplete();
+      return;
+    }
     if (event.key === 'Enter') {
       event.preventDefault();
       this.addFilterTag(groupName, fieldName);
@@ -65,9 +69,6 @@ export const filterModule = {
       }
       return;
     }
-    if (event.key === 'Backspace') {
-      this.handleFilterBackspace(groupName, fieldName);
-    }
   },
 
   handleFilterBlur(groupName, fieldName) {
@@ -76,10 +77,6 @@ export const filterModule = {
   },
 
   handleAutocompleteBlur(groupName, fieldName) {
-    const field = this[groupName]?.[fieldName];
-    if (field && typeof field === 'object' && Array.isArray(field.values)) {
-      this.addFilterTag(groupName, fieldName);
-    }
     this.closeAutocomplete();
   },
 
@@ -95,6 +92,7 @@ export const filterModule = {
 
   handleTagFilterInput(groupName, fieldName) {
     this.scheduleAutocomplete(groupName, fieldName);
+    this.scheduleFilterRefresh(groupName);
   },
 
   handleTextFilterInput(groupName, fieldName) {
@@ -108,13 +106,6 @@ export const filterModule = {
     const nextValues = filter.values.filter((item) => item !== value);
     if (nextValues.length === filter.values.length) return;
     filter.values = nextValues;
-    this.scheduleFilterRefresh(groupName);
-  },
-
-  handleFilterBackspace(groupName, fieldName) {
-    const filter = this[groupName]?.[fieldName];
-    if (!filter || String(filter.input || '').length > 0 || filter.values.length === 0) return;
-    filter.values.pop();
     this.scheduleFilterRefresh(groupName);
   },
 
@@ -162,7 +153,7 @@ export const filterModule = {
   userFilterSummary() {
     const parts = [];
     if (this.hasFilterTags(this.userFilters.user_id)) {
-      parts.push(`用户: ${this.userFilters.user_id.values.join(' / ')}`);
+      parts.push(`用户: ${this.filterTags(this.userFilters.user_id).join(' / ')}`);
     }
     if (this.hasTextFilter(this.userFilters.keyword)) {
       parts.push(`关键词: ${this.textFilterValue(this.userFilters.keyword)}`);
@@ -189,7 +180,7 @@ export const filterModule = {
   feedFilterSummary() {
     const parts = [];
     if (this.hasFilterTags(this.feedFilters.feed_id)) {
-      parts.push(`Feed: ${this.feedFilters.feed_id.values.join(' / ')}`);
+      parts.push(`Feed: ${this.filterTags(this.feedFilters.feed_id).join(' / ')}`);
     }
     if (this.hasTextFilter(this.feedFilters.keyword)) {
       parts.push(`关键词: ${this.textFilterValue(this.feedFilters.keyword)}`);
@@ -223,7 +214,7 @@ export const filterModule = {
   pushHistoryFilterSummary() {
     const parts = [];
     if (this.hasFilterTags(this.pushHistoryFilter.feed_link)) {
-      parts.push(`Feed 链接: ${this.pushHistoryFilter.feed_link.values.join(' / ')}`);
+      parts.push(`Feed 链接: ${this.filterTags(this.pushHistoryFilter.feed_link).join(' / ')}`);
     }
     if (this.hasTextFilter(this.pushHistoryFilter.keyword)) {
       parts.push(`关键词: ${this.textFilterValue(this.pushHistoryFilter.keyword)}`);
@@ -240,16 +231,16 @@ export const filterModule = {
   subscriptionFilterSummary() {
     const parts = [];
     if (this.hasFilterTags(this.subFilters.user_id)) {
-      parts.push(`用户: ${this.subFilters.user_id.values.join(' / ')}`);
+      parts.push(`用户: ${this.filterTags(this.subFilters.user_id).join(' / ')}`);
     }
     if (this.hasFilterTags(this.subFilters.feed_id)) {
-      parts.push(`Feed: ${this.subFilters.feed_id.values.join(' / ')}`);
+      parts.push(`Feed: ${this.filterTags(this.subFilters.feed_id).join(' / ')}`);
     }
     if (this.hasFilterTags(this.subFilters.feed_link)) {
-      parts.push(`Feed 链接: ${this.subFilters.feed_link.values.join(' / ')}`);
+      parts.push(`Feed 链接: ${this.filterTags(this.subFilters.feed_link).join(' / ')}`);
     }
     if (this.hasFilterTags(this.subFilters.sub_id)) {
-      parts.push(`订阅: ${this.subFilters.sub_id.values.join(' / ')}`);
+      parts.push(`订阅: ${this.filterTags(this.subFilters.sub_id).join(' / ')}`);
     }
     if (this.hasTextFilter(this.subFilters.keyword)) {
       parts.push(`关键词: ${this.textFilterValue(this.subFilters.keyword)}`);

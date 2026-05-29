@@ -3,7 +3,8 @@ import {
 } from '../../js/api.js';
 import {
   prettyJson,
-  normalizeHandlers
+  normalizeHandlers,
+  normalizeHandlerRegistryItem
 } from '../helpers.js';
 
 export const handlersModule = {

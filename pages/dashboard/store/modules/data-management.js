@@ -8,6 +8,7 @@ import {
 } from '../../js/api.js';
 import {
   normalizeDataOverview,
+  normalizeExportFile,
   pieSegments
 } from '../helpers.js';
 

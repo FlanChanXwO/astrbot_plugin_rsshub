@@ -23,6 +23,10 @@ export function createAutocompleteMethods(getSuggestions) {
       return `${groupName}:${fieldName}`;
     },
 
+    isAutocompleteKeyActive(groupName, fieldName) {
+      return this.autocomplete.openKey === this.autocompleteKey(groupName, fieldName);
+    },
+
     autocompleteScope(groupName) {
       if (groupName === 'subFilters') return 'subscriptions';
       if (groupName === 'userFilters') return 'users';
@@ -41,7 +45,7 @@ export function createAutocompleteMethods(getSuggestions) {
 
     isAutocompleteOpen(groupName, fieldName) {
       return (
-        this.autocomplete.openKey === this.autocompleteKey(groupName, fieldName) &&
+        this.isAutocompleteKeyActive(groupName, fieldName) &&
         (this.autocomplete.loading || this.autocomplete.items.length > 0)
       );
     },
@@ -49,7 +53,7 @@ export function createAutocompleteMethods(getSuggestions) {
     isTagFilterPanelOpen(groupName, fieldName) {
       const field = this[groupName]?.[fieldName];
       if (!this.isTagFilterField(groupName, fieldName)) return false;
-      if (this.autocomplete.openKey !== this.autocompleteKey(groupName, fieldName)) return false;
+      if (!this.isAutocompleteKeyActive(groupName, fieldName)) return false;
       return (
         field.values.length > 0 ||
         this.autocomplete.loading ||

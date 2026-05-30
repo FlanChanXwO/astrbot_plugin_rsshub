@@ -27,12 +27,13 @@ logger = get_logger()
 
 @dataclass(frozen=True)
 class RouteKnowledgeSyncPlan:
-    """Diff between source manifest and local managed manifest."""
+    """Diff between source manifest, local managed manifest and KB actual state."""
 
     added: tuple[RouteKnowledgeFile, ...] = field(default_factory=tuple)
     updated: tuple[RouteKnowledgeFile, ...] = field(default_factory=tuple)
     deleted: tuple[str, ...] = field(default_factory=tuple)
     unchanged: tuple[RouteKnowledgeFile, ...] = field(default_factory=tuple)
+    reconciled: tuple[RouteKnowledgeFile, ...] = field(default_factory=tuple)
 
     @property
     def changed_count(self) -> int:
@@ -54,6 +55,7 @@ class RouteKnowledgeTaskStatus:
     updated: int = 0
     deleted: int = 0
     unchanged: int = 0
+    reconciled: int = 0
     skipped: int = 0
     processed: int = 0
     total: int = 0
@@ -86,6 +88,7 @@ class RouteKnowledgeSyncResult:
     uploaded: int = 0
     deleted: int = 0
     skipped: int = 0
+    reconciled: int = 0
     kb_id: str = ""
 
 
@@ -193,15 +196,24 @@ class RouteKnowledgeSyncService:
                     len(source_manifest.files),
                 )
                 local_manifest = self._load_local_manifest()
-                plan = build_sync_plan(source_manifest, local_manifest)
+                # 对账 KB 已有文档，避免重载后从 0 重新下载
+                kb_docs = await self._repository.list_documents()
+                kb_doc_names = {doc.doc_name for doc in kb_docs}
+                plan = build_sync_plan(
+                    source_manifest,
+                    local_manifest,
+                    kb_doc_names,
+                )
+                # reconciled 文档无需下载/上传，但仍需修复 local manifest
                 total = len(plan.added) + len(plan.updated) + len(plan.deleted)
                 logger.info(
-                    "Routes KB 同步计划: task_id=%s added=%d updated=%d deleted=%d unchanged=%d total=%d",
+                    "Routes KB 同步计划: task_id=%s added=%d updated=%d deleted=%d unchanged=%d reconciled=%d total=%d",
                     effective_task_id,
                     len(plan.added),
                     len(plan.updated),
                     len(plan.deleted),
                     len(plan.unchanged),
+                    len(plan.reconciled),
                     total,
                 )
                 self._task_status = _replace_task(
@@ -211,18 +223,21 @@ class RouteKnowledgeSyncService:
                     updated=len(plan.updated),
                     deleted=len(plan.deleted),
                     unchanged=len(plan.unchanged),
+                    reconciled=len(plan.reconciled),
                     skipped=0,
                     total=total,
                 )
 
-                docs_by_name = {
-                    doc.doc_name: doc.doc_id
-                    for doc in await self._repository.list_documents()
-                }
+                # 复用对账阶段已获取的 KB 文档列表
+                docs_by_name = {doc.doc_name: doc.doc_id for doc in kb_docs}
                 uploaded_count = 0
                 deleted_count = 0
                 skipped_count = 0
+                reconciled_count = 0
                 processed = 0
+
+                # 在内存中维护 files_map，sync 结束后一次性落盘
+                files_map = _local_files_map(local_manifest)
 
                 for path in plan.deleted:
                     doc_name = managed_doc_name(path)
@@ -243,6 +258,7 @@ class RouteKnowledgeSyncService:
                     if doc_id:
                         await self._repository.delete_document(doc_id)
                         deleted_count += 1
+                        files_map.pop(path, None)
                     processed += 1
                     self._task_status = _replace_task(
                         self._task_status, processed=processed
@@ -277,6 +293,8 @@ class RouteKnowledgeSyncService:
                             await self._repository.delete_document(old_doc_id)
                         await self._repository.upload_document(document)
                         uploaded_count += 1
+                        # 仅在上传成功后更新 manifest 快照，避免失败文档被误记为已同步。
+                        files_map[file.path] = file.sha256
                     except Exception as exc:
                         skipped_count += 1
                         logger.exception(
@@ -296,21 +314,29 @@ class RouteKnowledgeSyncService:
                         self._task_status, processed=processed
                     )
 
-                self._write_local_manifest(source_manifest)
+                # reconciled 文档已在 KB 但 local manifest 丢失了它们的记录，补回
+                for file in plan.reconciled:
+                    files_map[file.path] = file.sha256
+                    reconciled_count += 1
+
+                # 一次性将内存中的 files_map 与元数据写入 local manifest
+                self._flush_local_manifest(files_map, source_manifest)
                 message = (
                     "Routes KB 同步完成: "
                     f"新增 {len(plan.added)}, 更新 {len(plan.updated)}, "
-                    f"删除 {deleted_count}, 跳过 {skipped_count}, 未变更 {len(plan.unchanged)}"
+                    f"删除 {deleted_count}, 跳过 {skipped_count}, "
+                    f"对账修复 {reconciled_count}, 未变更 {len(plan.unchanged)}"
                 )
                 finished_at = _now_iso()
                 logger.info(
-                    "Routes KB 同步完成: task_id=%s kb_id=%s 新增=%d 更新=%d 删除=%d 跳过=%d 未变更=%d",
+                    "Routes KB 同步完成: task_id=%s kb_id=%s 新增=%d 更新=%d 删除=%d 跳过=%d 对账=%d 未变更=%d",
                     effective_task_id,
                     kb_id or "-",
                     len(plan.added),
                     len(plan.updated),
                     deleted_count,
                     skipped_count,
+                    reconciled_count,
                     len(plan.unchanged),
                 )
                 self._task_status = _replace_task(
@@ -321,6 +347,7 @@ class RouteKnowledgeSyncService:
                     current_path="",
                     processed=total,
                     skipped=skipped_count,
+                    reconciled=reconciled_count,
                 )
                 return RouteKnowledgeSyncResult(
                     success=True,
@@ -330,6 +357,7 @@ class RouteKnowledgeSyncService:
                     uploaded=uploaded_count,
                     deleted=deleted_count,
                     skipped=skipped_count,
+                    reconciled=reconciled_count,
                     kb_id=kb_id,
                 )
             except Exception as exc:
@@ -363,14 +391,22 @@ class RouteKnowledgeSyncService:
         except Exception:
             return {}
 
-    def _write_local_manifest(self, manifest: RouteKnowledgeManifest) -> None:
+    def _flush_local_manifest(
+        self,
+        files_map: dict[str, str],
+        manifest: RouteKnowledgeManifest,
+    ) -> None:
+        """一次性将内存中的 files_map 与元数据写入 local manifest。"""
+        files_list = [
+            {"path": p, "sha256": sha} for p, sha in sorted(files_map.items())
+        ]
         self._state_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": manifest.version,
             "generated_at": manifest.generated_at,
             "source": manifest.source,
             "last_sync_at": _now_iso(),
-            "files": [asdict(file) for file in manifest.files],
+            "files": files_list,
         }
         self._manifest_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -381,23 +417,60 @@ class RouteKnowledgeSyncService:
 def build_sync_plan(
     source_manifest: RouteKnowledgeManifest,
     local_manifest: dict[str, Any],
+    kb_doc_names: set[str] | None = None,
 ) -> RouteKnowledgeSyncPlan:
-    """Build an incremental sync plan by comparing path + sha256."""
+    """Build an incremental sync plan by comparing path + sha256.
+
+    三路归并：source manifest（远端真值）、local manifest（上次同步快照）、
+    kb_doc_names（KB 中实际存在的文档名集合）。
+    当 local manifest 缺失或过期时，KB 对账能把已上传的文档从 added 降级为
+    reconciled，避免重载插件后从 0 重新下载。
+    """
     source_files = {file.path: file for file in source_manifest.files}
     local_files = _local_files_map(local_manifest)
+    # KB 中已有文档的相对路径集合（去掉 MANAGED_DOC_PREFIX）
+    kb_paths: set[str] = set()
+    if kb_doc_names:
+        prefix = MANAGED_DOC_PREFIX
+        for name in kb_doc_names:
+            if name.startswith(prefix):
+                kb_paths.add(name[len(prefix) :].lstrip("/"))
 
     added: list[RouteKnowledgeFile] = []
     updated: list[RouteKnowledgeFile] = []
     unchanged: list[RouteKnowledgeFile] = []
+    reconciled: list[RouteKnowledgeFile] = []
 
     for path, file in source_files.items():
         local_sha = local_files.get(path)
-        if local_sha is None:
-            added.append(file)
-        elif local_sha != file.sha256:
-            updated.append(file)
-        else:
+        in_kb = path in kb_paths
+        if local_sha is not None and local_sha == file.sha256:
+            # local manifest 与 source 一致：无需任何操作
             unchanged.append(file)
+        elif in_kb and local_sha is None:
+            # KB 有文档、local manifest 缺记录——重载后典型场景，对账修复
+            reconciled.append(file)
+        elif in_kb and local_sha != file.sha256:
+            # KB 有文档，但 local manifest 记录的 sha 与当前 source 不一致。
+            logger.info(
+                "Routes KB 对账: %s local manifest 记录的 sha=%s "
+                "与当前 source sha=%s 不一致（KB 中已存在文档），"
+                "标记 reconciled 但未重新下载",
+                path,
+                local_sha or "(local manifest 无记录)",
+                file.sha256,
+            )
+            reconciled.append(file)
+        elif not in_kb and local_sha is not None and local_sha != file.sha256:
+            # 不在 KB 但 local sha 过期——需要更新
+            updated.append(file)
+        elif not in_kb and local_sha is None:
+            # 不在 KB 且 local 无记录——全新文档
+            added.append(file)
+        else:
+            # 不在 KB，local sha 与 source 一致（但 KB 实际缺失）
+            # local 说已同步但 KB 实际没有，需要补传
+            added.append(file)
 
     deleted = sorted(path for path in local_files if path not in source_files)
     return RouteKnowledgeSyncPlan(
@@ -405,6 +478,7 @@ def build_sync_plan(
         updated=tuple(sorted(updated, key=lambda item: item.path)),
         deleted=tuple(deleted),
         unchanged=tuple(sorted(unchanged, key=lambda item: item.path)),
+        reconciled=tuple(sorted(reconciled, key=lambda item: item.path)),
     )
 
 

@@ -28,9 +28,13 @@ flowchart TD
   A["启动同步任务"] --> B["获取 source manifest"]
   B --> C["读取本地 managed manifest"]
   C --> D["按 path + sha256 生成 sync plan"]
+  C --> C2["对账 KB 已有文档"]
+  C2 --> D
   D --> E{"计划分类"}
   E -->|"deleted"| F["删除远端旧文档"]
   E -->|"added / updated"| G["下载源文件"]
+  E -->|"reconciled"| G2["修复 local manifest 记录，无需重新下载"]
+  G2 --> J
   G --> H["上传到 AstrBot KB"]
   F --> I["更新任务进度"]
   H --> I
@@ -71,14 +75,15 @@ source 提供 `metadata.json`，包含：
 
 ### 3. build sync plan
 
-`RouteKnowledgeSyncPlan` 分成四类：
+`RouteKnowledgeSyncPlan` 分成五类：
 
 - added
 - updated
 - deleted
 - unchanged
+- reconciled（对账修复）
 
-判断依据主要是 `path + sha256`。
+判断依据是三路归并：source manifest（远端真值）、local manifest（上次同步快照）、KB 实际已有文档。
 
 也就是说：
 
@@ -86,10 +91,12 @@ source 提供 `metadata.json`，包含：
 - `path` 存在但 `sha256` 变化 -> `updated`
 - 本地有但远端没有 -> `deleted`
 - `path` 和 `sha256` 都一致 -> `unchanged`
+- `path` 在 KB 中存在但 local manifest 缺记录或 sha 不一致 -> `reconciled`
 
 这样做的原因是：
 
 - 能避免全量重传
+- 插件重载后 local manifest 丢失时，KB 对账能跳过已上传的文档
 - 能明确删除远端不存在的旧文档
 - 能把同步任务进度做成可解释的计划
 
@@ -98,11 +105,14 @@ source 提供 `metadata.json`，包含：
 执行顺序大致是：
 
 1. 确认 KB 存在
-2. 删除 `deleted`
-3. 下载并上传 `added + updated`
-4. 保存本地 manifest
+2. 对账 KB 已有文档列表
+3. 删除 `deleted`
+4. 下载并上传 `added + updated`
+5. 对账修复 `reconciled`：补回 local manifest 中缺失的文件记录
+6. 同步结束时统一保存本地 manifest
 
 每一步都会更新任务状态。
+local manifest 只记录本次同步中已确认删除、成功上传或对账修复的结果；上传失败的文档不会写入已同步快照。
 
 ## 为什么需要后台 task status
 

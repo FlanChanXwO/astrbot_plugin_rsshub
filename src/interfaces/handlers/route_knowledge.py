@@ -71,7 +71,7 @@ def handle_rsshub_kb_task(deps: dict) -> dict:
         f"任务 ID: {task.task_id}",
         f"状态: {task.status}",
         f"进度: {task.processed}/{task.total}",
-        f"计划: 新增 {task.added}, 更新 {task.updated}, 删除 {task.deleted}, 跳过 {task.skipped}, 未变更 {task.unchanged}",
+        f"计划: 新增 {task.added}, 更新 {task.updated}, 删除 {task.deleted}, 跳过 {task.skipped}{f', 对账修复 {task.reconciled}' if task.reconciled else ''}, 未变更 {task.unchanged}",
     ]
     if task.current_path:
         lines.append(f"当前文件: {task.current_path}")
@@ -83,4 +83,4 @@ def handle_rsshub_kb_task(deps: dict) -> dict:
 
 
 def _format_task_line(task: RouteKnowledgeTaskStatus) -> str:
-    return f"{task.status} {task.processed}/{task.total} ({task.task_id})"
+    return f"{task.status} {task.processed}/{task.total}{f' 对账={task.reconciled}' if task.reconciled else ''} ({task.task_id})"

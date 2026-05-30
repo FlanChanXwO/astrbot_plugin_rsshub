@@ -162,9 +162,7 @@ def test_build_sync_plan_reconciles_kb_existing_docs_without_local_manifest():
 def test_build_sync_plan_reconciles_kb_docs_with_stale_local_sha():
     """KB 有文档但 local sha 与 source 不一致——对账修复，不强制重新下载。"""
     source = RouteKnowledgeManifest(
-        files=(
-            RouteKnowledgeFile(path="docs/routes/foo.md", sha256="b2"),
-        )
+        files=(RouteKnowledgeFile(path="docs/routes/foo.md", sha256="b2"),)
     )
     local = {
         "files": [
@@ -332,6 +330,7 @@ async def test_sync_reconciles_kb_existing_docs_on_reload(tmp_path):
     assert managed_doc_name("docs/routes/foo.md") not in repo.uploaded
     # 同步完成后 local manifest 应包含所有文件的记录
     import json
+
     local_data = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     local_files = {item["path"]: item["sha256"] for item in local_data.get("files", [])}
     assert "docs/routes/new.md" in local_files

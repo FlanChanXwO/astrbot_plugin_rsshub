@@ -109,10 +109,10 @@ source 提供 `metadata.json`，包含：
 3. 删除 `deleted`
 4. 下载并上传 `added + updated`
 5. 对账修复 `reconciled`：补回 local manifest 中缺失的文件记录
-6. 增量保存本地 manifest
+6. 同步结束时统一保存本地 manifest
 
 每一步都会更新任务状态。
-每成功上传或删除一个文档后立即增量更新 local manifest，即使中途失败也不丢失已完成的进度。
+local manifest 只记录本次同步中已确认删除、成功上传或对账修复的结果；上传失败的文档不会写入已同步快照。
 
 ## 为什么需要后台 task status
 

@@ -293,6 +293,7 @@ class RouteKnowledgeSyncService:
                             await self._repository.delete_document(old_doc_id)
                         await self._repository.upload_document(document)
                         uploaded_count += 1
+                        # 仅在上传成功后更新 manifest 快照，避免失败文档被误记为已同步。
                         files_map[file.path] = file.sha256
                     except Exception as exc:
                         skipped_count += 1
@@ -450,12 +451,13 @@ def build_sync_plan(
             # KB 有文档、local manifest 缺记录——重载后典型场景，对账修复
             reconciled.append(file)
         elif in_kb and local_sha != file.sha256:
-            # KB 有文档但 sha 与 source 不一致，对账标记（不强制重下载）
-            logger.warning(
-                "Routes KB 对账: %s KB sha=%s 与 source sha=%s 不一致，"
+            # KB 有文档，但 local manifest 记录的 sha 与当前 source 不一致。
+            logger.info(
+                "Routes KB 对账: %s local manifest 记录的 sha=%s "
+                "与当前 source sha=%s 不一致（KB 中已存在文档），"
                 "标记 reconciled 但未重新下载",
                 path,
-                local_sha or "(无记录)",
+                local_sha or "(local manifest 无记录)",
                 file.sha256,
             )
             reconciled.append(file)

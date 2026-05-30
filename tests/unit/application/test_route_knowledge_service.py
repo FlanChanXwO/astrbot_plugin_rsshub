@@ -218,6 +218,7 @@ async def test_sync_deletes_then_uploads_changed_documents(tmp_path):
     assert result.success is True
     # foo.md 已在 KB 中但 local sha 过期 → reconciled（对账修复），不重新上传
     assert result.reconciled == 1
+    assert managed_doc_name("docs/routes/foo.md") not in repo.uploaded
     assert managed_doc_name("index/namespaces.md") in repo.uploaded
     # deleted.md 被 source 移除，从 KB 物理删除
     assert deleted_doc_id in repo.deleted

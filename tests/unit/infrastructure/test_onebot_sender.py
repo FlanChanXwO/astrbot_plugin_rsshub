@@ -244,10 +244,9 @@ async def test_onebot_sender_prefers_local_video_path_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_onebot_sender_unset_prefer_local_video_uses_runtime_default(
+async def test_onebot_sender_video_uses_local_file(
     monkeypatch,
 ):
-    DefaultMessageSender.configure_behavior(onebot_prefer_local_video_default=True)
     sender = OneBotMessageSender()
     calls: list[tuple[str, list]] = []
 
@@ -287,66 +286,12 @@ async def test_onebot_sender_unset_prefer_local_video_uses_runtime_default(
         context=MessageContext(
             channel=ChannelInfo(title="Feed Title"),
             platform_name="aiocqhttp",
-            sender_strategy={"prefer_local_video": None},
         ),
     )
 
     assert result.ok is True
     media_node = calls[0][1][0].nodes[0]
     assert media_node.content[0].file == "/tmp/video.mp4"
-
-
-@pytest.mark.asyncio
-async def test_onebot_sender_explicit_prefer_local_video_false_uses_original_url(
-    monkeypatch,
-):
-    DefaultMessageSender.configure_behavior(onebot_prefer_local_video_default=True)
-    sender = OneBotMessageSender()
-    calls: list[tuple[str, list]] = []
-
-    async def fake_send_chain(session_id: str, chain: list, **_kwargs):
-        calls.append((session_id, chain))
-        return SendResult(ok=True)
-
-    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
-    monkeypatch.setattr(
-        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Node",
-        _Node,
-    )
-    monkeypatch.setattr(
-        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Nodes",
-        _Nodes,
-    )
-    monkeypatch.setattr(
-        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Plain",
-        _Plain,
-    )
-    monkeypatch.setattr(
-        sys.modules["astrbot.api.message_components"], "Video", _Video, raising=False
-    )
-
-    result = await sender.send_to_user(
-        SendRequest(
-            session_id="default:GroupMessage:1",
-            message="entry content",
-            prepared_media=[
-                PreparedMedia(
-                    media_type="video",
-                    original_url="https://example.com/video.mp4",
-                    local_path=Path("/tmp/video.mp4"),
-                )
-            ],
-        ),
-        context=MessageContext(
-            channel=ChannelInfo(title="Feed Title"),
-            platform_name="aiocqhttp",
-            sender_strategy={"prefer_local_video": False},
-        ),
-    )
-
-    assert result.ok is True
-    media_node = calls[0][1][0].nodes[0]
-    assert media_node.content[0].file == "https://example.com/video.mp4"
 
 
 @pytest.mark.asyncio

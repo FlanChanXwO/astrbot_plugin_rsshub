@@ -28,21 +28,6 @@ def test_video_gif_resolves_as_image_media():
     assert info.original_url == "https://example.com/video.mp4"
 
 
-def test_video_gif_ignores_prefer_local_video_false():
-    """prefer_local_video=False 对普通视频使用 original_url，但 GIF 转换结果仍用本地 .gif。"""
-    info = MediaDispatchResolver.resolve_prepared(
-        PreparedMedia(
-            media_type="video",
-            original_url="https://example.com/video.mp4",
-            local_path=Path("/tmp/video.gif"),
-        ),
-        prefer_local_video=False,
-    )
-    assert info.media_type == "image"
-    assert info.component_kind == "media"
-    assert info.file == "/tmp/video.gif"
-
-
 def test_normal_video_uses_local_path_by_default():
     """普通视频默认使用本地路径。"""
     info = MediaDispatchResolver.resolve_prepared(
@@ -55,21 +40,6 @@ def test_normal_video_uses_local_path_by_default():
     assert info.media_type == "video"
     assert info.component_kind == "media"
     assert info.file == "/tmp/video.mp4"
-
-
-def test_normal_video_prefer_local_video_false_uses_original_url():
-    """prefer_local_video=False 对普通视频使用原始 URL。"""
-    info = MediaDispatchResolver.resolve_prepared(
-        PreparedMedia(
-            media_type="video",
-            original_url="https://example.com/video.mp4",
-            local_path=Path("/tmp/video.mp4"),
-        ),
-        prefer_local_video=False,
-    )
-    assert info.media_type == "video"
-    assert info.component_kind == "media"
-    assert info.file == "https://example.com/video.mp4"
 
 
 def test_image_resolves_as_media():

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ....shared.constants import (
-    ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
+    ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
@@ -21,7 +21,7 @@ class PlatformStrategySettings:
 
     enable_telegraph: bool = False
     telegraph_token: str = ""
-    prefer_local_video: bool | None = None
+    napcat_stream_mode: str | None = None
     markdown_mode: str = QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT
 
 
@@ -122,7 +122,7 @@ class SenderStrategySettings:
 
 
 @dataclass(frozen=True)
-class MediaSettings:
+class MediaRuntimeSettings:
     """Media download, cache and platform threshold settings."""
 
     download_media_timeout: int = _DEFAULT_MEDIA_TIMEOUT_SECONDS
@@ -131,15 +131,20 @@ class MediaSettings:
     cache_gc_grace_seconds: int = 10 * 60
     min_valid_bytes: int = 1
     telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES
-    onebot_prefer_local_video_default: bool = ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT
+    onebot_napcat_stream_mode: str = ONEBOT_NAPCAT_STREAM_MODE_DEFAULT
     qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT
     qq_official_degrade_strategy: str = QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
 
 
 @dataclass(frozen=True)
-class FFmpegSettings:
-    """Media transcoding settings used by senders."""
+class MediaSettings:
+    """Public media sending settings used by senders."""
 
+    telegraph_proxy: str = ""
+    image_relay_base_url: str = ""
+    media_relay_base_url: str = ""
+    media_download_concurrency: int = 1
+    table_to_image: bool = True
     video_transcode: bool = False
     video_transcode_timeout: int = 120
     gif_transcode: bool = False
@@ -185,8 +190,8 @@ class ApplicationSettings:
         default_factory=SenderStrategySettings
     )
     http: HttpSettings = field(default_factory=HttpSettings)
-    media_config: MediaSettings = field(default_factory=MediaSettings)
-    ffmpeg: FFmpegSettings = field(default_factory=FFmpegSettings)
+    media_config: MediaRuntimeSettings = field(default_factory=MediaRuntimeSettings)
+    media: MediaSettings = field(default_factory=MediaSettings)
     route_knowledge: RouteKnowledgeSettings = field(
         default_factory=RouteKnowledgeSettings
     )

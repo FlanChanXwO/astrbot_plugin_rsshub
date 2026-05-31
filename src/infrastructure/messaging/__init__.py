@@ -33,6 +33,8 @@ __all__ = [
     "register_sender",
     "get_bot_self_id",
     "set_bot_self_id_provider",
+    "get_bot_client",
+    "set_bot_client_provider",
     # Notification
     "NotificationServiceImpl",
     "get_notification_service",
@@ -72,6 +74,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "register_sender": ("senders", "register_sender"),
     "get_bot_self_id": ("senders", "get_bot_self_id"),
     "set_bot_self_id_provider": ("senders", "set_bot_self_id_provider"),
+    "get_bot_client": ("senders", "get_bot_client"),
+    "set_bot_client_provider": ("senders", "set_bot_client_provider"),
     "NotificationServiceImpl": ("notification_service", "NotificationServiceImpl"),
     "get_notification_service": ("notification_service", "get_notification_service"),
 }

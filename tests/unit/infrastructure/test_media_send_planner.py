@@ -126,23 +126,3 @@ def test_qq_official_file_candidate_prefers_compressed_gif(tmp_path: Path):
 
     assert file_candidate.file == str(compressed)
     assert file_candidate.variant == "compressed_gif"
-
-
-def test_onebot_prefer_local_video_false_uses_url_for_native_video(tmp_path: Path):
-    video = _touch(tmp_path / "video.mp4", 10)
-    item = PreparedMedia(
-        media_type="video",
-        original_url="https://example.com/video.mp4",
-        local_path=video,
-    )
-    item.ensure_primary_variant()
-
-    candidates = MediaSendPlanner.candidates_for(
-        item,
-        platform="onebot",
-        prefer_local_video=False,
-    )
-
-    assert candidates[0].action == SEND_ACTION_MEDIA
-    assert candidates[0].media_type == "video"
-    assert candidates[0].file == "https://example.com/video.mp4"

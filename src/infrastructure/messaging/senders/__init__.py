@@ -24,6 +24,8 @@ __all__ = [
     # 工具函数
     "set_bot_self_id_provider",
     "get_bot_self_id",
+    "set_bot_client_provider",
+    "get_bot_client",
 ]
 
 _EXPORTS: dict[str, tuple[str, str]] = {
@@ -49,6 +51,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "register_sender": ("factory", "register_sender"),
     "set_bot_self_id_provider": ("types", "set_bot_self_id_provider"),
     "get_bot_self_id": ("types", "get_bot_self_id"),
+    "set_bot_client_provider": ("types", "set_bot_client_provider"),
+    "get_bot_client": ("types", "get_bot_client"),
 }
 
 

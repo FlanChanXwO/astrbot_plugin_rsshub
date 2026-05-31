@@ -22,6 +22,7 @@ from ...domain.entities.content_types import (
 )
 from ..utils.logger import get_logger
 from ..utils.paths import get_plugin_cache_dir
+from .font_manager import get_runtime_font_dir
 
 logger = get_logger()
 
@@ -84,19 +85,13 @@ class TableImageRenderer:
     _ZEBRA_BG = (243, 246, 250)
     _BORDER = (203, 213, 225)
     _CAPTION = (17, 24, 39)
-    _warned_default_font = False
+    _warned_no_font = False
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         self._cache_dir = cache_dir or get_plugin_cache_dir(TABLE_IMAGE_CACHE_PART)
-        self._font_regular: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
-            self._load_font(size=24)
-        )
-        self._font_header: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
-            self._load_font(size=24)
-        )
-        self._font_caption: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
-            self._load_font(size=30)
-        )
+        self._font_regular = self._load_font(size=24)
+        self._font_header = self._load_font(size=24)
+        self._font_caption = self._load_font(size=30)
 
     def render_table(self, table_html: str | Tag) -> TableImageRenderResult | None:
         """Render table HTML and return cache metadata.
@@ -104,6 +99,9 @@ class TableImageRenderer:
         Empty or unparsable tables return None so the caller can preserve the
         existing plain-text fallback path.
         """
+        if self._font_regular is None:
+            logger.debug("表格图片渲染跳过：无可用 CJK 字体")
+            return None
         model = self._parse_table(table_html)
         if model is None:
             return None
@@ -285,6 +283,9 @@ class TableImageRenderer:
         return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
     def _draw_table(self, model: _TableModel) -> Image.Image:
+        assert self._font_regular is not None
+        assert self._font_header is not None
+        assert self._font_caption is not None
         margin_x = 28
         margin_y = 24
         border = 1
@@ -387,6 +388,8 @@ class TableImageRenderer:
         model: _TableModel,
         padding_x: int,
     ) -> list[int]:
+        assert self._font_regular is not None
+        assert self._font_header is not None
         min_width = 96
         max_width = 340
         widths = [min_width for _ in range(model.col_count)]
@@ -408,6 +411,8 @@ class TableImageRenderer:
         padding_y: int,
         line_gap: int,
     ) -> list[int]:
+        assert self._font_regular is not None
+        assert self._font_header is not None
         min_height = 54
         row_heights = [min_height for _ in range(model.row_count)]
         spanned_cells: list[tuple[_TableCell, int]] = []
@@ -496,14 +501,26 @@ class TableImageRenderer:
         return max(0, int(bbox[2] - bbox[0]))
 
     @staticmethod
-    def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    def _load_font(size: int) -> ImageFont.FreeTypeFont | None:
         for path in TableImageRenderer._iter_font_candidates():
             try:
                 return ImageFont.truetype(path, size=size)
             except Exception as ex:
                 logger.debug("Table image font load failed: path=%s, err=%s", path, ex)
-        TableImageRenderer._warn_default_font_once()
-        return ImageFont.load_default(size=size)
+        TableImageRenderer._warn_no_font_once()
+        return None
+
+    @classmethod
+    def _warn_no_font_once(cls) -> None:
+        if cls._warned_no_font:
+            return
+        cls._warned_no_font = True
+        logger.warning(
+            "表格图片渲染未找到可用字体，表格将回退为纯文本展示；"
+            "可通过 %s 指定字体文件，或把 .ttf/.otf/.ttc 放入 "
+            "assets/fonts/ 或运行时字体目录。",
+            TABLE_FONT_PATH_ENV,
+        )
 
     @staticmethod
     def _iter_font_candidates() -> list[Path]:
@@ -519,6 +536,8 @@ class TableImageRenderer:
             candidates.extend(
                 TableImageRenderer._font_files_in_dir(Path(explicit_dir).expanduser())
             )
+
+        candidates.extend(TableImageRenderer._font_files_in_dir(get_runtime_font_dir()))
 
         candidates.extend(TableImageRenderer._font_files_in_dir(PLUGIN_FONT_DIR))
 
@@ -556,15 +575,3 @@ class TableImageRenderer:
                 "Table image font dir scan failed: dir=%s, err=%s", font_dir, ex
             )
             return []
-
-    @classmethod
-    def _warn_default_font_once(cls) -> None:
-        if cls._warned_default_font:
-            return
-        cls._warned_default_font = True
-        logger.warning(
-            "表格图片渲染未找到可用字体，已回退到 Pillow 默认字体；"
-            "中文或特殊字符可能显示不完整。可通过 %s 指定字体文件，"
-            "或把 .ttf/.otf/.ttc 放入 assets/fonts/。",
-            TABLE_FONT_PATH_ENV,
-        )

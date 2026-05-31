@@ -88,9 +88,15 @@ class TableImageRenderer:
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         self._cache_dir = cache_dir or get_plugin_cache_dir(TABLE_IMAGE_CACHE_PART)
-        self._font_regular = self._load_font(size=24)
-        self._font_header = self._load_font(size=24)
-        self._font_caption = self._load_font(size=30)
+        self._font_regular: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
+            self._load_font(size=24)
+        )
+        self._font_header: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
+            self._load_font(size=24)
+        )
+        self._font_caption: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
+            self._load_font(size=30)
+        )
 
     def render_table(self, table_html: str | Tag) -> TableImageRenderResult | None:
         """Render table HTML and return cache metadata.
@@ -343,7 +349,7 @@ class TableImageRenderer:
                     font=self._font_caption,
                     fill=self._CAPTION,
                 )
-                y += self._font_caption.size + line_gap
+                y += getattr(self._font_caption, "size", 30) + line_gap
             y += 14
 
         table_x = margin_x
@@ -367,7 +373,7 @@ class TableImageRenderer:
             text_y = y0 + padding_y
             for line in cell.lines or [""]:
                 draw.text((x0 + padding_x, text_y), line, font=font, fill=text_fill)
-                text_y += font.size + line_gap
+                text_y += getattr(font, "size", 24) + line_gap
 
         return image
 
@@ -436,7 +442,7 @@ class TableImageRenderer:
     def _preferred_cell_width(
         self,
         text: str,
-        font: ImageFont.FreeTypeFont,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
         padding_x: int,
     ) -> int:
         if not text:
@@ -452,7 +458,7 @@ class TableImageRenderer:
     def _wrap_text(
         self,
         text: str,
-        font: ImageFont.FreeTypeFont,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
         max_width: int,
     ) -> list[str]:
         value = str(text or "")
@@ -475,19 +481,22 @@ class TableImageRenderer:
     @staticmethod
     def _line_block_height(
         lines: list[str],
-        font: ImageFont.FreeTypeFont,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
         line_gap: int,
     ) -> int:
         count = max(1, len(lines))
-        return count * font.size + max(0, count - 1) * line_gap
+        font_size = getattr(font, "size", 24)
+        return int(count * font_size + max(0, count - 1) * line_gap)
 
     @staticmethod
-    def _text_width(text: str, font: ImageFont.FreeTypeFont) -> int:
+    def _text_width(
+        text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont
+    ) -> int:
         bbox = font.getbbox(text or "")
         return max(0, int(bbox[2] - bbox[0]))
 
     @staticmethod
-    def _load_font(size: int) -> ImageFont.FreeTypeFont:
+    def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         for path in TableImageRenderer._iter_font_candidates():
             try:
                 return ImageFont.truetype(path, size=size)
@@ -512,17 +521,6 @@ class TableImageRenderer:
             )
 
         candidates.extend(TableImageRenderer._font_files_in_dir(PLUGIN_FONT_DIR))
-        candidates.extend(
-            Path(path)
-            for path in (
-                "/System/Library/Fonts/PingFang.ttc",
-                "/System/Library/Fonts/STHeiti Light.ttc",
-                "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            )
-        )
 
         existing: list[Path] = []
         seen: set[Path] = set()

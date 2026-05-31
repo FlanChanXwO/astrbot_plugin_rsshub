@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from PIL import Image
 
 from astrbot_plugin_rsshub.src.infrastructure.rendering.table_image_renderer import (
+    TABLE_FONT_DIR_ENV,
     TABLE_FONT_PATH_ENV,
     TableImageRenderer,
 )
@@ -161,3 +162,42 @@ def test_table_image_renderer_prefers_configured_font(monkeypatch, tmp_path: Pat
 
     assert font.size == 24
     assert calls == [(custom_font.resolve(), 24)]
+
+
+def test_table_image_renderer_discovers_bundled_font(monkeypatch, tmp_path: Path):
+    """When no env vars are set, _iter_font_candidates finds fonts in PLUGIN_FONT_DIR."""
+    fake_font_dir = tmp_path / "assets" / "fonts"
+    fake_font_dir.mkdir(parents=True)
+    (fake_font_dir / "NotoSansSC-subset.otf").write_bytes(b"fake-otf")
+
+    monkeypatch.delenv(TABLE_FONT_PATH_ENV, raising=False)
+    monkeypatch.delenv(TABLE_FONT_DIR_ENV, raising=False)
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.rendering."
+        "table_image_renderer.PLUGIN_FONT_DIR",
+        fake_font_dir,
+    )
+
+    candidates = TableImageRenderer._iter_font_candidates()
+
+    assert len(candidates) >= 1
+    assert candidates[0].name == "NotoSansSC-subset.otf"
+
+
+def test_table_image_renderer_no_system_font_paths(monkeypatch, tmp_path: Path):
+    """_iter_font_candidates must never return hard-coded system font paths."""
+    monkeypatch.delenv(TABLE_FONT_PATH_ENV, raising=False)
+    monkeypatch.delenv(TABLE_FONT_DIR_ENV, raising=False)
+    empty_dir = tmp_path / "empty_fonts"
+    empty_dir.mkdir()
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.rendering."
+        "table_image_renderer.PLUGIN_FONT_DIR",
+        empty_dir,
+    )
+
+    candidates = TableImageRenderer._iter_font_candidates()
+    system_prefixes = ("/System/", "/usr/share/fonts/")
+    for c in candidates:
+        for prefix in system_prefixes:
+            assert not str(c).startswith(prefix), f"System path leaked: {c}"

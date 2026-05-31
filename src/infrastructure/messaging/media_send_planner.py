@@ -129,7 +129,6 @@ class MediaSendPlanner:
         item: PreparedMedia,
         *,
         platform: str | None,
-        prefer_local_video: bool = True,
     ) -> list[MediaSendCandidate]:
         if item.download_failed:
             return [
@@ -155,10 +154,7 @@ class MediaSendPlanner:
             max_bytes = cls._max_bytes_for(policy, media_type, variant)
             if max_bytes is not None and size > max_bytes:
                 continue
-            if media_type == "video" and not prefer_local_video:
-                file_value = item.original_url
-            else:
-                file_value = str(variant.path)
+            file_value = str(variant.path)
             candidates.append(
                 MediaSendCandidate(
                     action=SEND_ACTION_MEDIA,

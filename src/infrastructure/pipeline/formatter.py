@@ -31,8 +31,6 @@ class MessageChainFormatter:
         text: str,
         failed_urls: list[str],
         platform: str = "",
-        *,
-        prefer_local_video: bool = True,
     ) -> list[MessageComponent]:
         """
         构建平台无关消息组件。
@@ -42,7 +40,6 @@ class MessageChainFormatter:
             text=text,
             failed_urls=failed_urls,
             platform=platform,
-            prefer_local_video=prefer_local_video,
         )
 
     def build_chain(

@@ -14,8 +14,8 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
     assert set(schema) == {
         "basic_config",
         "content_handlers",
-        "ffmpeg",
         "http_config",
+        "media",
         "route_knowledge",
         "sender_strategies",
     }
@@ -114,13 +114,24 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
         "step": 1,
     }
 
-    ffmpeg_items = schema["ffmpeg"]["items"]
-    assert ffmpeg_items["video_transcode_timeout"]["slider"] == {
+    assert "ffmpeg" not in schema
+    media_items = schema["media"]["items"]
+    assert media_items["telegraph_proxy"]["default"] == ""
+    assert media_items["image_relay_base_url"]["default"] == ""
+    assert media_items["media_relay_base_url"]["default"] == ""
+    assert media_items["media_download_concurrency"]["default"] == 1
+    assert media_items["media_download_concurrency"]["slider"] == {
+        "min": 1,
+        "max": 32,
+        "step": 1,
+    }
+    assert media_items["table_to_image"]["default"] is True
+    assert media_items["video_transcode_timeout"]["slider"] == {
         "min": 10,
         "max": 1800,
         "step": 10,
     }
-    assert ffmpeg_items["gif_transcode_timeout"]["slider"] == {
+    assert media_items["gif_transcode_timeout"]["slider"] == {
         "min": 10,
         "max": 1800,
         "step": 10,
@@ -157,13 +168,18 @@ def test_conf_schema_exposes_single_platform_strategy_template_list():
     qq_official_items = templates["qq_official_strategy"]["items"]
     assert telegram_items["enable_telegraph"]["type"] == "bool"
     assert telegram_items["telegraph_token"]["type"] == "string"
-    assert "prefer_local_video" not in telegram_items
+    assert "napcat_stream_mode" not in telegram_items
     assert "markdown_mode" not in telegram_items
     assert "enable_telegraph" not in onebot_items
     assert "telegraph_token" not in onebot_items
     assert "markdown_mode" not in onebot_items
-    assert onebot_items["prefer_local_video"]["type"] == "bool"
-    assert onebot_items["prefer_local_video"]["default"] is True
+    assert onebot_items["napcat_stream_mode"]["type"] == "string"
+    assert onebot_items["napcat_stream_mode"]["default"] == "fallback"
+    assert onebot_items["napcat_stream_mode"]["options"] == [
+        "disabled",
+        "fallback",
+        "always",
+    ]
     assert qq_official_items["markdown_mode"]["type"] == "string"
     assert qq_official_items["markdown_mode"]["default"] == "auto"
     assert qq_official_items["markdown_mode"]["options"] == [
@@ -172,4 +188,4 @@ def test_conf_schema_exposes_single_platform_strategy_template_list():
         "plain",
     ]
     assert "enable_telegraph" not in qq_official_items
-    assert "prefer_local_video" not in qq_official_items
+    assert "napcat_stream_mode" not in qq_official_items

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,7 +15,6 @@ from astrbot.core.star.star_tools import StarTools
 
 from ....domain.entities.content_types import is_generated_media_url
 from ....shared.constants import (
-    ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_OPTIONS,
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
@@ -49,22 +49,42 @@ class DefaultMessageSender:
 
     _timeout_seconds: int = 30
     _proxy: str = ""
+    _telegraph_proxy: str = ""
+    _image_relay_base_url: str = ""
+    _media_relay_base_url: str = ""
+    _media_download_concurrency: int = 1
     _video_transcode: bool = False
     _video_transcode_timeout: int = 120
     _gif_transcode: bool = False
     _gif_transcode_timeout: int = 60
     _telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES
-    _onebot_prefer_local_video_default: bool = ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT
     _qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT
     _qq_official_degrade_strategy: str = QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
 
     _formatter: MessageFormatter = MessageFormatter()
 
     @classmethod
-    def configure_runtime(cls, *, timeout_seconds: int, proxy: str = "") -> None:
+    def configure_runtime(
+        cls,
+        *,
+        timeout_seconds: int,
+        proxy: str = "",
+        telegraph_proxy: str = "",
+        image_relay_base_url: str = "",
+        media_relay_base_url: str = "",
+        media_download_concurrency: int = 1,
+    ) -> None:
         """配置运行时参数"""
         DefaultMessageSender._timeout_seconds = max(1, int(timeout_seconds))
         DefaultMessageSender._proxy = proxy or ""
+        DefaultMessageSender._telegraph_proxy = telegraph_proxy or ""
+        DefaultMessageSender._image_relay_base_url = image_relay_base_url or ""
+        DefaultMessageSender._media_relay_base_url = media_relay_base_url or ""
+        try:
+            concurrency = int(media_download_concurrency or 1)
+        except (TypeError, ValueError):
+            concurrency = 1
+        DefaultMessageSender._media_download_concurrency = max(1, concurrency)
 
     @classmethod
     def configure_behavior(
@@ -75,7 +95,7 @@ class DefaultMessageSender:
         gif_transcode: bool = False,
         gif_transcode_timeout: int = 60,
         telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES,
-        onebot_prefer_local_video_default: bool = ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
+        onebot_napcat_stream_mode: str = "fallback",
         qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
         qq_official_degrade_strategy: str = QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     ) -> None:
@@ -85,7 +105,9 @@ class DefaultMessageSender:
         cls._gif_transcode = bool(gif_transcode)
         cls._gif_transcode_timeout = max(1, int(gif_transcode_timeout))
         cls._telegram_photo_max_bytes = max(1, int(telegram_photo_max_bytes))
-        cls._onebot_prefer_local_video_default = bool(onebot_prefer_local_video_default)
+        cls._onebot_napcat_stream_mode_default = str(
+            onebot_napcat_stream_mode or "fallback"
+        )
         cls._qq_official_media_threshold = max(0, int(qq_official_media_threshold))
         strategy = str(
             qq_official_degrade_strategy or QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
@@ -104,6 +126,35 @@ class DefaultMessageSender:
         if proxy is None:
             proxy = getattr(DefaultMessageSender, "_proxy", None)
         return str(proxy or "")
+
+    @classmethod
+    def _get_telegraph_proxy(cls) -> str:
+        proxy = getattr(cls, "_telegraph_proxy", None)
+        if proxy is None:
+            proxy = getattr(DefaultMessageSender, "_telegraph_proxy", None)
+        return str(proxy or "")
+
+    @classmethod
+    def _get_image_relay_base_url(cls) -> str:
+        value = getattr(cls, "_image_relay_base_url", None)
+        if value is None:
+            value = getattr(DefaultMessageSender, "_image_relay_base_url", None)
+        return str(value or "")
+
+    @classmethod
+    def _get_media_relay_base_url(cls) -> str:
+        value = getattr(cls, "_media_relay_base_url", None)
+        if value is None:
+            value = getattr(DefaultMessageSender, "_media_relay_base_url", None)
+        return str(value or "")
+
+    @classmethod
+    def _get_media_download_concurrency(cls) -> int:
+        value = getattr(cls, "_media_download_concurrency", 1)
+        try:
+            return max(1, int(value or 1))
+        except (TypeError, ValueError):
+            return 1
 
     @classmethod
     def _should_transcode_video(cls) -> bool:
@@ -125,16 +176,6 @@ class DefaultMessageSender:
     def _get_telegram_photo_max_bytes(cls) -> int:
         return max(
             1, int(getattr(cls, "_telegram_photo_max_bytes", TELEGRAM_PHOTO_MAX_BYTES))
-        )
-
-    @classmethod
-    def _get_onebot_prefer_local_video_default(cls) -> bool:
-        return bool(
-            getattr(
-                cls,
-                "_onebot_prefer_local_video_default",
-                ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
-            )
         )
 
     @classmethod
@@ -232,8 +273,9 @@ class DefaultMessageSender:
         if not media:
             return []
 
-        prepared: list[PreparedMedia] = []
+        prepared: list[PreparedMedia | None] = []
         seen_urls: set[str] = set()
+        remote_jobs: list[tuple[int, str, str]] = []
 
         from ...media import MediaDownloader
 
@@ -260,86 +302,137 @@ class DefaultMessageSender:
                 continue
 
             seen_urls.add(media_url)
+            if self._get_media_download_concurrency() > 1:
+                prepared.append(None)
+                remote_jobs.append((len(prepared) - 1, media_type, media_url))
+                continue
 
-            try:
-                try_convert_gif = media_type == "video" and self._should_transcode_gif()
-                if hasattr(downloader, "get_or_download_prepared"):
-                    prepared_item = await downloader.get_or_download_prepared(
-                        url=media_url,
-                        timeout_seconds=timeout,
-                        proxy=proxy,
+            prepared.append(
+                await self._prepare_remote_media_item(
+                    downloader,
+                    media_type=media_type,
+                    media_url=media_url,
+                    timeout=timeout,
+                    proxy=proxy,
+                )
+            )
+
+        if remote_jobs:
+            semaphore = asyncio.Semaphore(self._get_media_download_concurrency())
+
+            async def run_job(index: int, media_type: str, media_url: str):
+                async with semaphore:
+                    return index, await self._prepare_remote_media_item(
+                        downloader,
                         media_type=media_type,
-                        try_convert_gif=try_convert_gif,
-                        gif_transcode_timeout=self._get_gif_transcode_timeout(),
+                        media_url=media_url,
+                        timeout=timeout,
+                        proxy=proxy,
                     )
-                    if media_type == "video" and prepared_item.local_path is not None:
-                        local_path = await self._maybe_transcode_video_to_mp4(
-                            prepared_item.local_path
-                        )
-                        if local_path != prepared_item.local_path:
-                            detection = detect_media_file(local_path)
-                            prepared_item.local_path = local_path
-                            prepared_item.media_type = detection.media_type or "video"
-                            prepared_item.detected_mime = detection.mime
-                            prepared_item.detected_suffix = detection.suffix
-                            prepared_item.detection_source = detection.source
-                            prepared_item.add_variant(
-                                MediaVariant(
-                                    variant="transcoded",
-                                    media_type=prepared_item.media_type,
-                                    path=local_path,
-                                    mime=detection.mime,
-                                    suffix=detection.suffix,
-                                    size_bytes=self._safe_file_size(local_path),
-                                )
-                            )
-                    prepared_item.ensure_primary_variant()
-                    prepared.append(prepared_item)
-                    continue
 
-                local_path = await downloader.get_or_download(
+            results = await asyncio.gather(
+                *(
+                    run_job(index, media_type, media_url)
+                    for index, media_type, media_url in remote_jobs
+                )
+            )
+            for index, item in results:
+                prepared[index] = item
+
+        return [item for item in prepared if item is not None]
+
+    async def _prepare_remote_media_item(
+        self,
+        downloader,
+        *,
+        media_type: str,
+        media_url: str,
+        timeout: int,
+        proxy: str,
+    ) -> PreparedMedia:
+        try:
+            try_convert_gif = media_type == "video" and self._should_transcode_gif()
+            relay_kwargs = self._media_downloader_relay_kwargs()
+            if hasattr(downloader, "get_or_download_prepared"):
+                prepared_item = await downloader.get_or_download_prepared(
                     url=media_url,
                     timeout_seconds=timeout,
                     proxy=proxy,
                     media_type=media_type,
                     try_convert_gif=try_convert_gif,
                     gif_transcode_timeout=self._get_gif_transcode_timeout(),
+                    **relay_kwargs,
                 )
-                if media_type == "video":
-                    local_path = await self._maybe_transcode_video_to_mp4(local_path)
-                detection = detect_media_file(local_path)
-                effective_media_type = (
-                    detection.media_type
-                    if detection.media_type in {"image", "video", "audio"}
-                    else media_type
-                )
-                prepared_item = PreparedMedia(
-                    media_type=effective_media_type,
-                    original_url=media_url,
-                    local_path=local_path,
-                    detected_mime=detection.mime,
-                    detected_suffix=detection.suffix,
-                    detection_source=detection.source,
-                )
-                prepared_item.ensure_primary_variant()
-                prepared.append(prepared_item)
-            except Exception as ex:
-                prepared.append(
-                    PreparedMedia(
-                        media_type=media_type,
-                        original_url=media_url,
-                        download_failed=True,
+                if media_type == "video" and prepared_item.local_path is not None:
+                    local_path = await self._maybe_transcode_video_to_mp4(
+                        prepared_item.local_path
                     )
-                )
-                logger.warning(
-                    "prepare_media: Prepare media failed: stage=download_or_validation, "
-                    "type=%s, url=%s, err=%s",
-                    media_type,
-                    media_url,
-                    ex,
-                )
+                    if local_path != prepared_item.local_path:
+                        detection = detect_media_file(local_path)
+                        prepared_item.local_path = local_path
+                        prepared_item.media_type = detection.media_type or "video"
+                        prepared_item.detected_mime = detection.mime
+                        prepared_item.detected_suffix = detection.suffix
+                        prepared_item.detection_source = detection.source
+                        prepared_item.add_variant(
+                            MediaVariant(
+                                variant="transcoded",
+                                media_type=prepared_item.media_type,
+                                path=local_path,
+                                mime=detection.mime,
+                                suffix=detection.suffix,
+                                size_bytes=self._safe_file_size(local_path),
+                            )
+                        )
+                prepared_item.ensure_primary_variant()
+                return prepared_item
 
-        return prepared
+            local_path = await downloader.get_or_download(
+                url=media_url,
+                timeout_seconds=timeout,
+                proxy=proxy,
+                media_type=media_type,
+                try_convert_gif=try_convert_gif,
+                gif_transcode_timeout=self._get_gif_transcode_timeout(),
+                **relay_kwargs,
+            )
+            if media_type == "video":
+                local_path = await self._maybe_transcode_video_to_mp4(local_path)
+            detection = detect_media_file(local_path)
+            effective_media_type = (
+                detection.media_type
+                if detection.media_type in {"image", "video", "audio"}
+                else media_type
+            )
+            prepared_item = PreparedMedia(
+                media_type=effective_media_type,
+                original_url=media_url,
+                local_path=local_path,
+                detected_mime=detection.mime,
+                detected_suffix=detection.suffix,
+                detection_source=detection.source,
+            )
+            prepared_item.ensure_primary_variant()
+            return prepared_item
+        except Exception as ex:
+            logger.warning(
+                "prepare_media: Prepare media failed: stage=download_or_validation, "
+                "type=%s, url=%s, err=%s",
+                media_type,
+                media_url,
+                ex,
+            )
+            return PreparedMedia(
+                media_type=media_type,
+                original_url=media_url,
+                download_failed=True,
+            )
+
+    def _media_downloader_relay_kwargs(self) -> dict[str, str]:
+        return {
+            "image_relay_base_url": self._get_image_relay_base_url(),
+            "media_relay_base_url": self._get_media_relay_base_url(),
+        }
 
     @staticmethod
     def _prepare_generated_media(media_type: str, media_url: str) -> PreparedMedia:
@@ -427,7 +520,6 @@ class DefaultMessageSender:
         *,
         failed_urls: list[str] | None = None,
         platform: str | None = None,
-        prefer_local_video: bool = True,
     ) -> list[MessageComponent]:
         effective_failed_urls = (
             list(failed_urls)
@@ -444,7 +536,6 @@ class DefaultMessageSender:
             platform=platform
             if platform is not None
             else (context.platform_name if context else ""),
-            prefer_local_video=prefer_local_video,
         )
         return self._attach_generated_fallbacks(components, request)
 
@@ -491,7 +582,6 @@ class DefaultMessageSender:
         prepared_media_by_url: dict[str, PreparedMedia] | None,
         *,
         platform: str,
-        prefer_local_video: bool = True,
     ) -> list[MessageComponent]:
         """发送前按平台策略把组件改写为第一个可发送候选。"""
         if not prepared_media_by_url:
@@ -514,7 +604,6 @@ class DefaultMessageSender:
                     for candidate in MediaSendPlanner.candidates_for(
                         prepared,
                         platform=platform,
-                        prefer_local_video=prefer_local_video,
                     )
                     if candidate.action != "link"
                 ),
@@ -553,7 +642,6 @@ class DefaultMessageSender:
         *,
         prepared_media_by_url: dict[str, PreparedMedia] | None = None,
         platform: str | None = None,
-        prefer_local_video: bool = True,
         skip_first_file: str = "",
         use_markdown: bool | None = None,
     ) -> _MediaFallbackOutcome:
@@ -569,7 +657,6 @@ class DefaultMessageSender:
             candidates = MediaSendPlanner.candidates_for(
                 prepared,
                 platform=platform,
-                prefer_local_video=prefer_local_video,
             )
         else:
             candidates = [self._component_to_file_candidate(component)]
@@ -810,7 +897,6 @@ class DefaultMessageSender:
         use_markdown: bool | None = None,
         prepared_media_by_url: dict[str, PreparedMedia] | None = None,
         platform: str | None = None,
-        prefer_local_video: bool = True,
     ) -> SendResult:
         media_components = [
             component for component in components if self._is_media_component(component)
@@ -843,7 +929,6 @@ class DefaultMessageSender:
                     component,
                     prepared_media_by_url=prepared_media_by_url,
                     platform=platform,
-                    prefer_local_video=prefer_local_video,
                     skip_first_file=component.file,
                     use_markdown=use_markdown,
                 )
@@ -887,7 +972,6 @@ class DefaultMessageSender:
         use_markdown: bool | None = None,
         prepared_media_by_url: dict[str, PreparedMedia] | None = None,
         platform: str | None = None,
-        prefer_local_video: bool = True,
     ) -> SendResult:
         failures: list[SendResult] = []
         failed_urls: list[str] = []
@@ -918,7 +1002,6 @@ class DefaultMessageSender:
                         component,
                         prepared_media_by_url=prepared_media_by_url,
                         platform=platform,
-                        prefer_local_video=prefer_local_video,
                         skip_first_file=component.file,
                         use_markdown=use_markdown,
                     )
@@ -972,7 +1055,6 @@ class DefaultMessageSender:
                             paired_image,
                             prepared_media_by_url=prepared_media_by_url,
                             platform=platform,
-                            prefer_local_video=prefer_local_video,
                             skip_first_file=paired_image.file,
                             use_markdown=use_markdown,
                         )

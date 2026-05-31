@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from astrbot.api.message_components import Node, Nodes, Plain
 
 from ...utils import get_logger
+from ..napcat_stream import upload_file_stream
 from .base_sender import DefaultMessageSender
 from .types import MessageContext, SendRequest, SendResult
 
@@ -37,12 +39,48 @@ class OneBotMessageSender(DefaultMessageSender):
         return getattr(strategy, key, default)
 
     @classmethod
-    def _prefer_local_video(cls, context: MessageContext | None) -> bool:
+    def _napcat_stream_mode(cls, context: MessageContext | None) -> str:
+        """获取 NapCat stream 模式配置
+
+        Returns:
+            "disabled", "fallback", 或 "always"
+        """
         strategy = getattr(context, "sender_strategy", None) if context else None
-        value = cls._strategy_value(strategy, "prefer_local_video", None)
+        value = cls._strategy_value(strategy, "napcat_stream_mode", None)
         if value is None:
-            return cls._get_onebot_prefer_local_video_default()
-        return bool(value)
+            return cls._get_onebot_napcat_stream_mode_default()
+        return str(value)
+
+    @classmethod
+    def _get_onebot_napcat_stream_mode_default(cls) -> str:
+        """获取 OneBot NapCat stream 模式的默认值"""
+        from ....shared.constants import ONEBOT_NAPCAT_STREAM_MODE_DEFAULT
+
+        return str(
+            getattr(
+                cls,
+                "_onebot_napcat_stream_mode_default",
+                ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
+            )
+        )
+
+    @classmethod
+    def _resolve_bot_client(cls, context: MessageContext | None) -> Any | None:
+        """解析可用于 NapCat stream 的 bot 客户端
+
+        优先使用消息事件携带的 bot（命令响应场景），
+        否则通过全局 provider 按平台名解析（主动推送场景）。
+        """
+        event = getattr(context, "event", None) if context else None
+        if event is not None:
+            bot = getattr(event, "bot", None) or getattr(event, "_bot", None)
+            if bot is not None:
+                return bot
+
+        from .types import get_bot_client
+
+        platform_name = getattr(context, "platform_name", "") if context else ""
+        return get_bot_client(platform_name or "")
 
     async def send_to_user(
         self,
@@ -69,6 +107,8 @@ class OneBotMessageSender(DefaultMessageSender):
                 if pm.original_url
             }
 
+            napcat_mode = self._napcat_stream_mode(context)
+
             if self._is_original_style(context) and request.layout:
                 return await self._send_components_in_order(
                     session_id,
@@ -79,7 +119,6 @@ class OneBotMessageSender(DefaultMessageSender):
                     default_text=request.message,
                     prepared_media_by_url=prepared_media_by_url,
                     platform="onebot",
-                    prefer_local_video=self._prefer_local_video(context),
                 )
 
             nickname = (
@@ -94,13 +133,11 @@ class OneBotMessageSender(DefaultMessageSender):
                 context,
                 failed_urls=[],
                 platform="onebot",
-                prefer_local_video=self._prefer_local_video(context),
             )
             components = self._apply_first_send_candidates(
                 components,
                 prepared_media_by_url,
                 platform="onebot",
-                prefer_local_video=self._prefer_local_video(context),
             )
 
             nodes: list[Node] = []
@@ -135,7 +172,28 @@ class OneBotMessageSender(DefaultMessageSender):
             if not nodes:
                 return SendResult(ok=False, detail="empty_message")
 
+            bot_client = self._resolve_bot_client(context)
+
+            # NapCat stream mode: always
+            if napcat_mode == "always" and bot_client is not None:
+                nodes = await self._stream_upload_nodes(bot_client, nodes)
+
             result = await self._send_chain(session_id, [Nodes(nodes)])
+
+            # NapCat stream mode: fallback
+            if (
+                not result.ok
+                and napcat_mode == "fallback"
+                and bot_client is not None
+                and self._has_local_video_nodes(nodes)
+            ):
+                logger.warning(
+                    "OneBot send failed, trying NapCat stream fallback: session=%s",
+                    session_id,
+                )
+                streamed_nodes = await self._stream_upload_nodes(bot_client, nodes)
+                result = await self._send_chain(session_id, [Nodes(streamed_nodes)])
+
             if not result.ok:
                 logger.warning(
                     "OneBot merged-forward send failed, fallback to text-only: "
@@ -174,3 +232,92 @@ class OneBotMessageSender(DefaultMessageSender):
                 transient=self._is_transient_network_error(err),
                 detail=self._normalize_error_detail(str(err)),
             )
+
+    async def _stream_upload_nodes(
+        self, bot_client: Any, nodes: list[Node]
+    ) -> list[Node]:
+        """通过 NapCat Stream 上传节点中的本地视频文件
+
+        Args:
+            bot_client: 支持 call_action 的 bot 客户端
+            nodes: 原始节点列表
+
+        Returns:
+            处理后的节点列表（本地视频文件路径替换为上传后的路径）
+        """
+        from astrbot.api.message_components import Video
+
+        streamed_nodes: list[Node] = []
+        for node in nodes:
+            if not node.content:
+                streamed_nodes.append(node)
+                continue
+
+            streamed_content = []
+            for comp in node.content:
+                if not isinstance(comp, Video):
+                    streamed_content.append(comp)
+                    continue
+
+                local_path = self._extract_local_video_path(comp)
+                if not local_path:
+                    streamed_content.append(comp)
+                    continue
+
+                uploaded_path = await upload_file_stream(bot_client, local_path)
+                if uploaded_path:
+                    logger.info(
+                        "[napcat_stream] 视频上传成功: local=%s, remote=%s",
+                        local_path,
+                        uploaded_path,
+                    )
+                    streamed_content.append(Video(file=uploaded_path))
+                else:
+                    logger.warning(
+                        "[napcat_stream] 视频上传失败，保留原路径: local=%s",
+                        local_path,
+                    )
+                    streamed_content.append(comp)
+
+            streamed_nodes.append(
+                Node(content=streamed_content, name=node.name, uin=node.uin)
+            )
+
+        return streamed_nodes
+
+    def _has_local_video_nodes(self, nodes: list[Node]) -> bool:
+        """检查节点列表中是否包含本地视频文件"""
+        from astrbot.api.message_components import Video
+
+        for node in nodes:
+            if not node.content:
+                continue
+            for comp in node.content:
+                if isinstance(comp, Video) and self._extract_local_video_path(comp):
+                    return True
+        return False
+
+    @staticmethod
+    def _extract_local_video_path(video_comp) -> Path | None:
+        """从 Video 组件中提取本地文件路径
+
+        Args:
+            video_comp: Video 组件
+
+        Returns:
+            本地文件路径，如果不是本地文件则返回 None
+        """
+        file_value = getattr(video_comp, "file", None)
+        if not isinstance(file_value, str) or not file_value:
+            return None
+
+        # 处理 file:/// 协议
+        if file_value.startswith("file:///"):
+            path = Path(file_value[8:])
+        elif file_value.startswith("http://") or file_value.startswith("https://"):
+            # 跳过 HTTP URL
+            return None
+        else:
+            path = Path(file_value)
+
+        return path if path.exists() and path.is_file() else None

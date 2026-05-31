@@ -114,6 +114,7 @@ class MessageContext:
     send_mode: int | None = None
     style: int = 0
     sender_strategy: Any = None
+    event: Any = None  # AstrBot event object for platform-specific features (e.g., NapCat stream)
 
 
 @dataclass
@@ -190,3 +191,32 @@ def get_bot_self_id(platform_id: str) -> str:
     if _bot_self_id_provider:
         return _bot_self_id_provider(platform_id)
     return "10000"
+
+
+# 全局的 bot client 获取函数（用于主动推送场景下访问平台 bot 客户端）
+_bot_client_provider: Callable[[str], Any] | None = None
+
+
+def set_bot_client_provider(provider: Callable[[str], Any] | None) -> None:
+    """设置全局的 bot client 获取函数
+
+    Args:
+        provider: 接收 platform_name，返回对应平台 bot 客户端的函数。
+            主要用于 OneBot/NapCat 主动推送场景下获取支持 call_action 的客户端。
+    """
+    global _bot_client_provider
+    _bot_client_provider = provider
+
+
+def get_bot_client(platform_name: str) -> Any | None:
+    """获取指定平台的 bot 客户端
+
+    Args:
+        platform_name: 平台名称（如 aiocqhttp）
+
+    Returns:
+        bot 客户端实例，若无法解析则返回 None
+    """
+    if _bot_client_provider:
+        return _bot_client_provider(platform_name)
+    return None

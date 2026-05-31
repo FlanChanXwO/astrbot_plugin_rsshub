@@ -220,8 +220,10 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert "media_config" not in healed
     assert healed["route_knowledge"]["source_mode"] == "mirror"
     assert healed["route_knowledge"]["timeout"] == 300
-    assert healed["ffmpeg"]["video_transcode"] is False
-    assert healed["ffmpeg"]["video_transcode_timeout"] == 10
+    assert "ffmpeg" not in healed
+    assert healed["media"]["video_transcode"] is False
+    assert healed["media"]["video_transcode_timeout"] == 10
+    assert healed["media"]["table_to_image"] is True
     assert healed["content_handlers"] == {
         "ai_provider_id": "",
         "ai_persona_id": "",
@@ -258,8 +260,8 @@ def test_heal_astrbot_plugin_config_returns_no_changes_for_clean_config():
             key: value["default"]
             for key, value in schema["route_knowledge"]["items"].items()
         },
-        "ffmpeg": {
-            key: value["default"] for key, value in schema["ffmpeg"]["items"].items()
+        "media": {
+            key: value["default"] for key, value in schema["media"]["items"].items()
         },
         "content_handlers": {
             key: value["default"]
@@ -427,7 +429,7 @@ def test_sender_strategies_parse_platform_strategy_objects_without_breaking_enab
                 },
                 "aiocqhttp": {
                     "enable_telegraph": False,
-                    "prefer_local_video": False,
+                    "napcat_stream_mode": "disabled",
                 },
             }
         }
@@ -439,7 +441,7 @@ def test_sender_strategies_parse_platform_strategy_objects_without_breaking_enab
     assert config.sender_strategies.telegram_settings.enable_telegraph is True
     assert config.sender_strategies.telegram_settings.telegraph_token == "token-1"
     assert config.sender_strategies.aiocqhttp_settings.enable_telegraph is False
-    assert config.sender_strategies.aiocqhttp_settings.prefer_local_video is False
+    assert config.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "disabled"
 
 
 def test_sender_strategies_keep_onebot_local_video_unset_when_not_configured():
@@ -462,8 +464,8 @@ def test_sender_strategies_keep_onebot_local_video_unset_when_not_configured():
     )
     settings = build_application_settings(config)
 
-    assert config.sender_strategies.aiocqhttp_settings.prefer_local_video is None
-    assert settings.sender_strategies.aiocqhttp_settings.prefer_local_video is None
+    assert config.sender_strategies.aiocqhttp_settings.napcat_stream_mode is None
+    assert settings.sender_strategies.aiocqhttp_settings.napcat_stream_mode is None
 
 
 def test_sender_strategies_prefer_qq_official_config_over_boolean_flag():
@@ -503,7 +505,7 @@ def test_sender_strategies_parse_unified_template_list_and_use_first_item_per_ty
                     },
                     {
                         "__template_key": "onebot_strategy",
-                        "prefer_local_video": True,
+                        "napcat_stream_mode": "always",
                     },
                     {
                         "__template_key": "qq_official_strategy",
@@ -520,7 +522,7 @@ def test_sender_strategies_parse_unified_template_list_and_use_first_item_per_ty
 
     assert config.sender_strategies.telegram_settings.enable_telegraph is True
     assert config.sender_strategies.telegram_settings.telegraph_token == "first-token"
-    assert config.sender_strategies.aiocqhttp_settings.prefer_local_video is True
+    assert config.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "always"
     assert config.sender_strategies.qq_official_settings.markdown_mode == "force"
 
 
@@ -629,7 +631,7 @@ def test_config_save_ignores_telegram_onebot_only_strategy_fields():
                 "platform_strategies": [
                     {
                         "__template_key": "telegram_strategy",
-                        "prefer_local_video": True,
+                        "napcat_stream_mode": "always",
                     }
                 ],
             }
@@ -682,7 +684,7 @@ def test_application_settings_maps_unified_sender_strategy_templates():
                 "platform_strategies": [
                     {
                         "__template_key": "onebot_strategy",
-                        "prefer_local_video": True,
+                        "napcat_stream_mode": "always",
                     },
                     {
                         "__template_key": "telegram_strategy",
@@ -709,7 +711,7 @@ def test_application_settings_maps_unified_sender_strategy_templates():
     )
     assert settings.sender_strategies.aiocqhttp_settings.enable_telegraph is False
     assert settings.sender_strategies.aiocqhttp_settings.telegraph_token == ""
-    assert settings.sender_strategies.aiocqhttp_settings.prefer_local_video is True
+    assert settings.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "always"
     assert settings.sender_strategies.qq_official_settings.markdown_mode == "plain"
 
 
@@ -732,7 +734,7 @@ def test_application_settings_prefer_qq_official_settings_over_boolean_flag():
     assert settings.sender_strategies.qq_official_settings.markdown_mode == "plain"
 
 
-def test_application_settings_maps_ffmpeg_config():
+def test_application_settings_maps_media_config():
     from astrbot_plugin_rsshub.src.infrastructure.config import (
         RsshubPluginConfig,
         build_application_settings,
@@ -740,7 +742,12 @@ def test_application_settings_maps_ffmpeg_config():
 
     config = RsshubPluginConfig.from_astrbot_config(
         {
-            "ffmpeg": {
+            "media": {
+                "telegraph_proxy": " localhost:7890 ",
+                "image_relay_base_url": "https://wsrv.nl/",
+                "media_relay_base_url": "https://relay.example/",
+                "media_download_concurrency": 4,
+                "table_to_image": False,
                 "video_transcode": True,
                 "video_transcode_timeout": 333,
                 "gif_transcode": True,
@@ -751,10 +758,49 @@ def test_application_settings_maps_ffmpeg_config():
 
     settings = build_application_settings(config)
 
-    assert settings.ffmpeg.video_transcode is True
-    assert settings.ffmpeg.video_transcode_timeout == 333
-    assert settings.ffmpeg.gif_transcode is True
-    assert settings.ffmpeg.gif_transcode_timeout == 44
+    assert settings.media.telegraph_proxy == "http://localhost:7890"
+    assert settings.media.image_relay_base_url == "https://wsrv.nl/"
+    assert settings.media.media_relay_base_url == "https://relay.example/"
+    assert settings.media.media_download_concurrency == 4
+    assert settings.media.table_to_image is False
+    assert settings.media.video_transcode is True
+    assert settings.media.video_transcode_timeout == 333
+    assert settings.media.gif_transcode is True
+    assert settings.media.gif_transcode_timeout == 44
+
+
+def test_legacy_ffmpeg_migrates_to_media_without_overriding_existing_media():
+    import json
+    from pathlib import Path
+
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        heal_astrbot_plugin_config,
+    )
+
+    schema = json.loads(
+        (Path(__file__).resolve().parents[3] / "_conf_schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    healed, changes = heal_astrbot_plugin_config(
+        {
+            "media": {
+                "video_transcode_timeout": 222,
+            },
+            "ffmpeg": {
+                "video_transcode": True,
+                "video_transcode_timeout": 111,
+                "gif_transcode": True,
+            },
+        },
+        schema,
+    )
+
+    assert changes
+    assert "ffmpeg" not in healed
+    assert healed["media"]["video_transcode"] is True
+    assert healed["media"]["video_transcode_timeout"] == 222
+    assert healed["media"]["gif_transcode"] is True
 
 
 def test_global_config_maps_new_send_mode_direct_send_to_db_values():

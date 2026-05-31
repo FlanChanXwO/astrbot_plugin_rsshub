@@ -24,9 +24,9 @@ class PlatformSenderStrategyConfig(BaseModel):
 
     enable_telegraph: bool = Field(default=False, description="启用 Telegraph 自动分流")
     telegraph_token: str = Field(default="", description="Telegraph access token")
-    prefer_local_video: bool | None = Field(
+    napcat_stream_mode: str | None = Field(
         default=None,
-        description="是否优先使用本地视频文件；未配置时使用运行时默认值",
+        description="NapCat 流式上传模式（disabled/fallback/always）；未配置时使用运行时默认值",
     )
     markdown_mode: str = Field(
         default=QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
@@ -188,7 +188,7 @@ class SenderStrategiesConfig(BaseModel):
                 ),
                 self.aiocqhttp_settings.to_template_item(
                     _PLATFORM_STRATEGY_TEMPLATE_KEYS["aiocqhttp"],
-                    include_fields={"prefer_local_video"},
+                    include_fields={"napcat_stream_mode"},
                 ),
                 self.qq_official_settings.to_template_item(
                     _PLATFORM_STRATEGY_TEMPLATE_KEYS["qq_official"],

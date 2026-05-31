@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...shared.constants import (
-    ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
+    ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
     PLATFORM_ONEBOT,
     PLATFORM_QQ_OFFICIAL,
     PLATFORM_STRATEGY_TEMPLATE_KEYS,
@@ -22,8 +22,8 @@ from .models import (
     BasicSettings,
     ContentHandlerSettings,
     FeedFetchSettings,
-    FFmpegSettings,
     HttpSettings,
+    MediaRuntimeSettings,
     MediaSettings,
     PlatformStrategySettings,
     RouteKnowledgeSettings,
@@ -42,12 +42,6 @@ def _get_value(source: Any, key: str, default: Any = None) -> Any:
     if isinstance(source, dict):
         return source.get(key, default)
     return getattr(source, key, default)
-
-
-def _optional_bool(value: Any) -> bool | None:
-    if value is None:
-        return None
-    return bool(value)
 
 
 def _normalize_proxy_url(value: Any) -> str:
@@ -77,6 +71,31 @@ def _normalize_route_knowledge_base_url(value: Any) -> str:
     old = "FlanChanXwO/astrbot_plugin_rsshub/rsshub-routes-knowledgebase"
     new = "FlanChanXwO/rsshub-routes-knowledgebase/main"
     return raw.replace(old, new)
+
+
+def _merge_legacy_ffmpeg_media(config: Any, media_cfg: Any) -> Any:
+    legacy_ffmpeg = _get_value(config, "ffmpeg")
+    if not isinstance(legacy_ffmpeg, dict):
+        return media_cfg
+    merged = dict(legacy_ffmpeg)
+    if isinstance(media_cfg, dict):
+        merged.update(media_cfg)
+    elif media_cfg is not None:
+        for key in (
+            "telegraph_proxy",
+            "image_relay_base_url",
+            "media_relay_base_url",
+            "media_download_concurrency",
+            "table_to_image",
+            "video_transcode",
+            "video_transcode_timeout",
+            "gif_transcode",
+            "gif_transcode_timeout",
+        ):
+            value = getattr(media_cfg, key, None)
+            if value is not None:
+                merged[key] = value
+    return merged
 
 
 _SENDER_STRATEGY_KEYS: tuple[str, ...] = SENDER_STRATEGY_ENABLED_PLATFORMS
@@ -167,10 +186,13 @@ def _build_sender_strategy_settings(value: Any) -> SenderStrategySettings:
         enable_telegraph=bool(_get_value(telegram_source, "enable_telegraph", False)),
         telegraph_token=str(_get_value(telegram_source, "telegraph_token", "") or ""),
     )
+    aiocqhttp_napcat_mode = _get_value(aiocqhttp_source, "napcat_stream_mode", None)
+    if aiocqhttp_napcat_mode is not None:
+        aiocqhttp_napcat_mode = str(aiocqhttp_napcat_mode)
+        if aiocqhttp_napcat_mode not in ("disabled", "fallback", "always"):
+            aiocqhttp_napcat_mode = None
     aiocqhttp_config = PlatformStrategySettings(
-        prefer_local_video=_optional_bool(
-            _get_value(aiocqhttp_source, "prefer_local_video", None)
-        ),
+        napcat_stream_mode=aiocqhttp_napcat_mode,
     )
     qq_official_config = PlatformStrategySettings(markdown_mode=markdown_mode)
     if enabled is not None:
@@ -202,8 +224,8 @@ def build_application_settings(config: Any) -> ApplicationSettings:
     basic_cfg = _get_value(config, "basic_config")
     http_cfg = _get_value(config, "http_config")
     global_cfg = _get_value(config, "global_config")
-    media_cfg = _get_value(config, "media_config")
-    ffmpeg_cfg = _get_value(config, "ffmpeg")
+    legacy_media_cfg = _get_value(config, "media_config")
+    media_cfg = _merge_legacy_ffmpeg_media(config, _get_value(config, "media"))
     content_handlers_cfg = _get_value(config, "content_handlers")
     sender_cfg = _get_value(config, "sender_strategies")
     route_knowledge_cfg = _get_value(config, "route_knowledge")
@@ -230,7 +252,7 @@ def build_application_settings(config: Any) -> ApplicationSettings:
                 http_cfg,
                 "media_timeout",
                 _get_value(
-                    media_cfg,
+                    legacy_media_cfg,
                     "download_media_timeout",
                     _get_value(
                         basic_cfg,
@@ -305,10 +327,10 @@ def build_application_settings(config: Any) -> ApplicationSettings:
         download_media_before_send=True,
         download_media_timeout=http.media_timeout,
     )
-    media_config = MediaSettings(
+    media_config = MediaRuntimeSettings(
         download_media_timeout=http.media_timeout,
         telegram_photo_max_bytes=TELEGRAM_PHOTO_MAX_BYTES,
-        onebot_prefer_local_video_default=ONEBOT_PREFER_LOCAL_VIDEO_DEFAULT,
+        onebot_napcat_stream_mode=ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
         qq_official_media_threshold=QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
         qq_official_degrade_strategy=QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     )
@@ -372,14 +394,27 @@ def build_application_settings(config: Any) -> ApplicationSettings:
         sender_strategies=_build_sender_strategy_settings(sender_cfg),
         http=http,
         media_config=media_config,
-        ffmpeg=FFmpegSettings(
-            video_transcode=bool(_get_value(ffmpeg_cfg, "video_transcode", False)),
-            video_transcode_timeout=max(
-                1, int(_get_value(ffmpeg_cfg, "video_transcode_timeout", 120) or 120)
+        media=MediaSettings(
+            telegraph_proxy=_normalize_proxy_url(
+                _get_value(media_cfg, "telegraph_proxy", "") or ""
             ),
-            gif_transcode=bool(_get_value(ffmpeg_cfg, "gif_transcode", False)),
+            image_relay_base_url=str(
+                _get_value(media_cfg, "image_relay_base_url", "") or ""
+            ).strip(),
+            media_relay_base_url=str(
+                _get_value(media_cfg, "media_relay_base_url", "") or ""
+            ).strip(),
+            media_download_concurrency=max(
+                1, int(_get_value(media_cfg, "media_download_concurrency", 1) or 1)
+            ),
+            table_to_image=bool(_get_value(media_cfg, "table_to_image", True)),
+            video_transcode=bool(_get_value(media_cfg, "video_transcode", False)),
+            video_transcode_timeout=max(
+                1, int(_get_value(media_cfg, "video_transcode_timeout", 120) or 120)
+            ),
+            gif_transcode=bool(_get_value(media_cfg, "gif_transcode", False)),
             gif_transcode_timeout=max(
-                1, int(_get_value(ffmpeg_cfg, "gif_transcode_timeout", 60) or 60)
+                1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
             ),
         ),
         route_knowledge=RouteKnowledgeSettings(

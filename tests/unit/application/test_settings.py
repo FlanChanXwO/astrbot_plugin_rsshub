@@ -441,9 +441,7 @@ def test_sender_strategies_parse_platform_strategy_objects_without_breaking_enab
     assert config.sender_strategies.telegram_settings.enable_telegraph is True
     assert config.sender_strategies.telegram_settings.telegraph_token == "token-1"
     assert config.sender_strategies.aiocqhttp_settings.enable_telegraph is False
-    assert (
-        config.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "disabled"
-    )
+    assert config.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "disabled"
 
 
 def test_sender_strategies_keep_onebot_local_video_unset_when_not_configured():
@@ -524,9 +522,7 @@ def test_sender_strategies_parse_unified_template_list_and_use_first_item_per_ty
 
     assert config.sender_strategies.telegram_settings.enable_telegraph is True
     assert config.sender_strategies.telegram_settings.telegraph_token == "first-token"
-    assert (
-        config.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "always"
-    )
+    assert config.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "always"
     assert config.sender_strategies.qq_official_settings.markdown_mode == "force"
 
 
@@ -715,9 +711,7 @@ def test_application_settings_maps_unified_sender_strategy_templates():
     )
     assert settings.sender_strategies.aiocqhttp_settings.enable_telegraph is False
     assert settings.sender_strategies.aiocqhttp_settings.telegraph_token == ""
-    assert (
-        settings.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "always"
-    )
+    assert settings.sender_strategies.aiocqhttp_settings.napcat_stream_mode == "always"
     assert settings.sender_strategies.qq_official_settings.markdown_mode == "plain"
 
 

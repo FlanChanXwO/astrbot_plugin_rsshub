@@ -5,9 +5,6 @@ from pathlib import Path
 
 import pytest
 from astrbot_plugin_rsshub.src.domain.entities.content_types import LayoutFragment
-from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.base_sender import (
-    DefaultMessageSender,
-)
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender import (
     OneBotMessageSender,
 )

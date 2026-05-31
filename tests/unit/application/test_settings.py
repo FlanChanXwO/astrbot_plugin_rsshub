@@ -820,9 +820,7 @@ def test_legacy_media_telegraph_proxy_migrates_to_telegram_strategy():
     assert "telegraph_proxy" not in normalized.get("media", {})
     strategies = normalized["sender_strategies"]["platform_strategies"]
     telegram_item = next(
-        item
-        for item in strategies
-        if item.get("__template_key") == "telegram_strategy"
+        item for item in strategies if item.get("__template_key") == "telegram_strategy"
     )
     assert telegram_item["telegraph_proxy"] == "localhost:7890"
     assert any("media.telegraph_proxy" in change for change in changes)
@@ -854,9 +852,7 @@ def test_legacy_media_telegraph_proxy_keeps_existing_strategy_value():
 
     strategies = normalized["sender_strategies"]["platform_strategies"]
     telegram_item = next(
-        item
-        for item in strategies
-        if item.get("__template_key") == "telegram_strategy"
+        item for item in strategies if item.get("__template_key") == "telegram_strategy"
     )
     # setdefault 不覆盖用户已在策略中设置的值。
     assert telegram_item["telegraph_proxy"] == "strategy-proxy:1080"

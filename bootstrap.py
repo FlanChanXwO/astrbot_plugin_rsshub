@@ -70,7 +70,11 @@ from .src.infrastructure.persistence import (
     get_subscription_repository,
     get_user_repository,
 )
-from .src.infrastructure.rendering.font_manager import ensure_table_font
+from .src.infrastructure.pipeline import EntryTextFormatter
+from .src.infrastructure.rendering.font_manager import (
+    configure_table_font_download,
+    prefetch_table_font,
+)
 from .src.infrastructure.schedule import RSSScheduler
 from .src.infrastructure.utils import (
     get_logger,
@@ -147,7 +151,7 @@ async def create_plugin_runtime(
     queue: SessionPushQueue | None = None
     try:
         plugin_config, app_settings = _init_config(config)
-        await _ensure_table_font_ready(app_settings)
+        _schedule_table_font(app_settings)
         _configure_message_senders(app_settings)
         _register_bot_client_provider(context)
         await _init_database(plugin_config)
@@ -195,14 +199,18 @@ async def create_plugin_runtime(
         raise
 
 
-async def _ensure_table_font_ready(app_settings: ApplicationSettings) -> None:
-    """确保运行时 CJK 字体已就绪（表格转图功能需要）。"""
-    font_path = await ensure_table_font(
+def _schedule_table_font(app_settings: ApplicationSettings) -> None:
+    """配置字体下载参数；启用表格转图时后台预取，不阻塞插件启动。
+
+    始终配置代理/超时，使首次表格渲染的按需门控也能复用同一代理；仅当开启
+    table_to_image 时才触发后台预取，避免无谓下载。
+    """
+    configure_table_font_download(
         http_proxy=app_settings.http.proxy,
         timeout=app_settings.http.media_timeout,
     )
-    if font_path is None:
-        logger.warning("表格字体下载失败，表格将回退为纯文本展示")
+    if app_settings.media.table_to_image:
+        prefetch_table_font()
 
 
 def _init_config(
@@ -264,7 +272,6 @@ def _configure_message_senders(app_settings: ApplicationSettings) -> None:
     DefaultMessageSender.configure_runtime(
         timeout_seconds=app_settings.http.media_timeout,
         proxy=app_settings.http.proxy,
-        telegraph_proxy=app_settings.media.telegraph_proxy,
         image_relay_base_url=app_settings.media.image_relay_base_url,
         media_relay_base_url=app_settings.media.media_relay_base_url,
         media_download_concurrency=app_settings.media.media_download_concurrency,

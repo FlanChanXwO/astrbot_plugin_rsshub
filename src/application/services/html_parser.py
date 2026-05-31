@@ -320,17 +320,25 @@ class HTMLParser:
         fallback_text = self._table_plain_text(table)
         if self._render_tables_as_images:
             try:
-                renderer = self._get_table_renderer()
-                rendered = await self._run_async(renderer.render_table, table)
-                if rendered is not None:
-                    generated = GeneratedImageContent(
-                        source_id=rendered.source_id,
-                        cache_path=str(rendered.path),
-                        alt="[表格已转为图片]",
-                        fallback_text=fallback_text,
-                    )
-                    self._append_media(generated)
-                    return [generated]
+                from ...infrastructure.rendering.font_manager import (
+                    ensure_table_font_runtime,
+                )
+
+                # 按需门控：字体未就绪（含尚未后台预取完成）时此处会等待下载；
+                # 未配置下载的环境直接返回 None，回退纯文本，绝不发起网络请求。
+                font_ready = await ensure_table_font_runtime() is not None
+                if font_ready:
+                    renderer = self._get_table_renderer()
+                    rendered = await self._run_async(renderer.render_table, table)
+                    if rendered is not None:
+                        generated = GeneratedImageContent(
+                            source_id=rendered.source_id,
+                            cache_path=str(rendered.path),
+                            alt="[表格已转为图片]",
+                            fallback_text=fallback_text,
+                        )
+                        self._append_media(generated)
+                        return [generated]
             except Exception as ex:
                 from ...infrastructure.utils.logger import get_logger
 

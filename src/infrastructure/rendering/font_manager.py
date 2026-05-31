@@ -30,6 +30,62 @@ _DOWNLOAD_TIMEOUT_FLOOR = 120
 
 _download_lock = asyncio.Lock()
 
+# 启动时配置的下载参数；按需门控与后台预取共用，避免在渲染路径再次穿透业务层取代理。
+_download_configured = False
+_configured_proxy = ""
+_configured_timeout = 300
+_prefetch_task: asyncio.Task[Path | None] | None = None
+
+
+def configure_table_font_download(http_proxy: str = "", timeout: int = 300) -> None:
+    """记录字体下载使用的代理与超时（启动装配时调用一次）。
+
+    配置后，按需门控 :func:`ensure_table_font_runtime` 才会在字体缺失时触发下载；
+    未配置时（如单元测试）门控只读取已落盘字体，绝不发起网络请求。
+    """
+    global _download_configured, _configured_proxy, _configured_timeout
+    _download_configured = True
+    _configured_proxy = http_proxy or ""
+    _configured_timeout = int(timeout or 300)
+
+
+def prefetch_table_font() -> None:
+    """在后台异步预取字体，不阻塞插件启动（幂等）。
+
+    需先调用 :func:`configure_table_font_download`。字体已就绪或已有进行中的
+    预取任务时直接返回。异常在任务内兜底，不会向调用方逃逸。
+    """
+    global _prefetch_task
+    if _prefetch_task is not None and not _prefetch_task.done():
+        return
+    if _verify_font(get_runtime_font_path()):
+        return
+
+    async def _run() -> Path | None:
+        try:
+            return await ensure_table_font(_configured_proxy, _configured_timeout)
+        except Exception as ex:  # 防御：兜底未知异常，避免后台任务静默崩溃
+            logger.warning(
+                "表格字体后台预取异常: err_type=%s, err=%s", type(ex).__name__, ex
+            )
+            return None
+
+    _prefetch_task = asyncio.create_task(_run())
+
+
+async def ensure_table_font_runtime() -> Path | None:
+    """渲染路径的按需门控：返回已就绪字体，必要且已配置时才下载。
+
+    复用启动时配置的代理/超时。未配置下载（如测试环境）且字体未落盘时返回
+    None，调用方据此回退纯文本，绝不触发网络下载。
+    """
+    target = get_runtime_font_path()
+    if _verify_font(target):
+        return target
+    if not _download_configured:
+        return None
+    return await ensure_table_font(_configured_proxy, _configured_timeout)
+
 
 def get_runtime_font_dir() -> Path:
     """返回运行时字体的持久化目录（不在 cache 下，避免 GC 清理）。"""

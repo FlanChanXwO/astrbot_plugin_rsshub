@@ -41,15 +41,20 @@ class SubscriptionRepositoryImpl:
             orms = result.scalars().all()
             return [self._to_entity(orm) for orm in orms]
 
-    async def get_by_user_and_feed(
-        self, user_id: str, feed_id: int
+    async def get_by_user_feed_session(
+        self, user_id: str, feed_id: int, target_session: str | None
     ) -> Subscription | None:
-        """根据用户和Feed获取订阅"""
+        """根据用户、Feed 与目标会话获取订阅。
+
+        订阅按 (user_id, feed_id, target_session) 唯一，同一用户在不同会话可对
+        同一 Feed 各订阅一份，因此查重必须带上 target_session。
+        """
         db = get_database()
         async with db.get_session() as session:
             stmt = select(SubORM).where(
                 SubORM.user_id == user_id,
                 SubORM.feed_id == feed_id,
+                SubORM.target_session == target_session,
             )
             result = await session.execute(stmt)
             orm = result.scalar_one_or_none()

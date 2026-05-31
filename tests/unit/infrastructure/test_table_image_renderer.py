@@ -186,9 +186,7 @@ def test_table_image_renderer_render_returns_none_when_no_font(
     )
 
     renderer = TableImageRenderer(cache_dir=tmp_path)
-    result = renderer.render_table(
-        "<table><tr><th>名称</th><th>值</th></tr></table>"
-    )
+    result = renderer.render_table("<table><tr><th>名称</th><th>值</th></tr></table>")
 
     assert result is None
 

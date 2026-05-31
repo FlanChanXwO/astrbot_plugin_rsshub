@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -12,12 +13,44 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# 添加项目路径
+# 注册当前插件的 src/ 为 astrbot_plugin_rsshub 包
+# 注意：不能把 PLUGINS_DIR 加入 sys.path，否则 Python 会发现
+# 多个同名目录（base + 各 feature 分支），作为 namespace package
+# 合并后可能解析到非当前分支的源码。
 PLUGIN_DIR = Path(__file__).parent.parent
-PLUGINS_DIR = PLUGIN_DIR.parent
-sys.path.insert(0, str(PLUGINS_DIR))
-sys.path.insert(0, str(PLUGIN_DIR))
-sys.path.insert(0, str(PLUGIN_DIR / "src"))
+_src_dir = PLUGIN_DIR / "src"
+
+_pkg_spec = importlib.util.spec_from_file_location(
+    "astrbot_plugin_rsshub",
+    str(_src_dir / "__init__.py"),
+    submodule_search_locations=[str(_src_dir)],
+)
+_pkg = importlib.util.module_from_spec(_pkg_spec)
+sys.modules["astrbot_plugin_rsshub"] = _pkg
+_pkg_spec.loader.exec_module(_pkg)
+
+# astrbot_plugin_rsshub.src 也需预注册，否则嵌套导入失败
+_src_spec = importlib.util.spec_from_file_location(
+    "astrbot_plugin_rsshub.src",
+    str(_src_dir / "__init__.py"),
+    submodule_search_locations=[str(_src_dir)],
+)
+_src_mod = importlib.util.module_from_spec(_src_spec)
+sys.modules["astrbot_plugin_rsshub.src"] = _src_mod
+_src_spec.loader.exec_module(_src_mod)
+# 将 .src 子包链接为顶层包的属性，使 monkeypatch 路径遍历正常工作
+_pkg.src = _src_mod
+
+# 注册 bootstrap 模块（位于插件根目录，不属于 src/ 子包）
+_bootstrap_path = PLUGIN_DIR / "bootstrap.py"
+_bootstrap_spec = importlib.util.spec_from_file_location(
+    "astrbot_plugin_rsshub.bootstrap",
+    str(_bootstrap_path),
+)
+_bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
+sys.modules["astrbot_plugin_rsshub.bootstrap"] = _bootstrap_mod
+_bootstrap_spec.loader.exec_module(_bootstrap_mod)
+_pkg.bootstrap = _bootstrap_mod
 
 # 模拟 AstrBot 相关导入
 sys.modules["astrbot"] = MagicMock()

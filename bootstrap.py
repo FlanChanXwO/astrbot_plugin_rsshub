@@ -70,7 +70,7 @@ from .src.infrastructure.persistence import (
     get_subscription_repository,
     get_user_repository,
 )
-from .src.infrastructure.pipeline import EntryTextFormatter
+from .src.infrastructure.rendering.font_manager import ensure_table_font
 from .src.infrastructure.schedule import RSSScheduler
 from .src.infrastructure.utils import (
     get_logger,
@@ -147,6 +147,7 @@ async def create_plugin_runtime(
     queue: SessionPushQueue | None = None
     try:
         plugin_config, app_settings = _init_config(config)
+        await _ensure_table_font_ready(app_settings)
         _configure_message_senders(app_settings)
         _register_bot_client_provider(context)
         await _init_database(plugin_config)
@@ -192,6 +193,16 @@ async def create_plugin_runtime(
             if db.is_initialized:
                 await db.close()
         raise
+
+
+async def _ensure_table_font_ready(app_settings: ApplicationSettings) -> None:
+    """确保运行时 CJK 字体已就绪（表格转图功能需要）。"""
+    font_path = await ensure_table_font(
+        http_proxy=app_settings.http.proxy,
+        timeout=app_settings.http.media_timeout,
+    )
+    if font_path is None:
+        logger.warning("表格字体下载失败，表格将回退为纯文本展示")
 
 
 def _init_config(

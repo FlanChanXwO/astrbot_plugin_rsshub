@@ -1,18 +1,16 @@
 # 使用文档
 
-本目录预留给面向最终使用者的文档。
+本目录面向插件使用者，承接原根目录 `README.md` 中的命令、配置和管理说明。
 
-后续计划逐步从根目录 `README.md` 拆分这些内容：
+## 阅读入口
 
-- 命令说明
-- 配置说明
-- Plugin Pages 使用方式
-- AI tools / skill 配合方式
-- 常见问题
+- [`commands.md`](./commands.md): 聊天命令、配置继承、帮助和测试推送。
+- [`configuration.md`](./configuration.md): AstrBot 配置页中的启动级配置、媒体配置、发送策略和 Routes 知识库配置。
+- [`plugin-pages.md`](./plugin-pages.md): Plugin Pages 管理界面的功能边界和常见操作。
+- [`ai-tools.md`](./ai-tools.md): AstrBot LLM tool 能力和使用边界。
+- [`compatibility.md`](./compatibility.md): RSS 解析、媒体发送、平台兼容和升级兼容行为。
 
-## 当前入口
+## 其他文档
 
-在使用文档拆分完成前，请先查看：
-
-- [`README.md`](../../README.md)
-- [`docs/README.md`](../README.md)
+- 项目定位、架构和模块语义见 [`../project/README.md`](../project/README.md)。
+- 开发、测试和贡献流程见 [`../dev/README.md`](../dev/README.md)。

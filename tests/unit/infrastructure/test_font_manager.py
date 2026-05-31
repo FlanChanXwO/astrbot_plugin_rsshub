@@ -5,15 +5,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from astrbot_plugin_rsshub.src.infrastructure.rendering import font_manager
 from astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager import (
     TABLE_FONT_FILENAME,
     TABLE_FONT_SHA256,
     TABLE_FONT_SIZE,
     _verify_font,
     ensure_table_font,
+    ensure_table_font_runtime,
     get_runtime_font_dir,
     get_runtime_font_path,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_font_cache():
+    """每个用例前后清空已校验字体缓存，避免模块级缓存跨用例泄漏。"""
+    font_manager._cached_verified_font = None
+    yield
+    font_manager._cached_verified_font = None
 
 
 def test_verify_font_accepts_valid_file(tmp_path: Path):
@@ -156,3 +166,53 @@ async def test_ensure_table_font_returns_none_on_download_failure(tmp_path: Path
     ):
         result = await ensure_table_font(http_proxy="", timeout=10)
         assert result is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_table_font_runtime_caches_verification(tmp_path: Path):
+    """运行时门控应缓存校验结果，重复调用不再重跑 _verify_font。"""
+    target = tmp_path / TABLE_FONT_FILENAME
+    target.write_bytes(b"\x00" * TABLE_FONT_SIZE)
+
+    with (
+        patch(
+            "astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager"
+            ".get_runtime_font_path",
+            return_value=target,
+        ),
+        patch(
+            "astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager._verify_font",
+            return_value=True,
+        ) as mock_verify,
+    ):
+        first = await ensure_table_font_runtime()
+        second = await ensure_table_font_runtime()
+        third = await ensure_table_font_runtime()
+
+    assert first == target
+    assert second == target
+    assert third == target
+    # 仅首次校验，后续命中缓存。
+    assert mock_verify.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_table_font_runtime_no_download_when_unconfigured(tmp_path: Path):
+    """未配置下载且字体缺失时，运行时门控返回 None 且不发起下载。"""
+    target = tmp_path / TABLE_FONT_FILENAME  # 不创建文件
+
+    font_manager._download_configured = False
+    with (
+        patch(
+            "astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager"
+            ".get_runtime_font_path",
+            return_value=target,
+        ),
+        patch(
+            "astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager.HttpFetcher",
+        ) as mock_fetcher_cls,
+    ):
+        result = await ensure_table_font_runtime()
+
+    assert result is None
+    mock_fetcher_cls.assert_not_called()

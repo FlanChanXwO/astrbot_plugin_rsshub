@@ -30,6 +30,11 @@ _DOWNLOAD_TIMEOUT_FLOOR = 120
 
 _download_lock = asyncio.Lock()
 
+# 已校验字体路径缓存：避免渲染路径每张表都重跑 SHA256 全量校验阻塞事件循环。
+# 校验/写入通过 _verify_lock 串行化，保证检查与写缓存原子。
+_cached_verified_font: Path | None = None
+_verify_lock = asyncio.Lock()
+
 # 启动时配置的下载参数；按需门控与后台预取共用，避免在渲染路径再次穿透业务层取代理。
 _download_configured = False
 _configured_proxy = ""
@@ -76,15 +81,35 @@ def prefetch_table_font() -> None:
 async def ensure_table_font_runtime() -> Path | None:
     """渲染路径的按需门控：返回已就绪字体，必要且已配置时才下载。
 
-    复用启动时配置的代理/超时。未配置下载（如测试环境）且字体未落盘时返回
+    首次命中缓存后直接返回缓存路径，避免每张表都重跑全量 SHA256 校验阻塞事件
+    循环。复用启动时配置的代理/超时。未配置下载（如测试环境）且字体未落盘时返回
     None，调用方据此回退纯文本，绝不触发网络下载。
     """
+    if _cached_verified_font is not None:
+        return _cached_verified_font
+
     target = get_runtime_font_path()
-    if _verify_font(target):
-        return target
-    if not _download_configured:
-        return None
-    return await ensure_table_font(_configured_proxy, _configured_timeout)
+    async with _verify_lock:
+        # 双检：可能在等锁期间已被其他协程校验/下载完成。
+        if _cached_verified_font is not None:
+            return _cached_verified_font
+        if _verify_font(target):
+            return _set_verified_font(target)
+        if not _download_configured:
+            return None
+
+    # 下载在锁外进行（ensure_table_font 自带 _download_lock），成功后写缓存。
+    downloaded = await ensure_table_font(_configured_proxy, _configured_timeout)
+    if downloaded is not None:
+        return _set_verified_font(downloaded)
+    return None
+
+
+def _set_verified_font(path: Path) -> Path:
+    """记录已校验字体路径到缓存并返回。"""
+    global _cached_verified_font
+    _cached_verified_font = path
+    return path
 
 
 def get_runtime_font_dir() -> Path:
@@ -124,13 +149,14 @@ async def ensure_table_font(http_proxy: str = "", timeout: int = 300) -> Path | 
     """
     target = get_runtime_font_path()
     if _verify_font(target):
-        return target
+        return _set_verified_font(target)
 
     async with _download_lock:
         # 双检：可能在等锁期间已被其他协程下载完成
         if _verify_font(target):
-            return target
-        return await _download_and_verify(target, http_proxy, timeout)
+            return _set_verified_font(target)
+        result = await _download_and_verify(target, http_proxy, timeout)
+        return _set_verified_font(result) if result is not None else None
 
 
 async def _download_and_verify(

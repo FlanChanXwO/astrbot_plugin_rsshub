@@ -48,16 +48,25 @@ class SubscriptionRepositoryImpl:
 
         订阅按 (user_id, feed_id, target_session) 唯一，同一用户在不同会话可对
         同一 Feed 各订阅一份，因此查重必须带上 target_session。
+
+        数据库未对这三列加唯一约束，旧库或并发可能残留重复行；此处用 limit(1) +
+        first() 防御，命中任一匹配即可，避免 scalar_one_or_none 在重复时抛
+        MultipleResultsFound。
         """
         db = get_database()
         async with db.get_session() as session:
-            stmt = select(SubORM).where(
-                SubORM.user_id == user_id,
-                SubORM.feed_id == feed_id,
-                SubORM.target_session == target_session,
+            stmt = (
+                select(SubORM)
+                .where(
+                    SubORM.user_id == user_id,
+                    SubORM.feed_id == feed_id,
+                    SubORM.target_session == target_session,
+                )
+                .order_by(asc(SubORM.id))
+                .limit(1)
             )
             result = await session.execute(stmt)
-            orm = result.scalar_one_or_none()
+            orm = result.scalars().first()
             return self._to_entity(orm) if orm else None
 
     async def get_all_active(self) -> list[Subscription]:

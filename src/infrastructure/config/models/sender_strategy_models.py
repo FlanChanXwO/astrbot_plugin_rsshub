@@ -24,6 +24,7 @@ class PlatformSenderStrategyConfig(BaseModel):
 
     enable_telegraph: bool = Field(default=False, description="启用 Telegraph 自动分流")
     telegraph_token: str = Field(default="", description="Telegraph access token")
+    telegraph_proxy: str = Field(default="", description="Telegraph API 独立代理")
     napcat_stream_mode: str | None = Field(
         default=None,
         description="NapCat 流式上传模式（disabled/fallback/always）；未配置时使用运行时默认值",
@@ -184,7 +185,11 @@ class SenderStrategiesConfig(BaseModel):
             for item in (
                 self.telegram_settings.to_template_item(
                     _PLATFORM_STRATEGY_TEMPLATE_KEYS["telegram"],
-                    include_fields={"enable_telegraph", "telegraph_token"},
+                    include_fields={
+                        "enable_telegraph",
+                        "telegraph_token",
+                        "telegraph_proxy",
+                    },
                 ),
                 self.aiocqhttp_settings.to_template_item(
                     _PLATFORM_STRATEGY_TEMPLATE_KEYS["aiocqhttp"],

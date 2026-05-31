@@ -116,7 +116,7 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
 
     assert "ffmpeg" not in schema
     media_items = schema["media"]["items"]
-    assert media_items["telegraph_proxy"]["default"] == ""
+    assert "telegraph_proxy" not in media_items
     assert media_items["image_relay_base_url"]["default"] == ""
     assert media_items["media_relay_base_url"]["default"] == ""
     assert media_items["media_download_concurrency"]["default"] == 1
@@ -168,6 +168,8 @@ def test_conf_schema_exposes_single_platform_strategy_template_list():
     qq_official_items = templates["qq_official_strategy"]["items"]
     assert telegram_items["enable_telegraph"]["type"] == "bool"
     assert telegram_items["telegraph_token"]["type"] == "string"
+    assert telegram_items["telegraph_proxy"]["type"] == "string"
+    assert telegram_items["telegraph_proxy"]["default"] == ""
     assert "napcat_stream_mode" not in telegram_items
     assert "markdown_mode" not in telegram_items
     assert "enable_telegraph" not in onebot_items

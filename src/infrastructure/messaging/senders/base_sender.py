@@ -49,7 +49,6 @@ class DefaultMessageSender:
 
     _timeout_seconds: int = 30
     _proxy: str = ""
-    _telegraph_proxy: str = ""
     _image_relay_base_url: str = ""
     _media_relay_base_url: str = ""
     _media_download_concurrency: int = 1
@@ -69,7 +68,6 @@ class DefaultMessageSender:
         *,
         timeout_seconds: int,
         proxy: str = "",
-        telegraph_proxy: str = "",
         image_relay_base_url: str = "",
         media_relay_base_url: str = "",
         media_download_concurrency: int = 1,
@@ -77,7 +75,6 @@ class DefaultMessageSender:
         """配置运行时参数"""
         DefaultMessageSender._timeout_seconds = max(1, int(timeout_seconds))
         DefaultMessageSender._proxy = proxy or ""
-        DefaultMessageSender._telegraph_proxy = telegraph_proxy or ""
         DefaultMessageSender._image_relay_base_url = image_relay_base_url or ""
         DefaultMessageSender._media_relay_base_url = media_relay_base_url or ""
         try:
@@ -125,13 +122,6 @@ class DefaultMessageSender:
         proxy = getattr(cls, "_proxy", None)
         if proxy is None:
             proxy = getattr(DefaultMessageSender, "_proxy", None)
-        return str(proxy or "")
-
-    @classmethod
-    def _get_telegraph_proxy(cls) -> str:
-        proxy = getattr(cls, "_telegraph_proxy", None)
-        if proxy is None:
-            proxy = getattr(DefaultMessageSender, "_telegraph_proxy", None)
         return str(proxy or "")
 
     @classmethod

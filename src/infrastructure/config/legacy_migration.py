@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from ...shared.constants import PLATFORM_STRATEGY_TEMPLATE_KEYS
 from .models import SenderStrategiesConfig
 
 _LEGACY_FFMPEG_KEYS: tuple[str, ...] = (
@@ -123,6 +124,39 @@ def apply_legacy_config_aliases(
                 "media_config.onebot_prefer_local_video",
                 f"migrated to onebot_napcat_stream_mode={new_value}",
             )
+
+    # 将 media.telegraph_proxy 迁移到 telegram_strategy 模板（归属修正 + 接通）。
+    # 必须在下方 sender_strategies 归一化之前执行，使新建/补齐的模板项能随后被
+    # SenderStrategiesConfig 正确收口。
+    media = normalized.get("media")
+    if isinstance(media, dict) and "telegraph_proxy" in media:
+        proxy_value = media.pop("telegraph_proxy")
+        telegram_key = PLATFORM_STRATEGY_TEMPLATE_KEYS["telegram"]
+        sender = normalized.get("sender_strategies")
+        if not isinstance(sender, dict):
+            sender = {}
+            normalized["sender_strategies"] = sender
+        strategies = sender.get("platform_strategies")
+        if not isinstance(strategies, list):
+            strategies = []
+            sender["platform_strategies"] = strategies
+        telegram_item = next(
+            (
+                item
+                for item in strategies
+                if isinstance(item, dict) and item.get("__template_key") == telegram_key
+            ),
+            None,
+        )
+        if telegram_item is None:
+            telegram_item = {"__template_key": telegram_key}
+            strategies.append(telegram_item)
+        telegram_item.setdefault("telegraph_proxy", proxy_value)
+        record_config_heal(
+            changes,
+            "media.telegraph_proxy",
+            f"migrated to sender_strategies.platform_strategies[{telegram_key}]",
+        )
 
     sender_strategies = normalized.get("sender_strategies")
     if isinstance(sender_strategies, (str, list, tuple, set)) or (

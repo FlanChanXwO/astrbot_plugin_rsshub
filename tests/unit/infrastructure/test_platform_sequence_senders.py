@@ -1036,6 +1036,7 @@ async def test_telegram_telegraph_uses_entry_title_and_plain_url(monkeypatch):
             sender_strategy={
                 "enable_telegraph": True,
                 "telegraph_token": "token",
+                "telegraph_proxy": "http://tg-proxy:8080",
             },
         ),
     )
@@ -1046,7 +1047,8 @@ async def test_telegram_telegraph_uses_entry_title_and_plain_url(monkeypatch):
         "https://example.com/1.webp",
         "https://example.com/2.webp",
     ]
-    assert client_kwargs["proxy"] == "socks5://127.0.0.1:7890"
+    # Telegraph 使用其专属代理，不继承通用 HTTP 代理（socks5 那条）。
+    assert client_kwargs["proxy"] == "http://tg-proxy:8080"
     assert len(calls) == 1
     assert isinstance(calls[0][0], _Plain)
     assert "https://telegra.ph/entry-title" in calls[0][0].text

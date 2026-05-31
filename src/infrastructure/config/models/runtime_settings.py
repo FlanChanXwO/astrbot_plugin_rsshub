@@ -21,6 +21,7 @@ class PlatformStrategySettings:
 
     enable_telegraph: bool = False
     telegraph_token: str = ""
+    telegraph_proxy: str = ""
     napcat_stream_mode: str | None = None
     markdown_mode: str = QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT
 
@@ -140,7 +141,6 @@ class MediaRuntimeSettings:
 class MediaSettings:
     """Public media sending settings used by senders."""
 
-    telegraph_proxy: str = ""
     image_relay_base_url: str = ""
     media_relay_base_url: str = ""
     media_download_concurrency: int = 1

@@ -9,7 +9,7 @@
 
 | 平台 / sender | 当前状态 | 明确覆盖点 | 备注 |
 | --- | --- | --- | --- |
-| OneBot / aiocqhttp | 专门 sender，明确测试覆盖 | 合并转发、原始顺序、媒体预下载、本地视频优先、失败 fallback | NapCat/OneBot 远程拉取视频不稳定，因此成功预下载后默认优先本地视频。 |
+| OneBot / aiocqhttp | 专门 sender，明确测试覆盖 | 合并转发、原始顺序、媒体预下载、NapCat 流式上传、失败 fallback | NapCat 支持流式上传大文件，默认 fallback 模式（失败后重试）。 |
 | QQ Official | 专门 sender，明确测试覆盖 | 单图文本合链、多媒体拆发、Markdown 开关边界、媒体失败 partial 语义 | Markdown 必须走 AstrBot `MessageChain.use_markdown_`，不得绕过 core 手写 botpy payload。 |
 | Telegram | 专门 sender，明确测试覆盖 | Telegraph 多图路由、大图片转文件、MarkdownV2 文本边界 | 不假设插件能控制媒体 caption Markdown。 |
 | Weixin OC | 专门 sender，明确测试覆盖 | 顺序发送、original style 顺序调整、不做图文合一 | 平台能力不适合强行合链。 |
@@ -28,7 +28,7 @@
 
 | 平台 / sender | 文本与媒体顺序 | 媒体策略 | Markdown / Telegraph | 关键风险 |
 | --- | --- | --- | --- | --- |
-| OneBot / aiocqhttp | auto/classic 使用合并转发；original 按 layout fragments 发送 | 成功预下载后默认优先本地视频；合并转发失败后回退纯文本 Nodes | 不使用 Telegraph；Markdown 不作为承诺面 | 合并转发失败、远程视频拉取失败、媒体顺序回退。 |
+| OneBot / aiocqhttp | auto/classic 使用合并转发；original 按 layout fragments 发送 | 媒体预下载后使用本地文件；支持 NapCat 流式上传（disabled/fallback/always）；合并转发失败后回退纯文本 Nodes | 不使用 Telegraph；Markdown 不作为承诺面 | 合并转发失败、媒体发送失败、媒体顺序回退。 |
 | QQ Official | 单图 + 文本合成一条 `Image + Plain`；视频和多媒体仍拆发 | 图片/视频先按平台媒体组件发送，失败后按内置策略降级 | `qq_official_strategy.markdown_mode=auto|force|plain` 语义保留；当前主动推送链路暂时显式关闭 Markdown | Markdown 原文暴露、媒体 + markdown payload 畸形、partial send 难排障。 |
 | Telegram | 文本和媒体按 Telegram sender 策略发送 | 本地图片超过内置 photo 阈值时按文件发送 | Telegraph 是 Telegram sender 级自动路由，不是 `send_mode`；Plain 文本可走 AstrBot MarkdownV2 | Bot API photo 大小拒绝、caption Markdown 不一致。 |
 | Weixin OC | 始终逐条发送；original 只影响顺序 | 不尝试图文合一 | 无 Telegraph / Markdown 承诺 | 强行图文合链会吞文本或失败。 |
@@ -49,7 +49,7 @@
 
 这些数值统一按“软阈值”管理，只用于发送前分流、日志解释和降级判断，不应让正常可发送媒体被静默丢弃。软阈值不能被当作平台硬限制，也不能在数据层截断、丢弃或提前判定推送失败；真实发送失败仍应暴露平台错误，并进入可观测的降级链路。新增硬拒绝前必须有平台文档、稳定实测或用户配置作为依据。
 
-软阈值集中由 `src/shared/constants.py` 归口，发送候选链路由 `MediaSendPlanner` 统一消费，不要散落在具体 sender 或文档表格里复制多份。当前固定口径包括：Telegram photo 默认 10 MiB 后改按文件发送、OneBot 默认优先本地视频、QQ Official 默认不按媒体数量预先降级。QQ Official 表格里的 20 MiB / 10 MiB / 100 MiB 是 2026-05-27 的调查与实测参考，不是平台硬门槛。
+软阈值集中由 `src/shared/constants.py` 归口，发送候选链路由 `MediaSendPlanner` 统一消费，不要散落在具体 sender 或文档表格里复制多份。当前固定口径包括：Telegram photo 默认 10 MiB 后改按文件发送、OneBot 支持 NapCat 流式上传（默认 fallback 模式）、QQ Official 默认不按媒体数量预先降级。QQ Official 表格里的 20 MiB / 10 MiB / 100 MiB 是 2026-05-27 的调查与实测参考，不是平台硬门槛。
 
 ## 媒体下载与缓存
 
@@ -64,6 +64,8 @@
 | m3u8 / HLS | 使用 FFmpeg 下载合并，并用 ffprobe 校验输出 | 拒绝零时长、无视频流或损坏输出。 |
 | 失败语义 | 媒体失败不阻断 RSS 推送 | 失败媒体原始链接会作为降级信息保留。 |
 | 本地生成媒体 | `<table>` 图片使用 `rsshub-generated://table/<hash>` 标识并直接映射 cache PNG | 它不是远程 URL，不经过 HTTP 下载，也不会在失败链接里暴露本地 cache 标识。 |
+| 媒体反代 | `media.image_relay_base_url` / `media.media_relay_base_url` 默认关闭，开启后先尝试反代再回源 | 图片优先走图片反代；非图片或未配置图片反代时走通用媒体反代。缓存 key 和失败展示链接保持原始 URL。 |
+| 下载并发 | `media.media_download_concurrency=1` 保持串行，大于 1 时同一条推送内并发预下载远程媒体 | 返回顺序保持输入顺序；重复 URL 仍只下载一次，重复项保留原有占位语义。 |
 
 ```text
 远程媒体 URL
@@ -75,7 +77,7 @@
   -> 平台 sender 构造 MessageChain
 ```
 
-本地生成媒体的入口不同：`HTMLParser` 生成 `GeneratedImageContent` 后，sender 会通过 `infrastructure.rendering` 的表格图片解析器把 `rsshub-generated://table/<hash>` 映射回 `cache/table_images/table_<hash>.png`，直接构造 `PreparedMedia`。如果 cache 文件缺失，会按媒体失败处理但不会把内部标识追加给用户，也不会在 original layout 中把内部标识当作图片文件发送；layout 会携带不可见的表格纯文本 fallback，供 cache 缺失或平台图片发送失败时补回正文。表格解析阶段本身失败时则直接回退为纯文本表格。
+本地生成媒体的入口不同：`HTMLParser` 生成 `GeneratedImageContent` 后，sender 会通过 `infrastructure.rendering` 的表格图片解析器把 `rsshub-generated://table/<hash>` 映射回 `cache/table_images/table_<hash>.png`，直接构造 `PreparedMedia`。如果 cache 文件缺失，会按媒体失败处理但不会把内部标识追加给用户，也不会在 original layout 中把内部标识当作图片文件发送；layout 会携带不可见的表格纯文本 fallback，供 cache 缺失或平台图片发送失败时补回正文。`media.table_to_image=false` 时表格解析阶段直接使用纯文本表格；渲染失败时也会回退为纯文本表格。
 
 无声视频转 GIF 时会保留原始视频 variant。若 GIF 超出当前内置的跨平台压缩目标，插件会按固定 FFmpeg 档位尝试压缩 GIF；发送时再按目标平台软阈值选择原 GIF、压缩 GIF、原视频、文件或原始链接。
 
@@ -83,7 +85,8 @@
 
 | 配置 | 作用范围 | 备注 |
 | --- | --- | --- |
-| `http_config.proxy` | 媒体预下载、FFmpeg 下载和 Telegram Telegraph API | 这是全局 HTTP/SOCKS 代理来源，不存在 content 级代理配置。 |
+| `http_config.proxy` | RSS 拉取、普通媒体预下载和 FFmpeg 下载 | 这是全局 HTTP/SOCKS 代理来源，不影响 Telegraph API。 |
+| `media.telegraph_proxy` | Telegram Telegraph API | 留空表示直连，不继承 `http_config.proxy`。 |
 | 裸 `host:port` 代理 | 标准化为 `http://host:port` | 避免不同 HTTP 客户端对无 scheme 值表现不一致。 |
 | SOCKS 代理 | `socks4://` / `socks5://` / `socks5h://` | Telegraph API 通过 `aiohttp-socks` 连接；SOCKS 代理必须带明确 scheme。 |
 | `http_config.media_timeout` | 媒体预下载和 FFmpeg 下载超时 | 上限和默认值属于配置模型 / schema 约束。 |

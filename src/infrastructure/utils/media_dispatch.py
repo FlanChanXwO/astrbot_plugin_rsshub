@@ -5,7 +5,6 @@
 
 规则：
 - video + local_path.suffix == ".gif" → media_type="image"，component_kind="media"，file=local_path
-- 普通 video + prefer_local_video=False → 使用 original_url
 - audio/file → component_kind="tail"
 - image/video → component_kind="media"
 """
@@ -51,15 +50,11 @@ class MediaDispatchResolver:
     @staticmethod
     def resolve_prepared(
         item: PreparedMedia,
-        *,
-        prefer_local_video: bool = True,
     ) -> MediaDispatchInfo:
         """将 PreparedMedia 解析为 MediaDispatchInfo。
 
         Args:
             item: 预处理后的媒体项
-            prefer_local_video: 普通视频是否优先使用本地文件（对 GIF 转换结果无效，
-                                GIF 总是使用本地 .gif 文件）
         """
         media_type = str(item.media_type or "").strip()
         original_url = str(item.original_url or "")
@@ -78,9 +73,7 @@ class MediaDispatchResolver:
             )
 
         if media_type in ("image", "video"):
-            file = MediaDispatchResolver._resolve_video_path(
-                item, prefer_local_video=prefer_local_video
-            )
+            file = MediaDispatchResolver._resolve_video_path(item)
             return MediaDispatchInfo(
                 media_type=media_type,
                 component_kind="media",
@@ -103,12 +96,8 @@ class MediaDispatchResolver:
     @staticmethod
     def _resolve_video_path(
         item: PreparedMedia,
-        *,
-        prefer_local_video: bool,
     ) -> str:
         """决定视频/图片使用的文件路径或 URL。"""
-        if item.media_type == "video" and not prefer_local_video:
-            return item.original_url
         return str(item.local_path) if item.local_path else item.original_url
 
     # ------------------------------------------------------------------

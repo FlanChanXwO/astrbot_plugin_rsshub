@@ -156,11 +156,46 @@
       }
     }
   },
-   "ffmpeg": {
+  "media": {
     "type": "object",
-    "description": "FFmpeg 配置",
-    "hint": "控制视频转码和 GIF 转换的底层策略",
+    "description": "媒体配置",
+    "hint": "控制 Telegraph 代理、媒体反代、预下载并发、表格转图和 FFmpeg 转码",
     "items": {
+      "telegraph_proxy": {
+        "type": "string",
+        "description": "Telegraph API 代理",
+        "hint": "仅用于 Telegraph createPage API，留空表示直连且不继承 HTTP 网络代理；裸 host:port 会按 http://host:port 处理",
+        "default": ""
+      },
+      "image_relay_base_url": {
+        "type": "string",
+        "description": "图片反代 Base URL",
+        "hint": "用于图片预下载的反代地址，支持 https://wsrv.nl/ 或 https://wsrv.nl/?url=；留空关闭",
+        "default": ""
+      },
+      "media_relay_base_url": {
+        "type": "string",
+        "description": "媒体反代 Base URL",
+        "hint": "用于非图片媒体或图片反代未配置时的通用反代地址，例如 https://relay.example/；留空关闭",
+        "default": ""
+      },
+      "media_download_concurrency": {
+        "type": "int",
+        "description": "媒体预下载并发数",
+        "hint": "同一条推送内远程媒体预下载并发数，1 表示保持串行",
+        "default": 1,
+        "slider": {
+          "min": 1,
+          "max": 32,
+          "step": 1
+        }
+      },
+      "table_to_image": {
+        "type": "bool",
+        "description": "表格转图片",
+        "hint": "开启后 HTML 表格优先渲染为图片；关闭后直接使用文本表格 fallback",
+        "default": true
+      },
       "video_transcode": {
         "type": "bool",
         "description": "视频发送前自动转码",
@@ -244,13 +279,14 @@
           },
           "onebot_strategy": {
             "name": "OneBot 策略",
-            "hint": "OneBot 视频来源策略",
+            "hint": "OneBot / NapCat 视频发送策略",
             "items": {
-              "prefer_local_video": {
-                "type": "bool",
-                "description": "优先本地视频",
-                "hint": "默认开启，避免 OneBot / NapCat 端自行拉取远程视频失败；关闭后普通视频会优先使用原始 URL",
-                "default": true
+              "napcat_stream_mode": {
+                "type": "string",
+                "description": "NapCat 流式上传",
+                "hint": "disabled=不用流式上传，fallback=普通发送失败后流式重试，always=发送前优先流式上传。",
+                "default": "fallback",
+                "options": ["disabled", "fallback", "always"]
               }
             }
           },

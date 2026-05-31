@@ -36,14 +36,9 @@ class MessageComponentSorter:
         text: str,
         failed_urls: list[str] | None,
         platform: str = "",
-        *,
-        prefer_local_video: bool = True,
     ) -> list[MessageComponent]:
         failed = self._collect_failed_urls(prepared_media, failed_urls)
-        components = self._build_media_components(
-            prepared_media,
-            prefer_local_video=prefer_local_video,
-        )
+        components = self._build_media_components(prepared_media)
         final_text = self.append_failed_links(text, failed)
         if final_text:
             components.append(MessageComponent(kind="text", text=final_text))
@@ -98,8 +93,6 @@ class MessageComponentSorter:
     def _build_media_components(
         self,
         prepared_media: list[PreparedMedia] | None,
-        *,
-        prefer_local_video: bool,
     ) -> list[MessageComponent]:
         components: list[MessageComponent] = []
         if not prepared_media:
@@ -111,10 +104,7 @@ class MessageComponentSorter:
                 continue
             if not item.local_path and not item.original_url:
                 continue
-            dispatch = MediaDispatchResolver.resolve_prepared(
-                item,
-                prefer_local_video=prefer_local_video,
-            )
+            dispatch = MediaDispatchResolver.resolve_prepared(item)
             if not dispatch.media_type:
                 continue
             components.append(

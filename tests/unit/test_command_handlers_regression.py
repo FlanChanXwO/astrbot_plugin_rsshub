@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -365,7 +364,7 @@ def test_rsshelp_selects_help_image_by_astrbot_timezone(monkeypatch, tmp_path):
     assert command.execute(context) == light_path
 
 
-def test_main_command_signature_uses_greedy(monkeypatch):
+def test_main_command_signatures_use_str_args(monkeypatch):
     import sys
 
     class FakeStar:
@@ -375,8 +374,12 @@ def test_main_command_signature_uses_greedy(monkeypatch):
     class FakePermissionType:
         ADMIN = "admin"
 
+    class FakeEventMessageType:
+        ALL = "all"
+
     class FakeFilter:
         PermissionType = FakePermissionType
+        EventMessageType = FakeEventMessageType
 
         @staticmethod
         def command(*_args, **_kwargs):
@@ -395,8 +398,9 @@ def test_main_command_signature_uses_greedy(monkeypatch):
         def permission_type(*_args, **_kwargs):
             return lambda fn: fn
 
-    class FakeGreedyStr(str):
-        pass
+        @staticmethod
+        def event_message_type(*_args, **_kwargs):
+            return lambda fn: fn
 
     api_mod = sys.modules["astrbot.api"]
     api_mod.AstrBotConfig = dict
@@ -409,24 +413,10 @@ def test_main_command_signature_uses_greedy(monkeypatch):
     star_mod.Context = object
     star_mod.Star = FakeStar
 
-    command_mod = types.ModuleType("astrbot.core.star.filter.command")
-    command_mod.GreedyStr = FakeGreedyStr
-    monkeypatch.setitem(sys.modules, "astrbot.core.star.filter.command", command_mod)
-
-    monkeypatch.delitem(
-        sys.modules,
-        "astrbot_plugin_rsshub.src.interfaces.astrbot_compat",
-        raising=False,
-    )
     monkeypatch.delitem(sys.modules, "astrbot_plugin_rsshub.main", raising=False)
     main = importlib.import_module("astrbot_plugin_rsshub.main")
 
-    compat = importlib.import_module(
-        "astrbot_plugin_rsshub.src.interfaces.astrbot_compat"
-    )
-    assert compat.GreedyStr is FakeGreedyStr
-
-    greedy_args_commands = (
+    str_args_commands = (
         main.RSSHubPlugin.sub_feed,
         main.RSSHubPlugin.unsub_feed,
         main.RSSHubPlugin.sub_list,
@@ -436,6 +426,6 @@ def test_main_command_signature_uses_greedy(monkeypatch):
         main.RSSHubPlugin.import_subs,
         main.RSSHubPlugin.test_sub,
     )
-    for command in greedy_args_commands:
-        assert command.__annotations__["args"] == "GreedyStr"
-    assert main.RSSHubPlugin.export_subs.__annotations__["scope"] == "GreedyStr"
+    for command in str_args_commands:
+        assert command.__annotations__["args"] == "str"
+    assert main.RSSHubPlugin.export_subs.__annotations__["scope"] == "str"

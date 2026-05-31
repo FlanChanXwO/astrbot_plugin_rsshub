@@ -159,14 +159,8 @@
   "media": {
     "type": "object",
     "description": "媒体配置",
-    "hint": "控制 Telegraph 代理、媒体反代、预下载并发、表格转图和 FFmpeg 转码",
+    "hint": "控制媒体反代、预下载并发、表格转图和 FFmpeg 转码",
     "items": {
-      "telegraph_proxy": {
-        "type": "string",
-        "description": "Telegraph API 代理",
-        "hint": "仅用于 Telegraph createPage API，留空表示直连且不继承 HTTP 网络代理；裸 host:port 会按 http://host:port 处理",
-        "default": ""
-      },
       "image_relay_base_url": {
         "type": "string",
         "description": "图片反代 Base URL",
@@ -265,6 +259,12 @@
             "name": "Telegram 策略",
             "hint": "Telegraph 自动分流策略",
             "items": {
+              "telegraph_proxy": {
+                "type": "string",
+                "description": "Telegraph API 代理",
+                "hint": "仅用于 Telegraph createPage API，留空表示直连且不继承 HTTP 网络代理；裸 host:port 会按 http://host:port 处理",
+                "default": ""
+              },
               "enable_telegraph": {
                 "type": "bool",
                 "description": "启用 Telegraph 自动分流",

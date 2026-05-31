@@ -36,7 +36,7 @@ class TestSubscribeFeedCommand:
             )
         )
         sub_repo = MagicMock()
-        sub_repo.get_by_user_and_feed = AsyncMock(return_value=None)
+        sub_repo.get_by_user_feed_session = AsyncMock(return_value=None)
         sub_repo.save = AsyncMock(
             return_value=Subscription(
                 id=1,
@@ -94,7 +94,7 @@ class TestSubscribeFeedCommand:
         feed_repo.get_by_link = AsyncMock(return_value=existing_feed)
         feed_repo.save = AsyncMock()
         sub_repo = MagicMock()
-        sub_repo.get_by_user_and_feed = AsyncMock(return_value=None)
+        sub_repo.get_by_user_feed_session = AsyncMock(return_value=None)
         sub_repo.save = AsyncMock(
             return_value=Subscription(id=1, user_id="user123", feed_id=1)
         )
@@ -115,6 +115,74 @@ class TestSubscribeFeedCommand:
         assert result.success is True
         feed_repo.save.assert_not_called()
         sub_repo.save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_subscribe_same_feed_allowed_in_different_sessions(self):
+        """回归 issue #70：同一用户在不同会话可对同一 Feed 各自订阅一份。
+
+        查重必须按 (用户, Feed, 目标会话)；不同会话不应被误判为重复。
+        """
+        from astrbot_plugin_rsshub.src.application.commands.subscribe_feed_cmd import (
+            SubscribeFeedCommand,
+        )
+        from astrbot_plugin_rsshub.src.domain.entities.feed import Feed
+        from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
+
+        existing_feed = Feed(id=1, link="https://example.com/rss.xml", title="Existing")
+        existing_session = "test:Group:AAA"
+        existing_sub = Subscription(
+            id=1, user_id="user123", feed_id=1, target_session=existing_session
+        )
+
+        fetcher = AsyncMock()
+        fetcher.fetch.return_value = MagicMock(
+            error=None,
+            rss_d=MagicMock(feed={"title": "Fetched Title"}),
+        )
+        fetcher.close = AsyncMock()
+        feed_repo = MagicMock()
+        feed_repo.get_by_link = AsyncMock(return_value=existing_feed)
+        feed_repo.save = AsyncMock()
+
+        async def _dedup(user_id, feed_id, target_session):
+            # 仅当 (用户, Feed, 会话) 完全一致才算重复。
+            if target_session == existing_session:
+                return existing_sub
+            return None
+
+        sub_repo = MagicMock()
+        sub_repo.get_by_user_feed_session = AsyncMock(side_effect=_dedup)
+        sub_repo.save = AsyncMock(
+            return_value=Subscription(
+                id=2, user_id="user123", feed_id=1, target_session="test:Group:BBB"
+            )
+        )
+
+        cmd = SubscribeFeedCommand(
+            subscription_repo=sub_repo,
+            feed_repo=feed_repo,
+            fetcher_factory=MagicMock(return_value=fetcher),
+        )
+
+        # 不同会话：应成功新建订阅，而不是被「已经订阅」拦下。
+        other = await cmd.execute(
+            url="https://example.com/rss.xml",
+            user_id="user123",
+            target_session="test:Group:BBB",
+            platform_name="telegram",
+        )
+        assert other.success is True
+        sub_repo.save.assert_awaited_once()
+
+        # 相同会话：仍应按查重拒绝。
+        same = await cmd.execute(
+            url="https://example.com/rss.xml",
+            user_id="user123",
+            target_session=existing_session,
+            platform_name="telegram",
+        )
+        assert same.success is False
+        assert "已经订阅" in same.message
 
     @pytest.mark.asyncio
     async def test_subscribe_invalid_url(self):
@@ -206,7 +274,7 @@ class TestSubscribeFeedCommand:
             )
         )
         sub_repo = MagicMock()
-        sub_repo.get_by_user_and_feed = AsyncMock(return_value=None)
+        sub_repo.get_by_user_feed_session = AsyncMock(return_value=None)
         sub_repo.save = AsyncMock(
             return_value=Subscription(id=1, user_id="user123", feed_id=1)
         )
@@ -270,7 +338,7 @@ class TestSubscribeFeedCommand:
             )
         )
         sub_repo = MagicMock()
-        sub_repo.get_by_user_and_feed = AsyncMock(return_value=None)
+        sub_repo.get_by_user_feed_session = AsyncMock(return_value=None)
         sub_repo.save = AsyncMock(
             return_value=Subscription(id=1, user_id="user123", feed_id=1)
         )
@@ -314,7 +382,7 @@ class TestSubscribeFeedCommand:
             )
         )
         sub_repo = MagicMock()
-        sub_repo.get_by_user_and_feed = AsyncMock(return_value=None)
+        sub_repo.get_by_user_feed_session = AsyncMock(return_value=None)
         sub_repo.save = AsyncMock(
             return_value=Subscription(id=1, user_id="user123", feed_id=1)
         )
@@ -335,7 +403,7 @@ class TestSubscribeFeedCommand:
 
         assert result.success is True
         user_repo.get_or_create.assert_awaited_once_with("user123")
-        sub_repo.get_by_user_and_feed.assert_awaited_once_with("user123", 1)
+        sub_repo.get_by_user_feed_session.assert_awaited_once_with("user123", 1, None)
 
 
 class TestUnsubscribeFeedCommand:

@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.0.3] - 2026-05-25
+## [2.0.3] - 2026-06-01
 
 ### Added
 
@@ -9,7 +9,7 @@
 - Plugin Pages 推送历史新增单条「重试」操作，可人工重放旧记录并把本次结果写回原历史行；列表按最近活动时间排序，重试后该行会回到顶部。
 - `rss_subscribe` AI 工具收口为单参数 `targets: string[]`，支持一次订阅多个完整 URL 或 RSSHub 路由路径。
 - `rss_push_xml_entry` AI 工具新增安全排版参数，可临时指定 `style`、`send_mode`、媒体/标题/作者/via/tags 显示和正文长度。
-- 为缺失中文命名别名的命令增加了命令别名
+- 为缺失中文命名别名的命令增加了命令别名。
 - 新增数据库用户一致性自愈：订阅或推送历史引用到的 `user_id` 会在启动迁移阶段补齐到用户表。
 - Plugin Pages 用户、Feed、订阅删除流程新增「同时清理推送历史」选项，默认保留历史审计数据。
 - Plugin Pages 订阅列表新增按 Feed URL 精确筛选入口，推送历史跳转订阅不再依赖可能复用的 `sub_id`。
@@ -21,9 +21,12 @@
 - Telegram photo 大小阈值收口为内置常量，默认 10 MiB；超限图片会按文件发送。
 - QQ Official 默认不再按媒体数量预先降级为文件；多媒体会优先按图片/视频组件发送，真实发送失败后再按内置策略降级为文件或原始链接。
 - QQ Official Markdown 配置暂时保留为兼容入口，但主动推送临时统一纯文本，避免 Markdown 原文在 QQ 官方平台直接暴露。
-- 媒体缓存 GC、媒体完整性阈值和平台降级策略收口为内置常量，不再作为用户配置项暴露。
 - 旧 `basic_config.proxy`、`basic_config.timeout`、`media_config.download_media_timeout` 和 `m3u8_download_timeout` 会在启动配置自愈时迁移到 `http_config`。
 - 表格图片渲染从 `infrastructure.media` 归位到 `infrastructure.rendering`，媒体包只保留下载、指纹和发送前媒体处理职责。
+
+### Removed
+
+- 媒体缓存 GC、媒体完整性阈值和平台降级策略收口为内置常量，不再作为用户配置项暴露。
 
 ### Fixed
 
@@ -32,6 +35,8 @@
 - 修复 m3u8/HLS 合并输出校验不足的问题；FFmpeg 输出必须通过视频流与时长校验后才会写入成功缓存。
 - 修复 QQ Official 单图+文本合发失败时可能静默丢失媒体的问题；失败会按内置策略优先文件降级，并在结果/文本中保留可见的原始媒体链接。
 - 修复表格图片缓存并发写入、original layout 占位文本、generated media 缺失时暴露内部标识，以及关闭媒体时表格正文丢失的问题。
+
+<details>
 
 ## [2.0.2] - 2026-05-23
 

@@ -82,7 +82,6 @@ def _merge_legacy_ffmpeg_media(config: Any, media_cfg: Any) -> Any:
         merged.update(media_cfg)
     elif media_cfg is not None:
         for key in (
-            "telegraph_proxy",
             "image_relay_base_url",
             "media_relay_base_url",
             "media_download_concurrency",
@@ -185,6 +184,9 @@ def _build_sender_strategy_settings(value: Any) -> SenderStrategySettings:
     telegram_config = PlatformStrategySettings(
         enable_telegraph=bool(_get_value(telegram_source, "enable_telegraph", False)),
         telegraph_token=str(_get_value(telegram_source, "telegraph_token", "") or ""),
+        telegraph_proxy=_normalize_proxy_url(
+            _get_value(telegram_source, "telegraph_proxy", "") or ""
+        ),
     )
     aiocqhttp_napcat_mode = _get_value(aiocqhttp_source, "napcat_stream_mode", None)
     if aiocqhttp_napcat_mode is not None:
@@ -395,9 +397,6 @@ def build_application_settings(config: Any) -> ApplicationSettings:
         http=http,
         media_config=media_config,
         media=MediaSettings(
-            telegraph_proxy=_normalize_proxy_url(
-                _get_value(media_cfg, "telegraph_proxy", "") or ""
-            ),
             image_relay_base_url=str(
                 _get_value(media_cfg, "image_relay_base_url", "") or ""
             ).strip(),

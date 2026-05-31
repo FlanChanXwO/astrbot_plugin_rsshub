@@ -413,11 +413,12 @@ class TestImportCommand:
     @pytest.mark.asyncio
     async def test_import_ensures_user_before_saving_subscription(self) -> None:
         class SubscriptionRepo:
-            async def get_by_user_and_feed(
-                self, user_id: str, feed_id: int
+            async def get_by_user_feed_session(
+                self, user_id: str, feed_id: int, target_session: str | None
             ) -> Subscription | None:
                 assert user_id == "user-001"
                 assert feed_id == 1
+                assert target_session is None
                 return None
 
             async def save(self, subscription: Subscription) -> Subscription:

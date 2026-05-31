@@ -40,15 +40,19 @@ class SubscriptionRepository(Protocol):
         """
         ...
 
-    async def get_by_user_and_feed(
-        self, user_id: str, feed_id: int
+    async def get_by_user_feed_session(
+        self, user_id: str, feed_id: int, target_session: str | None
     ) -> Subscription | None:
         """
-        根据用户和Feed获取订阅
+        根据用户、Feed 与目标会话获取订阅
+
+        订阅按 (user_id, feed_id, target_session) 唯一：同一用户在不同会话
+        （如不同群聊）可对同一 Feed 各自订阅一份，因此查重必须带上会话。
 
         Args:
             user_id: 用户唯一标识
             feed_id: Feed唯一标识
+            target_session: 目标会话标识（可为 None）
 
         Returns:
             Subscription对象，不存在时返回None

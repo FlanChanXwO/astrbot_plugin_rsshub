@@ -562,6 +562,7 @@ def test_config_save_writes_non_default_sender_strategy_to_unified_template_list
             "__template_key": "telegram_strategy",
             "enable_telegraph": True,
             "telegraph_token": "token-1",
+            "telegraph_proxy": "",
         },
         {
             "__template_key": "qq_official_strategy",
@@ -690,6 +691,7 @@ def test_application_settings_maps_unified_sender_strategy_templates():
                         "__template_key": "telegram_strategy",
                         "enable_telegraph": True,
                         "telegraph_token": "telegram-token",
+                        "telegraph_proxy": " localhost:7890 ",
                     },
                     {
                         "__template_key": "qq_official_strategy",
@@ -708,6 +710,9 @@ def test_application_settings_maps_unified_sender_strategy_templates():
     assert settings.sender_strategies.telegram_settings.enable_telegraph is True
     assert settings.sender_strategies.telegram_settings.telegraph_token == (
         "telegram-token"
+    )
+    assert settings.sender_strategies.telegram_settings.telegraph_proxy == (
+        "http://localhost:7890"
     )
     assert settings.sender_strategies.aiocqhttp_settings.enable_telegraph is False
     assert settings.sender_strategies.aiocqhttp_settings.telegraph_token == ""
@@ -743,7 +748,6 @@ def test_application_settings_maps_media_config():
     config = RsshubPluginConfig.from_astrbot_config(
         {
             "media": {
-                "telegraph_proxy": " localhost:7890 ",
                 "image_relay_base_url": "https://wsrv.nl/",
                 "media_relay_base_url": "https://relay.example/",
                 "media_download_concurrency": 4,
@@ -758,7 +762,6 @@ def test_application_settings_maps_media_config():
 
     settings = build_application_settings(config)
 
-    assert settings.media.telegraph_proxy == "http://localhost:7890"
     assert settings.media.image_relay_base_url == "https://wsrv.nl/"
     assert settings.media.media_relay_base_url == "https://relay.example/"
     assert settings.media.media_download_concurrency == 4
@@ -801,6 +804,59 @@ def test_legacy_ffmpeg_migrates_to_media_without_overriding_existing_media():
     assert healed["media"]["video_transcode"] is True
     assert healed["media"]["video_transcode_timeout"] == 222
     assert healed["media"]["gif_transcode"] is True
+
+
+def test_legacy_media_telegraph_proxy_migrates_to_telegram_strategy():
+    from astrbot_plugin_rsshub.src.infrastructure.config.legacy_migration import (
+        apply_legacy_config_aliases,
+    )
+
+    changes: list[str] = []
+    normalized = apply_legacy_config_aliases(
+        {"media": {"telegraph_proxy": "localhost:7890"}},
+        changes,
+    )
+
+    assert "telegraph_proxy" not in normalized.get("media", {})
+    strategies = normalized["sender_strategies"]["platform_strategies"]
+    telegram_item = next(
+        item for item in strategies if item.get("__template_key") == "telegram_strategy"
+    )
+    assert telegram_item["telegraph_proxy"] == "localhost:7890"
+    assert any("media.telegraph_proxy" in change for change in changes)
+
+
+def test_legacy_media_telegraph_proxy_keeps_existing_strategy_value():
+    from astrbot_plugin_rsshub.src.infrastructure.config.legacy_migration import (
+        apply_legacy_config_aliases,
+    )
+
+    changes: list[str] = []
+    normalized = apply_legacy_config_aliases(
+        {
+            "media": {"telegraph_proxy": "media-proxy:7890"},
+            "sender_strategies": {
+                "enabled_platforms": ["telegram"],
+                "platform_strategies": [
+                    {
+                        "__template_key": "telegram_strategy",
+                        "enable_telegraph": True,
+                        "telegraph_token": "tg",
+                        "telegraph_proxy": "strategy-proxy:1080",
+                    }
+                ],
+            },
+        },
+        changes,
+    )
+
+    strategies = normalized["sender_strategies"]["platform_strategies"]
+    telegram_item = next(
+        item for item in strategies if item.get("__template_key") == "telegram_strategy"
+    )
+    # setdefault 不覆盖用户已在策略中设置的值。
+    assert telegram_item["telegraph_proxy"] == "strategy-proxy:1080"
+    assert "telegraph_proxy" not in normalized.get("media", {})
 
 
 def test_global_config_maps_new_send_mode_direct_send_to_db_values():

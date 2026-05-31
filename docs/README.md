@@ -17,7 +17,7 @@
 - `docs/project/domain-model.md` 是领域值、枚举、配置模型、常量归属的唯一细节来源。
 - `docs/project/application.md` 写命令、AI tools、用户配置、推送历史等应用层语义。
 - 其他 `docs/project/*.md` 按模块深挖流程和实现边界。
-- `docs/usage/` 面向用户说明，后续从根 README 继续拆分。
+- `docs/usage/` 面向用户说明，维护命令、配置、管理页、AI tools 和兼容性说明。
 
 如果多个文档都提到同一概念，应由最具体的专题文档维护细节，其他文档只链接过去。
 
@@ -51,7 +51,12 @@
 
 ### usage
 
-- [`usage/README.md`](./usage/README.md): 使用文档索引与后续拆分计划
+- [`usage/README.md`](./usage/README.md): 使用文档索引
+- [`usage/commands.md`](./usage/commands.md): 聊天命令、配置继承、帮助和测试推送
+- [`usage/configuration.md`](./usage/configuration.md): 启动级配置、媒体配置、发送策略和 Routes 知识库配置
+- [`usage/plugin-pages.md`](./usage/plugin-pages.md): Plugin Pages 管理界面功能边界和操作说明
+- [`usage/ai-tools.md`](./usage/ai-tools.md): LLM tools 能力和使用边界
+- [`usage/compatibility.md`](./usage/compatibility.md): RSS 解析、媒体发送、平台差异和升级兼容
 
 ## 推荐阅读路径
 
@@ -72,10 +77,12 @@
 
 ### 我只想查命令和配置
 
-目前仍以根目录 [`README.md`](../README.md) 为主，后续会逐步拆分到 [`usage/`](./usage/README.md)。
+1. [`usage/commands.md`](./usage/commands.md)
+2. [`usage/configuration.md`](./usage/configuration.md)
+3. 按需继续阅读 [`usage/`](./usage/README.md)
 
 ## 文档状态
 
 - `project/`: 已升级为章节型架构文档，覆盖核心链路与主要模块
 - `dev/`: 本轮已完成
-- `usage/`: 已创建目录与索引，内容待继续拆分
+- `usage/`: 已拆分命令、配置、管理页、AI tools 和兼容性说明

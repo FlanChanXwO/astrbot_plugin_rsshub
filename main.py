@@ -21,7 +21,6 @@ from .src.infrastructure.schedule import RSSScheduler
 from .src.infrastructure.utils import get_logger
 from .src.interfaces import WebApiHandler
 from .src.interfaces import handlers as _h
-from .src.interfaces.astrbot_compat import GreedyStr, all_message_event_filter
 
 logger = get_logger()
 
@@ -102,7 +101,7 @@ class RSSHubPlugin(Star):
     # ── 命令方法（装饰器留在插件入口类，委托到纯函数） ───────────────────────
 
     @filter.command("sub", alias={"订阅"})
-    async def sub_feed(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def sub_feed(self, event: AstrMessageEvent, args: str = ""):
         """订阅 RSS 源。
 
         用法:
@@ -117,7 +116,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.command("unsub", alias={"取消订阅"})
-    async def unsub_feed(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def unsub_feed(self, event: AstrMessageEvent, args: str = ""):
         """取消订阅（支持 ID/URL 批量）。
 
         用法:
@@ -131,7 +130,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.command("sub_list", alias={"订阅列表"})
-    async def sub_list(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def sub_list(self, event: AstrMessageEvent, args: str = ""):
         """查看当前会话订阅列表（分页）。
 
         用法:
@@ -145,7 +144,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.command("sub_stop", alias={"rss_stop", "停止RSS", "停止推送"})
-    async def stop_rss_job(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def stop_rss_job(self, event: AstrMessageEvent, args: str = ""):
         """停止当前会话推送任务。
 
         用法:
@@ -186,7 +185,7 @@ class RSSHubPlugin(Star):
         pass
 
     @sub_profile_group.command("set", alias={"设置"})
-    async def sub_profile_set(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def sub_profile_set(self, event: AstrMessageEvent, args: str = ""):
         """设置订阅或用户配置。
 
         用法:
@@ -198,7 +197,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @sub_profile_group.command("get", alias={"获取"})
-    async def sub_profile_get(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def sub_profile_get(self, event: AstrMessageEvent, args: str = ""):
         """查询用户配置。
 
         用法:
@@ -276,7 +275,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.command("sub_export", alias={"导出订阅"})
-    async def export_subs(self, event: AstrMessageEvent, scope: GreedyStr = ""):
+    async def export_subs(self, event: AstrMessageEvent, scope: str = ""):
         """导出订阅为 TOML。
 
         用法:
@@ -290,7 +289,7 @@ class RSSHubPlugin(Star):
             yield event.plain_result(result["plain"])
 
     @filter.command("sub_import", alias={"导入订阅"})
-    async def import_subs(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def import_subs(self, event: AstrMessageEvent, args: str = ""):
         """导入订阅。
 
         用法:
@@ -307,7 +306,7 @@ class RSSHubPlugin(Star):
         if result.get("plain"):
             yield event.plain_result(result["plain"])
 
-    @all_message_event_filter(filter)
+    @filter.event_message_type(filter.EventMessageType.ALL)
     async def import_upload_listener(self, event: AstrMessageEvent):
         """处理 /sub_import 空参数后的文件上传。"""
         self._prune_pending_imports()
@@ -411,7 +410,7 @@ class RSSHubPlugin(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("sub_test", alias={"测试订阅"})
-    async def test_sub(self, event: AstrMessageEvent, args: GreedyStr = ""):
+    async def test_sub(self, event: AstrMessageEvent, args: str = ""):
         """管理员测试推送。
 
         用法:

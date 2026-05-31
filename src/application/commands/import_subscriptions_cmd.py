@@ -183,9 +183,9 @@ class ImportSubscriptionsCommand:
                 feed = Feed(link=feed_url.normalized(), title=record.feed_title or "")
                 feed = await self._feed_repo.save(feed)
 
-            # 检查是否已订阅
-            existing = await self._subscription_repo.get_by_user_and_feed(
-                user_id, feed.id
+            # 检查是否已订阅（按 用户 + Feed + 目标会话 查重）
+            existing = await self._subscription_repo.get_by_user_feed_session(
+                user_id, feed.id, target_session
             )
             if existing:
                 if skip_existing:

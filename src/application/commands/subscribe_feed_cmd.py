@@ -187,7 +187,9 @@ class SubscribeFeedCommand:
             feed = await self._feed_repo.save(feed)
 
         # 检查重复订阅（同用户 + 同 Feed + 同目标会话）
-        existing = await self._subscription_repo.get_by_user_and_feed(user_id, feed.id)
+        existing = await self._subscription_repo.get_by_user_feed_session(
+            user_id, feed.id, target_session
+        )
         if existing:
             return CommandResult(
                 success=False,

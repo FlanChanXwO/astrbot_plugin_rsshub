@@ -50,6 +50,14 @@ class EntryFormatInput:
 class EntryTextFormatter:
     """Format cleaned entry text according to effective push options."""
 
+    # 表格转图总开关（media.table_to_image）；关闭后表格统一回退纯文本。
+    _table_to_image_enabled: bool = True
+
+    @classmethod
+    def configure_table_to_image(cls, enabled: bool) -> None:
+        """配置表格转图总开关（启动装配时调用）。"""
+        cls._table_to_image_enabled = bool(enabled)
+
     async def format_entry(
         self,
         entry: EntryFormatInput,
@@ -67,7 +75,9 @@ class EntryTextFormatter:
             output_format = EntryOutputFormat.PLAIN
         body = await self.clean_text(
             entry.content or entry.summary or "",
-            render_tables_as_images=options.display_media,
+            render_tables_as_images=(
+                options.display_media and self._table_to_image_enabled
+            ),
         )
         title = await self.clean_text(entry.title)
         author = await self.clean_text(entry.author)

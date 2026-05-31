@@ -125,9 +125,9 @@ class TelegramMessageSender(DefaultMessageSender):
         cls,
         context: MessageContext | None,
         prepared_media,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, str]:
         if context is None or context.send_mode != 0:
-            return False, ""
+            return False, "", ""
 
         strategy = getattr(context, "sender_strategy", None)
         if strategy is None:
@@ -152,11 +152,28 @@ class TelegramMessageSender(DefaultMessageSender):
 
         enabled = bool(cls._strategy_value(strategy, "enable_telegraph", False))
         token = str(cls._strategy_value(strategy, "telegraph_token", "") or "").strip()
+        proxy = cls._normalize_telegraph_proxy(
+            cls._strategy_value(strategy, "telegraph_proxy", "")
+        )
         if not enabled or not token:
-            return False, ""
+            return False, "", ""
 
         unique_urls = MessageFormatter.collect_original_urls(prepared_media)
-        return len(unique_urls) > 1, token
+        return len(unique_urls) > 1, token, proxy
+
+    @staticmethod
+    def _normalize_telegraph_proxy(value) -> str:
+        """归一化 Telegraph 代理：裸 host:port 按 http:// 处理；留空即直连。
+
+        策略可能来自原始配置模板（未归一化）或已解析的设置对象（已归一化），
+        此规则幂等，重复应用安全。
+        """
+        proxy = str(value or "").strip()
+        if not proxy:
+            return ""
+        if "://" not in proxy:
+            return f"http://{proxy}"
+        return proxy
 
     async def _send_via_telegraph(
         self,
@@ -166,12 +183,13 @@ class TelegramMessageSender(DefaultMessageSender):
         context: MessageContext | None,
         prepared_media,
         token: str,
+        proxy: str = "",
     ) -> SendResult:
         media_urls = MessageFormatter.collect_original_urls(prepared_media)
         client = TelegraphClient(
             access_token=token,
             timeout_seconds=self._get_timeout_seconds(),
-            proxy=self._get_proxy(),
+            proxy=proxy,
         )
         page_title = (
             str(getattr(context, "entry_title", "") or "").strip() if context else ""
@@ -238,9 +256,11 @@ class TelegramMessageSender(DefaultMessageSender):
             if effective_prepared:
                 failed_urls = self._collect_failed_urls(effective_prepared)
 
-            use_telegraph, telegraph_token = self._should_use_telegraph(
-                context,
-                effective_prepared,
+            use_telegraph, telegraph_token, telegraph_proxy = (
+                self._should_use_telegraph(
+                    context,
+                    effective_prepared,
+                )
             )
             if use_telegraph:
                 try:
@@ -250,6 +270,7 @@ class TelegramMessageSender(DefaultMessageSender):
                         context=context,
                         prepared_media=effective_prepared,
                         token=telegraph_token,
+                        proxy=telegraph_proxy,
                     )
                 except Exception as err:
                     logger.warning(

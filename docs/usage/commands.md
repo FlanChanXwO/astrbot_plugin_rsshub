@@ -66,10 +66,10 @@
 | --- | --- | --- |
 | `/rsshelp` | `/RSS帮助`, `/rss帮助` | 查看帮助图片。 |
 | `/sub_test <目标>` | `/测试订阅` | 管理员测试推送；目标可以是订阅 ID 或 RSS URL，固定推送最新 1 条。 |
-| `/rsshub_kb_init` | - | 管理员初始化 RSSHub Routes 知识库。 |
-| `/rsshub_kb_sync` | - | 管理员启动 RSSHub Routes 知识库同步任务。 |
-| `/rsshub_kb_status` | - | 查看 RSSHub Routes 知识库状态。 |
-| `/rsshub_kb_task` | - | 查看最近一次 Routes KB 同步任务进度。 |
+| `/rsshub_kb_init` | `/rss知识库初始化`, `/RSS知识库初始化` | 管理员初始化 RSSHub Routes 知识库。 |
+| `/rsshub_kb_sync` | `/rss知识库同步`, `/RSS知识库同步` | 管理员启动 RSSHub Routes 知识库同步任务。 |
+| `/rsshub_kb_status` | `/rss知识库同步状态`, `/RSS知识库同步状态` | 查看 RSSHub Routes 知识库状态。 |
+| `/rsshub_kb_task` | `/rss知识库近期同步任务`, `/RSS知识库近期同步任务` | 查看最近一次 Routes KB 同步任务进度。 |
 
 `rsshelp` 使用仓库内预生成图片：白天发送 `assets/help/rsshelp_light.png`，夜间发送 `assets/help/rsshelp_dark.png`。命令或帮助样式变化后可手动运行：
 

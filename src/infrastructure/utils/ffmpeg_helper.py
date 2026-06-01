@@ -603,10 +603,12 @@ class FFmpegTool:
             ).hexdigest()
             output_path = cache_root / f"{digest}.gif"
 
-            if output_path.exists() and output_path.stat().st_size > 0:
-                if output_path.stat().st_size <= max_bytes:
-                    return output_path
-                continue
+            if output_path.exists():
+                cached_size = output_path.stat().st_size
+                if cached_size > 0:
+                    if cached_size <= max_bytes:
+                        return output_path
+                    continue
 
             scale_w = f"iw*{scale_factor}"
             vf_expr = (
@@ -663,15 +665,19 @@ class FFmpegTool:
                 output_path.unlink(missing_ok=True)
                 continue
 
-            if not output_path.exists() or output_path.stat().st_size == 0:
+            if not output_path.exists():
+                output_path.unlink(missing_ok=True)
+                continue
+            output_size = output_path.stat().st_size
+            if output_size == 0:
                 output_path.unlink(missing_ok=True)
                 continue
 
-            if output_path.stat().st_size <= max_bytes:
+            if output_size <= max_bytes:
                 logger.debug(
                     "Compressed GIF success: src=%s, bytes=%s, scale=%s, fps=%s",
                     source_path,
-                    output_path.stat().st_size,
+                    output_size,
                     scale_factor,
                     fps,
                 )
@@ -680,7 +686,7 @@ class FFmpegTool:
             logger.debug(
                 "Compressed GIF still too large: src=%s, bytes=%s > %s, scale=%s",
                 source_path,
-                output_path.stat().st_size,
+                output_size,
                 max_bytes,
                 scale_factor,
             )

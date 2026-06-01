@@ -54,8 +54,8 @@ _DIAGNOSTIC_RESPONSE_HEADERS: tuple[str, ...] = (
 )
 
 
-def _build_relay_url(base: str, original_url: str) -> str:
-    """把原始媒体 URL 包装成反代地址；base 为空时原样返回。
+def _build_relay_url(base: str | None, original_url: str) -> str:
+    """把原始媒体 URL 包装成反代地址；base 为空（含 None）时原样返回。
 
     支持 https://wsrv.nl/ 与 https://wsrv.nl/?url= 两种形式：以 '=' 结尾视为
     前缀直接追加编码后的原始 URL；含 '?' 时用 '&url=' 追加；否则归一为
@@ -73,9 +73,14 @@ def _build_relay_url(base: str, original_url: str) -> str:
 
 
 def _select_relay_base(
-    media_type: str | None, image_relay_base_url: str, media_relay_base_url: str
+    media_type: str | None,
+    image_relay_base_url: str | None,
+    media_relay_base_url: str | None,
 ) -> str:
-    """图片优先走图片反代；图片反代未配置或非图片走通用媒体反代；都未配置返回空串。"""
+    """图片优先走图片反代；图片反代未配置或非图片走通用媒体反代；都未配置返回空串。
+
+    两个 base 入参允许为 None（视作未配置）。
+    """
     img = (image_relay_base_url or "").strip()
     media = (media_relay_base_url or "").strip()
     if media_type == "image":
@@ -645,8 +650,8 @@ class MediaDownloader:
         try_convert_gif: bool = False,
         gif_transcode_timeout: int = 60,
         m3u8_timeout: int = 120,
-        image_relay_base_url: str = "",
-        media_relay_base_url: str = "",
+        image_relay_base_url: str | None = "",
+        media_relay_base_url: str | None = "",
     ) -> Path:
         """下载媒体到缓存，支持 GIF 自动转换
 
@@ -822,8 +827,8 @@ class MediaDownloader:
         try_convert_gif: bool = False,
         gif_transcode_timeout: int = 60,
         m3u8_timeout: int = 120,
-        image_relay_base_url: str = "",
-        media_relay_base_url: str = "",
+        image_relay_base_url: str | None = "",
+        media_relay_base_url: str | None = "",
     ):
         """下载媒体并返回 PreparedMedia，保留原始视频与 GIF 变体。
 

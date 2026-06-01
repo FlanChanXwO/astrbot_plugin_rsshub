@@ -545,6 +545,159 @@ class FFmpegTool:
 
         return None
 
+    _GIF_COMPRESS_SCALE_FACTORS: Final = [0.75, 0.5, 0.35, 0.25]
+    _GIF_COMPRESS_MIN_FPS: Final = 15
+
+    @staticmethod
+    async def transcode_to_gif_under_limit(
+        source_path: Path,
+        *,
+        max_bytes: int,
+        timeout_seconds: int = 60,
+        auto_install_ffmpeg: bool = True,
+    ) -> Path | None:
+        """将视频转码为不超过 max_bytes 的 GIF。
+
+        逐步降低分辨率和帧率来压缩，直到满足大小限制。
+
+        Args:
+            source_path: 源视频文件路径
+            max_bytes: GIF 最大字节数
+            timeout_seconds: 单次转码超时（秒）
+            auto_install_ffmpeg: 是否自动安装 ffmpeg
+
+        Returns:
+            生成的 GIF 路径，或 None（失败时）
+        """
+        ffmpeg_exe = FFmpegTool.ensure_ffmpeg_ready(auto_install=auto_install_ffmpeg)
+        if not ffmpeg_exe:
+            return None
+
+        if not source_path.exists() or not source_path.is_file():
+            return None
+
+        try:
+            stat = source_path.stat()
+        except OSError:
+            return None
+
+        cache_root = get_plugin_cache_dir("gif_compressed")
+        cache_root.mkdir(parents=True, exist_ok=True)
+
+        attempts = [
+            (FFmpegTool._GIF_TRANSCODE_FPS, factor)
+            for factor in FFmpegTool._GIF_COMPRESS_SCALE_FACTORS
+        ] + [
+            (FFmpegTool._GIF_COMPRESS_MIN_FPS, factor)
+            for factor in FFmpegTool._GIF_COMPRESS_SCALE_FACTORS
+        ]
+
+        for fps, scale_factor in attempts:
+            cache_key = (
+                f"{source_path.resolve()}::"
+                f"{int(stat.st_mtime)}::{stat.st_size}::"
+                f"compressed:{max_bytes}:{fps}:{scale_factor}"
+            )
+            digest = hashlib.sha256(
+                cache_key.encode("utf-8", errors="ignore")
+            ).hexdigest()
+            output_path = cache_root / f"{digest}.gif"
+
+            if output_path.exists():
+                cached_size = output_path.stat().st_size
+                if cached_size > 0:
+                    if cached_size <= max_bytes:
+                        return output_path
+                    continue
+
+            scale_w = f"iw*{scale_factor}"
+            vf_expr = (
+                f"fps={fps},"
+                f"scale={scale_w}:-1:flags=lanczos,"
+                "split[s0][s1];"
+                f"[s0]palettegen=max_colors={FFmpegTool._GIF_TRANSCODE_MAX_COLORS}"
+                ":stats_mode=full[p];"
+                f"[s1][p]paletteuse=dither={FFmpegTool._GIF_TRANSCODE_DITHER}"
+            )
+            args = [
+                ffmpeg_exe,
+                "-y",
+                "-i",
+                str(source_path),
+                "-vf",
+                vf_expr,
+                "-loop",
+                "0",
+                str(output_path),
+            ]
+
+            process: asyncio.subprocess.Process | None = None
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=max(10, int(timeout_seconds)),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "FFmpeg compressed GIF timeout: src=%s, scale=%s",
+                    source_path,
+                    scale_factor,
+                )
+                if process is not None:
+                    process.kill()
+                    await process.wait()
+                output_path.unlink(missing_ok=True)
+                continue
+            except (OSError, ValueError) as ex:
+                logger.warning(
+                    "FFmpeg compressed GIF failed: src=%s, err=%s",
+                    source_path,
+                    ex,
+                )
+                continue
+
+            if process.returncode != 0:
+                output_path.unlink(missing_ok=True)
+                continue
+
+            if not output_path.exists():
+                output_path.unlink(missing_ok=True)
+                continue
+            output_size = output_path.stat().st_size
+            if output_size == 0:
+                output_path.unlink(missing_ok=True)
+                continue
+
+            if output_size <= max_bytes:
+                logger.debug(
+                    "Compressed GIF success: src=%s, bytes=%s, scale=%s, fps=%s",
+                    source_path,
+                    output_size,
+                    scale_factor,
+                    fps,
+                )
+                return output_path
+
+            logger.debug(
+                "Compressed GIF still too large: src=%s, bytes=%s > %s, scale=%s",
+                source_path,
+                output_size,
+                max_bytes,
+                scale_factor,
+            )
+
+        logger.warning(
+            "Failed to compress GIF under limit: src=%s, max_bytes=%s",
+            source_path,
+            max_bytes,
+        )
+        return None
+
     @staticmethod
     async def download_m3u8_to_mp4(
         m3u8_url: str,

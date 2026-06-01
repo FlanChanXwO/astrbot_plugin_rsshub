@@ -14,6 +14,8 @@
 - Plugin Pages 用户、Feed、订阅删除流程新增「同时清理推送历史」选项，默认保留历史审计数据。
 - Plugin Pages 订阅列表新增按 Feed URL 精确筛选入口，推送历史跳转订阅不再依赖可能复用的 `sub_id`。
 - 新增跨平台测试脚本 `tests/run_tests.sh`，方便 macOS/Linux 本地执行分类测试。
+- 新增媒体反代：`media.image_relay_base_url` 与 `media.media_relay_base_url`，图片优先走图片反代、非图片走通用媒体反代，下载时先反代再回源；缓存键与失败展示链接始终保持原始 URL，支持 `https://wsrv.nl/` 与 `https://wsrv.nl/?url=` 两种形式。
+- 新增无声视频转 GIF 的体积上限压缩：逐步降低分辨率与帧率，将 GIF 压缩到平台允许的大小内。
 
 ### Changed
 

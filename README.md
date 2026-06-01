@@ -10,6 +10,7 @@
 ![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.24.0-green)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20MacOS-lightgrey)
+[![Last Commit](https://img.shields.io/github/last-commit/FlanChanXwO/astrbot_plugin_rsshub)](https://github.com/FlanChanXwO/astrbot_plugin_rsshub/commits/master)
 
 </div>
 
@@ -49,6 +50,10 @@ git clone https://github.com/FlanChanXwO/astrbot_plugin_rsshub.git
 - 兼容性说明：[`docs/usage/compatibility.md`](./docs/usage/compatibility.md)
 - 项目与架构：[`docs/project/README.md`](./docs/project/README.md)
 - 开发与贡献：[`docs/dev/README.md`](./docs/dev/README.md)
+
+## 命令一览
+
+![命令一览](https://raw.githubusercontent.com/FlanChanXwO/astrbot_plugin_rsshub/master/assets/help/rsshelp_light.png)
 
 ## 协议
 

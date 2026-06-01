@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from astrbot_plugin_rsshub.src.domain.entities.content_types import (
+    LayoutFragment,
+    build_generated_media_url,
+)
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.base_sender import (
     DefaultMessageSender,
 )
@@ -13,10 +17,6 @@ from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
     MessageContext,
     PreparedMedia,
     SendRequest,
-)
-from astrbot_plugin_rsshub.src.domain.entities.content_types import (
-    LayoutFragment,
-    build_generated_media_url,
 )
 
 
@@ -119,6 +119,8 @@ async def test_prepare_media_passes_gif_transcode_config(monkeypatch, fake_detec
             "media_type": "video",
             "try_convert_gif": True,
             "gif_transcode_timeout": 77,
+            "image_relay_base_url": "",
+            "media_relay_base_url": "",
         }
     ]
 

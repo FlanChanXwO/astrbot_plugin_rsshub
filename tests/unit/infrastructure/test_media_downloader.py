@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from astrbot_plugin_rsshub.src.infrastructure.media.media_downloader import (
@@ -632,3 +633,229 @@ async def test_media_downloader_m3u8_reports_original_url_when_all_candidates_fa
     assert f"m3u8 download failed: {wrapped_url}" in str(exc_info.value)
     assert "ffmpeg returned unsuccessful result" in str(exc_info.value)
     assert not list(tmp_path.glob("*.mp4"))
+
+
+# --------------------------------------------------------------------------- #
+# 反代 (reverse-proxy / relay) 行为测试                                         #
+# --------------------------------------------------------------------------- #
+# 约定：网络抓取走 self.download_to_temp(url=<FETCH_URL>)，其中 FETCH_URL 是反代
+# 包装后的 URL；缓存键与 PreparedMedia.original_url 始终保持原始 url 不变。
+
+
+def _capture_download(captured: list[str], tmp_path: Path, payload: bytes):
+    """复用既有 download_to_temp seam：捕获 url 并落地一个临时文件。"""
+
+    async def fake_download(self, **kwargs):
+        captured.append(kwargs["url"])
+        path = tmp_path / f"source-{len(captured)}.gif"
+        path.write_bytes(payload)
+        return path
+
+    return fake_download
+
+
+@pytest.mark.asyncio
+async def test_relay_image_with_base_ending_in_equals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # base 以 "=" 结尾 → base + quote(original)
+    captured: list[str] = []
+    original = "https://example.com/a.gif"
+    base = "https://wsrv.nl/?url="
+    expected_fetch = base + quote(original, safe="")
+
+    monkeypatch.setattr(
+        MediaDownloader,
+        "download_to_temp",
+        _capture_download(captured, tmp_path, _VALID_GIF),
+    )
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    path = await downloader.get_or_download(
+        url=original,
+        media_type="image",
+        image_relay_base_url=base,
+    )
+
+    assert captured == [expected_fetch]
+    # 缓存键 / 原始 url 仍是原始地址
+    assert downloader._read_cache(original) == path
+    assert path.read_bytes() == _VALID_GIF
+
+
+@pytest.mark.asyncio
+async def test_relay_image_with_bare_base_appends_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # base 既不以 "=" 结尾，也不含 "?" → base.rstrip("/") + "/?url=" + quote(original)
+    captured: list[str] = []
+    original = "https://example.com/a.gif"
+    base = "https://wsrv.nl/"
+    expected_fetch = "https://wsrv.nl/?url=" + quote(original, safe="")
+
+    monkeypatch.setattr(
+        MediaDownloader,
+        "download_to_temp",
+        _capture_download(captured, tmp_path, _VALID_GIF),
+    )
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    path = await downloader.get_or_download(
+        url=original,
+        media_type="image",
+        image_relay_base_url=base,
+    )
+
+    assert captured == [expected_fetch]
+    assert downloader._read_cache(original) == path
+
+
+@pytest.mark.asyncio
+async def test_relay_non_image_uses_media_relay_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # 非图片 (file) 只设置 media_relay_base_url → 走 media 反代。
+    # bare base → base.rstrip("/") + "/?url=" + quote(original)
+    captured: list[str] = []
+    original = "https://example.com/doc.bin"
+    base = "https://relay.example/"
+    expected_fetch = "https://relay.example/?url=" + quote(original, safe="")
+
+    monkeypatch.setattr(
+        MediaDownloader,
+        "download_to_temp",
+        _capture_download(captured, tmp_path, _VALID_GIF),
+    )
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    await downloader.get_or_download(
+        url=original,
+        media_type="file",
+        media_relay_base_url=base,
+    )
+
+    assert captured == [expected_fetch]
+
+
+@pytest.mark.asyncio
+async def test_relay_image_falls_back_to_media_relay_when_image_relay_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # 图片：image_relay 未设置但 media_relay 已设置 → 回退使用 media 反代。
+    captured: list[str] = []
+    original = "https://example.com/a.gif"
+    base = "https://relay.example/"
+    expected_fetch = "https://relay.example/?url=" + quote(original, safe="")
+
+    monkeypatch.setattr(
+        MediaDownloader,
+        "download_to_temp",
+        _capture_download(captured, tmp_path, _VALID_GIF),
+    )
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    path = await downloader.get_or_download(
+        url=original,
+        media_type="image",
+        image_relay_base_url="",
+        media_relay_base_url=base,
+    )
+
+    assert captured == [expected_fetch]
+    assert downloader._read_cache(original) == path
+
+
+@pytest.mark.asyncio
+async def test_relay_both_empty_fetches_original_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # 两个反代 base 都为空 → 行为与之前完全一致，抓取原始 url。
+    captured: list[str] = []
+    original = "https://example.com/a.gif"
+
+    monkeypatch.setattr(
+        MediaDownloader,
+        "download_to_temp",
+        _capture_download(captured, tmp_path, _VALID_GIF),
+    )
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    path = await downloader.get_or_download(
+        url=original,
+        media_type="image",
+        image_relay_base_url="",
+        media_relay_base_url="",
+    )
+
+    assert captured == [original]
+    assert downloader._read_cache(original) == path
+
+
+@pytest.mark.asyncio
+async def test_relay_falls_back_to_origin_when_relay_fetch_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # "先反代再回源"：第一次（反代 url）抓取抛错 → 第二次用原始 url 重试并成功。
+    captured: list[str] = []
+    original = "https://example.com/a.gif"
+    base = "https://wsrv.nl/?url="
+    relay_fetch = base + quote(original, safe="")
+
+    async def fake_download(self, **kwargs):
+        captured.append(kwargs["url"])
+        if kwargs["url"] == relay_fetch:
+            raise RuntimeError("relay status=502")
+        path = tmp_path / f"source-{len(captured)}.gif"
+        path.write_bytes(_VALID_GIF)
+        return path
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    path = await downloader.get_or_download(
+        url=original,
+        media_type="image",
+        image_relay_base_url=base,
+    )
+
+    assert captured == [relay_fetch, original]
+    assert path.read_bytes() == _VALID_GIF
+    # 回源时缓存键 / 原始 url 仍保持原始地址
+    assert downloader._read_cache(original) == path
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_passes_relay_kwargs_through(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # get_or_download_prepared 透传反代 kwargs：抓取 url 是反代 url，
+    # 而 PreparedMedia.original_url 仍是原始地址。
+    captured: list[str] = []
+    original = "https://example.com/a.jpg"
+    base = "https://wsrv.nl/?url="
+    expected_fetch = base + quote(original, safe="")
+
+    async def fake_download(self, **kwargs):
+        captured.append(kwargs["url"])
+        path = tmp_path / f"source-{len(captured)}.jpg"
+        path.write_bytes(_VALID_JPEG)
+        return path
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    prepared = await downloader.get_or_download_prepared(
+        url=original,
+        media_type="image",
+        image_relay_base_url=base,
+    )
+
+    assert captured == [expected_fetch]
+    assert prepared.original_url == original

@@ -11,7 +11,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import aiohttp
 
@@ -52,6 +52,40 @@ _DIAGNOSTIC_RESPONSE_HEADERS: tuple[str, ...] = (
     "content-type",
     "content-length",
 )
+
+
+def _build_relay_url(base: str | None, original_url: str) -> str:
+    """把原始媒体 URL 包装成反代地址；base 为空（含 None）时原样返回。
+
+    支持 https://wsrv.nl/ 与 https://wsrv.nl/?url= 两种形式：以 '=' 结尾视为
+    前缀直接追加编码后的原始 URL；含 '?' 时用 '&url=' 追加；否则归一为
+    '<base>/?url=<encoded>'。
+    """
+    base = (base or "").strip()
+    if not base:
+        return original_url
+    encoded = quote(original_url, safe="")
+    if base.endswith("="):
+        return base + encoded
+    if "?" in base:
+        return base + "&url=" + encoded
+    return base.rstrip("/") + "/?url=" + encoded
+
+
+def _select_relay_base(
+    media_type: str | None,
+    image_relay_base_url: str | None,
+    media_relay_base_url: str | None,
+) -> str:
+    """图片优先走图片反代；图片反代未配置或非图片走通用媒体反代；都未配置返回空串。
+
+    两个 base 入参允许为 None（视作未配置）。
+    """
+    img = (image_relay_base_url or "").strip()
+    media = (media_relay_base_url or "").strip()
+    if media_type == "image":
+        return img or media
+    return media
 
 
 class MediaDownloader:
@@ -616,6 +650,8 @@ class MediaDownloader:
         try_convert_gif: bool = False,
         gif_transcode_timeout: int = 60,
         m3u8_timeout: int = 120,
+        image_relay_base_url: str | None = "",
+        media_relay_base_url: str | None = "",
     ) -> Path:
         """下载媒体到缓存，支持 GIF 自动转换
 
@@ -627,6 +663,8 @@ class MediaDownloader:
             try_convert_gif: 是否尝试将无声视频转为GIF
             gif_transcode_timeout: GIF转码超时
             m3u8_timeout: m3u8下载超时
+            image_relay_base_url: 图片反代 base URL，配置后图片走该反代抓取
+            media_relay_base_url: 通用媒体反代 base URL，配置后非图片媒体走该反代抓取
 
         Returns:
             缓存文件路径
@@ -663,11 +701,31 @@ class MediaDownloader:
             bool(proxy),
             try_convert_gif,
         )
-        tmp_path = await self.download_to_temp(
-            url=url,
-            timeout_seconds=timeout_seconds,
-            proxy=proxy,
+        relay_base = _select_relay_base(
+            media_hint.media_type or media_type,
+            image_relay_base_url,
+            media_relay_base_url,
         )
+        fetch_url = _build_relay_url(relay_base, url)
+        if fetch_url != url:
+            try:
+                tmp_path = await self.download_to_temp(
+                    url=fetch_url, timeout_seconds=timeout_seconds, proxy=proxy
+                )
+            except Exception as ex:
+                logger.warning(
+                    "媒体反代下载失败，回源直连: relay=%s, url=%s, err=%s",
+                    fetch_url,
+                    url,
+                    ex,
+                )
+                tmp_path = await self.download_to_temp(
+                    url=url, timeout_seconds=timeout_seconds, proxy=proxy
+                )
+        else:
+            tmp_path = await self.download_to_temp(
+                url=url, timeout_seconds=timeout_seconds, proxy=proxy
+            )
         logger.debug(
             "Media cache download complete: url=%s, tmp=%s, tmp_exists=%s",
             url,
@@ -769,8 +827,15 @@ class MediaDownloader:
         try_convert_gif: bool = False,
         gif_transcode_timeout: int = 60,
         m3u8_timeout: int = 120,
+        image_relay_base_url: str | None = "",
+        media_relay_base_url: str | None = "",
     ):
-        """下载媒体并返回 PreparedMedia，保留原始视频与 GIF 变体。"""
+        """下载媒体并返回 PreparedMedia，保留原始视频与 GIF 变体。
+
+        Args:
+            image_relay_base_url: 图片反代 base URL，配置后图片走该反代抓取。
+            media_relay_base_url: 通用媒体反代 base URL，配置后非图片媒体走该反代抓取。
+        """
         from ..messaging.senders.types import MediaVariant, PreparedMedia
 
         local_path = await self.get_or_download(
@@ -781,6 +846,8 @@ class MediaDownloader:
             try_convert_gif=False,
             gif_transcode_timeout=gif_transcode_timeout,
             m3u8_timeout=m3u8_timeout,
+            image_relay_base_url=image_relay_base_url,
+            media_relay_base_url=media_relay_base_url,
         )
         detection = detect_media_file(local_path)
         effective_type = (

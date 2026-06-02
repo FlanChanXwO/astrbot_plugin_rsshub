@@ -221,3 +221,14 @@ __marimo__/
 /.playwright-mcp/
 /pyrightconfig.*
 /tsconfig.json
+
+# Test media files (developers prepare locally)
+tests/data/*.mp4
+tests/data/*.mp3
+tests/data/*.jpg
+tests/data/*.jpeg
+tests/data/*.gif
+tests/data/*.png
+tests/data/*.webp
+tests/data/*.wav
+tests/data/*.flac

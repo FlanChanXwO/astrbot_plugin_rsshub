@@ -223,6 +223,26 @@
           "max": 1800,
           "step": 10
         }
+      },
+      "ffmpeg_source": {
+        "type": "string",
+        "description": "FFmpeg 来源",
+        "hint": "auto=优先系统 PATH，缺失时自动下载；system=仅使用系统 PATH 下的 ffmpeg",
+        "default": "auto",
+        "options": ["auto", "system"]
+      },
+      "ffmpeg_mirror": {
+        "type": "string",
+        "description": "FFmpeg 下载镜像",
+        "hint": "首次启动自动下载 ffmpeg 时使用的镜像；国内推荐 ghfast 或 ghproxy，国外保持 default",
+        "default": "default",
+        "options": ["default", "ghfast", "ghproxy", "mirror_ghproxy", "gh_proxy", "custom"]
+      },
+      "ffmpeg_mirror_custom_url": {
+        "type": "string",
+        "description": "自定义镜像前缀",
+        "hint": "ffmpeg_mirror=custom 时使用；填完整前缀，例如 https://ghfast.top/ 或 https://your-mirror.example/",
+        "default": ""
       }
     }
   },

@@ -12,8 +12,6 @@ import shutil
 from pathlib import Path
 from typing import Final
 
-import imageio_ffmpeg
-
 from .logger import get_logger
 from .paths import get_plugin_cache_dir
 
@@ -25,6 +23,7 @@ class FFmpegTool:
 
     _ffmpeg_exe_cache: str | None = None
     _ffprobe_exe_cache: str | None = None
+    _ffmpeg_source: str = "auto"  # "auto" | "system"
 
     _GIF_TRANSCODE_FPS: Final = 30
     _GIF_TRANSCODE_SCALE: Final = "iw:-1"
@@ -53,10 +52,10 @@ class FFmpegTool:
         Priority:
         1. Cached path if still valid
         2. System PATH ffmpeg (most stable for HLS/m3u8)
-        3. imageio-ffmpeg bundled binary (fallback)
+        3. Bundled ffmpeg (auto-downloaded from GitHub)
 
         Args:
-            auto_install: Whether to auto-install ffmpeg if not found
+            auto_install: Whether to use bundled ffmpeg if not found on system
 
         Returns:
             Path to ffmpeg executable, or None if not found
@@ -70,18 +69,14 @@ class FFmpegTool:
             logger.debug("Using system ffmpeg: %s", FFmpegTool._ffmpeg_exe_cache)
             return FFmpegTool._ffmpeg_exe_cache
 
-        if auto_install and imageio_ffmpeg is not None:
-            try:
-                ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-                if ffmpeg_exe and Path(ffmpeg_exe).exists():
-                    FFmpegTool._ffmpeg_exe_cache = str(Path(ffmpeg_exe).resolve())
-                    logger.debug(
-                        "Using imageio-ffmpeg bundled: %s",
-                        FFmpegTool._ffmpeg_exe_cache,
-                    )
-                    return FFmpegTool._ffmpeg_exe_cache
-            except Exception as ex:
-                logger.warning("FFmpeg resolve via imageio-ffmpeg failed: %s", ex)
+        if auto_install and FFmpegTool._ffmpeg_source != "system":
+            from .ffmpeg_bundler import get_bundled_ffmpeg_path
+
+            bundled = get_bundled_ffmpeg_path()
+            if bundled and bundled.exists():
+                FFmpegTool._ffmpeg_exe_cache = str(bundled.resolve())
+                logger.debug("Using bundled ffmpeg: %s", FFmpegTool._ffmpeg_exe_cache)
+                return FFmpegTool._ffmpeg_exe_cache
 
         return None
 
@@ -93,10 +88,10 @@ class FFmpegTool:
         1. Cached path if still valid
         2. Same directory as ffmpeg
         3. System PATH
-        4. imageio-ffmpeg (if auto_install)
+        4. Bundled ffprobe (auto-downloaded from GitHub)
 
         Args:
-            auto_install: Whether to auto-install ffmpeg if not found
+            auto_install: Whether to use bundled ffprobe if not found on system
 
         Returns:
             Path to ffprobe executable, or None if not found
@@ -124,21 +119,14 @@ class FFmpegTool:
             FFmpegTool._ffprobe_exe_cache = str(Path(system_ffprobe).resolve())
             return FFmpegTool._ffprobe_exe_cache
 
-        if auto_install and imageio_ffmpeg is not None:
-            try:
-                ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-                if ffmpeg_exe:
-                    ffmpeg_dir = Path(ffmpeg_exe).parent
-                    ffprobe_candidates = [
-                        ffmpeg_dir / "ffprobe",
-                        ffmpeg_dir / "ffprobe.exe",
-                    ]
-                    for candidate in ffprobe_candidates:
-                        if candidate.exists():
-                            FFmpegTool._ffprobe_exe_cache = str(candidate.resolve())
-                            return FFmpegTool._ffprobe_exe_cache
-            except Exception as ex:
-                logger.warning("FFprobe resolve via imageio-ffmpeg failed: %s", ex)
+        if auto_install and FFmpegTool._ffmpeg_source != "system":
+            from .ffmpeg_bundler import get_bundled_ffprobe_path
+
+            bundled = get_bundled_ffprobe_path()
+            if bundled and bundled.exists():
+                FFmpegTool._ffprobe_exe_cache = str(bundled.resolve())
+                logger.debug("Using bundled ffprobe: %s", FFmpegTool._ffprobe_exe_cache)
+                return FFmpegTool._ffprobe_exe_cache
 
         return None
 
@@ -819,3 +807,35 @@ class FFmpegTool:
             return True
 
         return False
+
+    @staticmethod
+    def configure_bundler(
+        *,
+        http_proxy: str = "",
+        timeout: int = 300,
+        ffmpeg_source: str = "auto",
+        ffmpeg_mirror: str = "default",
+        ffmpeg_mirror_custom_url: str = "",
+    ) -> None:
+        """配置 ffmpeg bundler 的代理、超时、来源模式和镜像（启动时调用）。"""
+        FFmpegTool._ffmpeg_source = str(ffmpeg_source or "auto")
+        if FFmpegTool._ffmpeg_source not in ("auto", "system"):
+            FFmpegTool._ffmpeg_source = "auto"
+
+        from .ffmpeg_bundler import configure_ffmpeg_bundler
+
+        configure_ffmpeg_bundler(
+            http_proxy=http_proxy,
+            timeout=timeout,
+            mirror=ffmpeg_mirror,
+            mirror_custom_url=ffmpeg_mirror_custom_url,
+        )
+
+    @staticmethod
+    def prefetch_bundled_ffmpeg() -> None:
+        """后台异步预取 ffmpeg 捆绑包，不阻塞插件启动。"""
+        if FFmpegTool._ffmpeg_source == "system":
+            return
+        from .ffmpeg_bundler import prefetch_bundled_ffmpeg
+
+        prefetch_bundled_ffmpeg()

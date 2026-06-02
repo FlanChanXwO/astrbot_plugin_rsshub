@@ -149,6 +149,9 @@ class MediaSettings:
     video_transcode_timeout: int = 120
     gif_transcode: bool = False
     gif_transcode_timeout: int = 60
+    ffmpeg_source: str = "auto"
+    ffmpeg_mirror: str = "default"
+    ffmpeg_mirror_custom_url: str = ""
 
 
 @dataclass(frozen=True)

@@ -333,7 +333,7 @@ async def test_rsshelp_returns_image_chain(monkeypatch, tmp_path):
 
 def test_rsshelp_selects_help_image_by_astrbot_timezone(monkeypatch, tmp_path):
     monkeypatch.delitem(sys.modules, "astrbot_plugin_rsshub.main", raising=False)
-    main = importlib.import_module("astrbot_plugin_rsshub.main")
+    importlib.import_module("astrbot_plugin_rsshub.main")
     light_path = tmp_path / "rsshelp_light.png"
     dark_path = tmp_path / "rsshelp_dark.png"
     light_path.write_bytes(b"light")

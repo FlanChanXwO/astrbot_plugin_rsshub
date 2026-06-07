@@ -24,7 +24,7 @@ from ....shared.constants import (
 from ...pipeline import MessageComponent, MessageFormatter
 from ...utils import get_logger
 from ...utils.lock import locked
-from ...utils.media_type_detector import detect_media_file
+from ...utils.media_type_detector import detect_media_file, detect_media_hint
 from .types import MediaVariant, MessageContext, PreparedMedia, SendRequest, SendResult
 
 if TYPE_CHECKING:
@@ -161,6 +161,40 @@ class DefaultMessageSender:
     @classmethod
     def _get_gif_transcode_timeout(cls) -> int:
         return max(1, int(getattr(cls, "_gif_transcode_timeout", 60)))
+
+    @classmethod
+    def _resolve_gif_transcode_decision(
+        cls,
+        *,
+        media_type: str,
+        media_url: str,
+    ) -> tuple[str, bool]:
+        """按声明类型和 URL hint 决定是否把本项交给下载后 GIF 转换链路。"""
+        normalized_type = str(media_type or "").strip().lower()
+        hint = detect_media_hint(url=media_url, declared_media_type=normalized_type)
+        effective_type = normalized_type
+        if normalized_type == "video" or hint.media_type == "video":
+            effective_type = "video"
+        detection_fallback_candidate = normalized_type in {"image", "file"} and (
+            hint.media_type == "file" or hint.source in {"declared", "fallback"}
+        )
+        try_convert_gif = cls._should_transcode_gif() and (
+            effective_type == "video" or detection_fallback_candidate
+        )
+        return effective_type, try_convert_gif
+
+    @staticmethod
+    def _ffmpeg_source_for_log() -> str:
+        """返回当前 FFmpeg 来源，供 GIF 转换决策日志排查使用。"""
+        try:
+            from ...utils.ffmpeg_helper import FFmpegTool
+
+            ffmpeg_path = FFmpegTool.ensure_ffmpeg_ready(auto_install=True)
+            if ffmpeg_path is None:
+                return "unavailable"
+            return str(getattr(FFmpegTool, "_ffmpeg_exe_cache_source", "") or "unknown")
+        except Exception as ex:
+            return f"unavailable:{type(ex).__name__}"
 
     @classmethod
     def _get_telegram_photo_max_bytes(cls) -> int:
@@ -341,19 +375,41 @@ class DefaultMessageSender:
         proxy: str,
     ) -> PreparedMedia:
         try:
-            try_convert_gif = media_type == "video" and self._should_transcode_gif()
+            effective_media_type, try_convert_gif = (
+                self._resolve_gif_transcode_decision(
+                    media_type=media_type,
+                    media_url=media_url,
+                )
+            )
+            ffmpeg_source = self._ffmpeg_source_for_log() if try_convert_gif else "skip"
+            logger.debug(
+                "prepare_media gif decision: sender=%s, media_type=%s, "
+                "effective_media_type=%s, gif_transcode=%s, try_convert_gif=%s, "
+                "ffmpeg_source=%s, url=%s",
+                self.__class__.__name__,
+                media_type,
+                effective_media_type,
+                self._should_transcode_gif(),
+                try_convert_gif,
+                ffmpeg_source,
+                media_url,
+            )
             relay_kwargs = self._media_downloader_relay_kwargs()
             if hasattr(downloader, "get_or_download_prepared"):
                 prepared_item = await downloader.get_or_download_prepared(
                     url=media_url,
                     timeout_seconds=timeout,
                     proxy=proxy,
-                    media_type=media_type,
+                    media_type=effective_media_type,
                     try_convert_gif=try_convert_gif,
                     gif_transcode_timeout=self._get_gif_transcode_timeout(),
                     **relay_kwargs,
                 )
-                if media_type == "video" and prepared_item.local_path is not None:
+                if (
+                    effective_media_type == "video"
+                    and prepared_item.media_type == "video"
+                    and prepared_item.local_path is not None
+                ):
                     local_path = await self._maybe_transcode_video_to_mp4(
                         prepared_item.local_path
                     )
@@ -381,18 +437,18 @@ class DefaultMessageSender:
                 url=media_url,
                 timeout_seconds=timeout,
                 proxy=proxy,
-                media_type=media_type,
+                media_type=effective_media_type,
                 try_convert_gif=try_convert_gif,
                 gif_transcode_timeout=self._get_gif_transcode_timeout(),
                 **relay_kwargs,
             )
-            if media_type == "video":
+            if effective_media_type == "video":
                 local_path = await self._maybe_transcode_video_to_mp4(local_path)
             detection = detect_media_file(local_path)
             effective_media_type = (
                 detection.media_type
                 if detection.media_type in {"image", "video", "audio"}
-                else media_type
+                else effective_media_type
             )
             prepared_item = PreparedMedia(
                 media_type=effective_media_type,

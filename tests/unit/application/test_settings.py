@@ -181,6 +181,11 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
                 "download_media_timeout": "70",
                 "telegram_photo_max_bytes": 1,
             },
+            "media": {
+                "ffmpeg_source": "bad",
+                "ffmpeg_mirror": "bad",
+                "ffmpeg_mirror_custom_url": 123,
+            },
             "route_knowledge": {
                 "source_mode": "bad",
                 "timeout": 999,
@@ -218,6 +223,9 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert "download_media_before_send" not in healed["basic_config"]
     assert "unknown_basic" not in healed["basic_config"]
     assert "media_config" not in healed
+    assert healed["media"]["ffmpeg_source"] == "auto"
+    assert healed["media"]["ffmpeg_mirror"] == "default"
+    assert healed["media"]["ffmpeg_mirror_custom_url"] == ""
     assert healed["route_knowledge"]["source_mode"] == "mirror"
     assert healed["route_knowledge"]["timeout"] == 300
     assert "ffmpeg" not in healed
@@ -804,6 +812,28 @@ def test_legacy_ffmpeg_migrates_to_media_without_overriding_existing_media():
     assert healed["media"]["video_transcode"] is True
     assert healed["media"]["video_transcode_timeout"] == 222
     assert healed["media"]["gif_transcode"] is True
+
+
+def test_build_application_settings_normalizes_ffmpeg_media_config():
+    from types import SimpleNamespace
+
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        build_application_settings,
+    )
+
+    settings = build_application_settings(
+        SimpleNamespace(
+            media=SimpleNamespace(
+                ffmpeg_source="bundled",
+                ffmpeg_mirror="custom",
+                ffmpeg_mirror_custom_url="  https://mirror.example/  ",
+            )
+        )
+    )
+
+    assert settings.media.ffmpeg_source == "bundled"
+    assert settings.media.ffmpeg_mirror == "custom"
+    assert settings.media.ffmpeg_mirror_custom_url == "https://mirror.example/"
 
 
 def test_legacy_media_telegraph_proxy_migrates_to_telegram_strategy():

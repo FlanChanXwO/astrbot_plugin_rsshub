@@ -227,14 +227,14 @@
       "ffmpeg_source": {
         "type": "string",
         "description": "FFmpeg 来源",
-        "hint": "auto=优先系统 PATH，缺失时自动下载；system=仅使用系统 PATH 下的 ffmpeg",
+        "hint": "auto=优先系统 PATH，并复用已有缓存；system=仅使用系统 PATH；bundled=系统缺失时允许下载捆绑 ffmpeg",
         "default": "auto",
-        "options": ["auto", "system"]
+        "options": ["auto", "system", "bundled"]
       },
       "ffmpeg_mirror": {
         "type": "string",
         "description": "FFmpeg 下载镜像",
-        "hint": "首次启动自动下载 ffmpeg 时使用的镜像；国内推荐 ghfast 或 ghproxy，国外保持 default",
+        "hint": "ffmpeg_source=bundled 且需要下载时使用的镜像；国内推荐 ghfast 或 ghproxy，国外保持 default",
         "default": "default",
         "options": ["default", "ghfast", "ghproxy", "mirror_ghproxy", "gh_proxy", "custom"]
       },

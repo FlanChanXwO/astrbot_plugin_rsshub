@@ -271,8 +271,9 @@ def _register_bot_client_provider(context: Context) -> None:
 async def _configure_ffmpeg_bundler(app_settings: ApplicationSettings) -> None:
     """配置 FFmpeg 捆绑下载参数，并根据可用性决定下载策略。
 
-    - 首次启动（系统 PATH 无 ffmpeg 且无缓存捆绑）→ 同步等待下载完成
-    - 插件重载（ffmpeg 已可用）→ 后台预取，不阻塞启动
+    - system：只使用系统 PATH
+    - auto：优先系统 PATH，并复用已有缓存，不主动联网下载
+    - bundled：系统 PATH 无 ffmpeg 且无缓存时，同步等待捆绑下载完成
     """
     from .src.infrastructure.utils.ffmpeg_helper import FFmpegTool
 
@@ -289,8 +290,8 @@ async def _configure_ffmpeg_bundler(app_settings: ApplicationSettings) -> None:
         FFmpegTool.prefetch_bundled_ffmpeg()
         return
 
-    # 用户选择仅使用系统 ffmpeg → 不下载，不阻塞
-    if FFmpegTool._ffmpeg_source == "system":
+    # auto/system 不做首次联网下载；bundled 由用户显式允许。
+    if not FFmpegTool.allows_bundled_download():
         return
 
     # 首次启动：系统无 ffmpeg 且无缓存，同步等待捆绑下载完成

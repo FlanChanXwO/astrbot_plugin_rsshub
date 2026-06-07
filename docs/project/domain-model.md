@@ -77,7 +77,7 @@ subscription option
 
 | 配置面 | 暴露内容 | 不属于这里 |
 | --- | --- | --- |
-| `_conf_schema.json` | HTTP 网络配置、Routes KB provider/source、content handler AI provider/persona、credentials、平台 sender strategy | 订阅默认值、用户/订阅继承选项、推送历史页业务设置。 |
+| `_conf_schema.json` | HTTP 网络配置、Routes KB provider/source、content handler AI provider/persona、credentials、平台 sender strategy、启动级媒体运行配置（如 FFmpeg 来源与镜像） | 订阅默认值、用户/订阅继承选项、推送历史页业务设置。 |
 | Plugin Pages | 订阅默认值、用户配置、订阅配置、处理器链、推送历史清理设置 | 启动级 provider/source/credentials 的底层 schema 定义。 |
 | 配置自愈测试 | `_conf_schema.json` 字段新增、删除、类型变化时必须同步 | 不要只改 schema 而不更新自愈回归。 |
 

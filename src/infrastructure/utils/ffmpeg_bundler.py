@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import platform
 import shutil
@@ -103,6 +104,11 @@ _PLATFORM_MAP: dict[str, _PlatformConfig] = {
 _CACHE_SUBDIR: Final = "ffmpeg"
 _READY_MARKER: Final = "_bundled_ready"
 _MIN_BINARY_SIZE: Final = 1_000_000  # 1 MB — ffmpeg 静态构建至少几 MB
+
+# 自动执行远端二进制必须有强校验依据。当前公开 latest 源没有稳定可维护的
+# 跨平台 SHA256 清单，因此默认保持空映射；只有补入固定 release 的校验值后，
+# ensure_bundled_ffmpeg 才会接受下载结果。已有缓存仍可继续复用。
+_ARCHIVE_SHA256: Final[dict[str, str]] = {}
 
 # ---------------------------------------------------------------------------
 # 模块级状态
@@ -416,24 +422,37 @@ async def _download_and_setup(
         )
         return None
 
-    # macOS: 尝试下载 SHA256 校验文件（校验失败不阻断）
-    _verify_checksum(archive_data, archive_name, url_prefix)
+    if not _verify_checksum(archive_data, archive_name):
+        logger.warning("FFmpeg 捆绑包校验失败，拒绝安装: archive=%s", archive_name)
+        return None
 
     # 解包
     return _extract_binaries(archive_data, fmt, ffmpeg_name, ffprobe_name, dest_dir)
 
 
 def _verify_checksum(
-    _archive_data: bytes,
+    archive_data: bytes,
     archive_name: str,
-    _url_prefix: str,
 ) -> bool:
-    """对 macOS 构建，下载并校验 SHA256。BtbN 无校验文件，跳过。"""
-    # 只有 macOS (vanloctech) 提供校验文件
-    if "macos" not in archive_name:
-        return True  # BtbN 无校验文件，视为通过
+    """校验下载归档的 SHA256。
 
-    return True  # 校验失败不阻断，后续由文件大小+可执行性兜底
+    文件大小和可执行权限只能发现损坏，不能证明来源可信；没有固定校验值时
+    拒绝安装，避免默认启动链路执行未验证的远端 latest 二进制。
+    """
+    expected = _ARCHIVE_SHA256.get(archive_name)
+    if not expected:
+        logger.warning("FFmpeg 捆绑包缺少 SHA256 校验值: archive=%s", archive_name)
+        return False
+    actual = hashlib.sha256(archive_data).hexdigest()
+    if actual.lower() != expected.lower():
+        logger.warning(
+            "FFmpeg 捆绑包 SHA256 不匹配: archive=%s, expected=%s, actual=%s",
+            archive_name,
+            expected,
+            actual,
+        )
+        return False
+    return True
 
 
 def _extract_binaries(

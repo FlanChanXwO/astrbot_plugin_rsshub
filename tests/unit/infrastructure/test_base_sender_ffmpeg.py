@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from astrbot_plugin_rsshub.src.domain.entities.content_types import (
@@ -123,6 +124,66 @@ async def test_prepare_media_passes_gif_transcode_config(monkeypatch, fake_detec
             "media_relay_base_url": "",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_media_enables_gif_for_wrapped_video_url(
+    monkeypatch,
+    fake_detector,
+):
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
+        _FakeDownloader,
+    )
+    DefaultMessageSender.configure_behavior(gif_transcode=True)
+    wrapped_url = "https://rss.example/?url=" + quote(
+        "https://video.twimg.com/tweet_video/source.mp4",
+        safe="",
+    )
+
+    prepared = await DefaultMessageSender().prepare_media([("image", wrapped_url)])
+
+    assert prepared[0].local_path == Path("/tmp/source.webm")
+    assert _FakeDownloader.calls[0]["media_type"] == "video"
+    assert _FakeDownloader.calls[0]["try_convert_gif"] is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_media_lets_download_detection_decide_for_opaque_media(
+    monkeypatch,
+    fake_detector,
+):
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
+        _FakeDownloader,
+    )
+    DefaultMessageSender.configure_behavior(gif_transcode=True)
+
+    await DefaultMessageSender().prepare_media(
+        [("file", "https://example.com/media/opaque")]
+    )
+
+    assert _FakeDownloader.calls[0]["media_type"] == "file"
+    assert _FakeDownloader.calls[0]["try_convert_gif"] is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_media_does_not_enable_gif_for_known_image_url(
+    monkeypatch,
+    fake_detector,
+):
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.media.MediaDownloader",
+        _FakeDownloader,
+    )
+    DefaultMessageSender.configure_behavior(gif_transcode=True)
+
+    await DefaultMessageSender().prepare_media(
+        [("image", "https://example.com/photo.jpg")]
+    )
+
+    assert _FakeDownloader.calls[0]["media_type"] == "image"
+    assert _FakeDownloader.calls[0]["try_convert_gif"] is False
 
 
 @pytest.mark.asyncio

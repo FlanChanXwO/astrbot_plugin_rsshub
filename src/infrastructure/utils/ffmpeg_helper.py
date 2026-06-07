@@ -23,7 +23,9 @@ class FFmpegTool:
 
     _ffmpeg_exe_cache: str | None = None
     _ffprobe_exe_cache: str | None = None
-    _ffmpeg_source: str = "auto"  # "auto" | "system"
+    _ffmpeg_exe_cache_source: str | None = None
+    _ffprobe_exe_cache_source: str | None = None
+    _ffmpeg_source: str = "auto"  # "auto" | "system" | "bundled"
 
     _GIF_TRANSCODE_FPS: Final = 30
     _GIF_TRANSCODE_SCALE: Final = "iw:-1"
@@ -61,20 +63,31 @@ class FFmpegTool:
             Path to ffmpeg executable, or None if not found
         """
         if FFmpegTool._ffmpeg_exe_cache and Path(FFmpegTool._ffmpeg_exe_cache).exists():
+            if (
+                FFmpegTool._ffmpeg_source == "system"
+                and FFmpegTool._ffmpeg_exe_cache_source != "system"
+            ):
+                FFmpegTool._clear_ffmpeg_cache()
+            else:
+                return FFmpegTool._ffmpeg_exe_cache
+
+        if FFmpegTool._ffmpeg_exe_cache and Path(FFmpegTool._ffmpeg_exe_cache).exists():
             return FFmpegTool._ffmpeg_exe_cache
 
         system_ffmpeg = shutil.which("ffmpeg")
         if system_ffmpeg:
             FFmpegTool._ffmpeg_exe_cache = str(Path(system_ffmpeg).resolve())
+            FFmpegTool._ffmpeg_exe_cache_source = "system"
             logger.debug("Using system ffmpeg: %s", FFmpegTool._ffmpeg_exe_cache)
             return FFmpegTool._ffmpeg_exe_cache
 
-        if auto_install and FFmpegTool._ffmpeg_source != "system":
+        if auto_install and FFmpegTool._ffmpeg_source in ("auto", "bundled"):
             from .ffmpeg_bundler import get_bundled_ffmpeg_path
 
             bundled = get_bundled_ffmpeg_path()
             if bundled and bundled.exists():
                 FFmpegTool._ffmpeg_exe_cache = str(bundled.resolve())
+                FFmpegTool._ffmpeg_exe_cache_source = "bundled"
                 logger.debug("Using bundled ffmpeg: %s", FFmpegTool._ffmpeg_exe_cache)
                 return FFmpegTool._ffmpeg_exe_cache
 
@@ -100,7 +113,13 @@ class FFmpegTool:
             FFmpegTool._ffprobe_exe_cache
             and Path(FFmpegTool._ffprobe_exe_cache).exists()
         ):
-            return FFmpegTool._ffprobe_exe_cache
+            if (
+                FFmpegTool._ffmpeg_source == "system"
+                and FFmpegTool._ffprobe_exe_cache_source != "system"
+            ):
+                FFmpegTool._clear_ffprobe_cache()
+            else:
+                return FFmpegTool._ffprobe_exe_cache
 
         ffmpeg_path = FFmpegTool.ensure_ffmpeg_ready(auto_install=auto_install)
         if ffmpeg_path:
@@ -112,19 +131,24 @@ class FFmpegTool:
             for candidate in ffprobe_candidates:
                 if candidate.exists():
                     FFmpegTool._ffprobe_exe_cache = str(candidate.resolve())
+                    FFmpegTool._ffprobe_exe_cache_source = (
+                        FFmpegTool._ffmpeg_exe_cache_source
+                    )
                     return FFmpegTool._ffprobe_exe_cache
 
         system_ffprobe = shutil.which("ffprobe")
         if system_ffprobe:
             FFmpegTool._ffprobe_exe_cache = str(Path(system_ffprobe).resolve())
+            FFmpegTool._ffprobe_exe_cache_source = "system"
             return FFmpegTool._ffprobe_exe_cache
 
-        if auto_install and FFmpegTool._ffmpeg_source != "system":
+        if auto_install and FFmpegTool._ffmpeg_source in ("auto", "bundled"):
             from .ffmpeg_bundler import get_bundled_ffprobe_path
 
             bundled = get_bundled_ffprobe_path()
             if bundled and bundled.exists():
                 FFmpegTool._ffprobe_exe_cache = str(bundled.resolve())
+                FFmpegTool._ffprobe_exe_cache_source = "bundled"
                 logger.debug("Using bundled ffprobe: %s", FFmpegTool._ffprobe_exe_cache)
                 return FFmpegTool._ffprobe_exe_cache
 
@@ -818,9 +842,13 @@ class FFmpegTool:
         ffmpeg_mirror_custom_url: str = "",
     ) -> None:
         """配置 ffmpeg bundler 的代理、超时、来源模式和镜像（启动时调用）。"""
-        FFmpegTool._ffmpeg_source = str(ffmpeg_source or "auto")
-        if FFmpegTool._ffmpeg_source not in ("auto", "system"):
-            FFmpegTool._ffmpeg_source = "auto"
+        new_source = str(ffmpeg_source or "auto")
+        if new_source not in ("auto", "system", "bundled"):
+            new_source = "auto"
+        if new_source != FFmpegTool._ffmpeg_source:
+            FFmpegTool._clear_ffmpeg_cache()
+            FFmpegTool._clear_ffprobe_cache()
+        FFmpegTool._ffmpeg_source = new_source
 
         from .ffmpeg_bundler import configure_ffmpeg_bundler
 
@@ -834,8 +862,25 @@ class FFmpegTool:
     @staticmethod
     def prefetch_bundled_ffmpeg() -> None:
         """后台异步预取 ffmpeg 捆绑包，不阻塞插件启动。"""
-        if FFmpegTool._ffmpeg_source == "system":
+        if FFmpegTool._ffmpeg_source != "bundled":
             return
         from .ffmpeg_bundler import prefetch_bundled_ffmpeg
 
         prefetch_bundled_ffmpeg()
+
+    @staticmethod
+    def allows_bundled_download() -> bool:
+        """返回当前配置是否允许首次联网下载捆绑 FFmpeg。"""
+        return FFmpegTool._ffmpeg_source == "bundled"
+
+    @staticmethod
+    def _clear_ffmpeg_cache() -> None:
+        """清理 ffmpeg 路径缓存，避免配置切换后复用旧来源。"""
+        FFmpegTool._ffmpeg_exe_cache = None
+        FFmpegTool._ffmpeg_exe_cache_source = None
+
+    @staticmethod
+    def _clear_ffprobe_cache() -> None:
+        """清理 ffprobe 路径缓存，避免配置切换后复用旧来源。"""
+        FFmpegTool._ffprobe_exe_cache = None
+        FFmpegTool._ffprobe_exe_cache_source = None

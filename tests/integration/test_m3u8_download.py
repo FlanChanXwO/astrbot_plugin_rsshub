@@ -1,11 +1,12 @@
 """m3u8 流下载集成测试。
 
-需要系统 ffmpeg 可用且能访问外网。
+需要设置 RSSHUB_RUN_NETWORK_TESTS=1、系统 ffmpeg 可用且能访问外网。
 标记为 @pytest.mark.integration，CI 默认跳过。
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,12 @@ M3U8_BBB_240P = (
 
 # 自适应码率主 playlist
 M3U8_BBB_MASTER = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+
+
+skip_no_network_opt_in = pytest.mark.skipif(
+    os.getenv("RSSHUB_RUN_NETWORK_TESTS") != "1",
+    reason="set RSSHUB_RUN_NETWORK_TESTS=1 to run public network m3u8 tests",
+)
 
 
 def _ffmpeg_available() -> bool:
@@ -44,6 +51,7 @@ skip_no_ffprobe = pytest.mark.skipif(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@skip_no_network_opt_in
 @skip_no_ffmpeg
 async def test_m3u8_download_real_240p(tmp_path: Path) -> None:
     """真实下载 240p m3u8 VOD，验证输出为有效 mp4。"""
@@ -61,6 +69,7 @@ async def test_m3u8_download_real_240p(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@skip_no_network_opt_in
 @skip_no_ffmpeg
 @skip_no_ffprobe
 async def test_m3u8_download_has_audio_and_video(tmp_path: Path) -> None:
@@ -87,6 +96,7 @@ async def test_m3u8_download_has_audio_and_video(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@skip_no_network_opt_in
 @skip_no_ffmpeg
 async def test_m3u8_download_master_playlist(tmp_path: Path) -> None:
     """下载自适应码率主 playlist，验证 ffmpeg 能处理 multi-variant m3u8。
@@ -109,6 +119,7 @@ async def test_m3u8_download_master_playlist(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@skip_no_network_opt_in
 @skip_no_ffmpeg
 async def test_m3u8_download_invalid_url(tmp_path: Path) -> None:
     """验证无效 m3u8 URL 的错误处理。"""

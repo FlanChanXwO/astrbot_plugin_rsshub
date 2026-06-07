@@ -2,11 +2,53 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
+import pytest
+from astrbot_plugin_rsshub.src.application.dto import WebFeed
 from astrbot_plugin_rsshub.src.infrastructure.fetcher import EntryParsed, RSSParser
+from astrbot_plugin_rsshub.src.infrastructure.fetcher.http import HttpFetcher
+from astrbot_plugin_rsshub.src.infrastructure.fetcher.rss import RSSFeedFetcher
 from astrbot_plugin_rsshub.src.infrastructure.utils import get_lock_manager
 from feedparser import FeedParserDict
+
+
+def _json_feed_bytes(**overrides: Any) -> bytes:
+    data = {
+        "version": "https://jsonfeed.org/version/1.1",
+        "title": "JSON Timeline",
+        "home_page_url": "https://example.com/",
+        "feed_url": "https://example.com/feed.json",
+        "description": "JSON feed fixture",
+        "date_modified": "2026-06-01T10:00:00Z",
+        "items": [
+            {
+                "id": "post-1",
+                "url": "https://example.com/posts/1",
+                "external_url": "https://mirror.example.com/posts/1",
+                "title": "JSON Entry",
+                "content_html": "<p>Hello <strong>JSON</strong></p>",
+                "summary": "Short JSON summary",
+                "authors": [{"name": "Alice"}],
+                "tags": ["json", "feed"],
+                "date_published": "2026-06-01T09:00:00Z",
+                "date_modified": "2026-06-01T09:30:00Z",
+                "attachments": [
+                    {
+                        "url": "https://example.com/video.mp4",
+                        "mime_type": "video/mp4",
+                        "size_in_bytes": 12345,
+                    }
+                ],
+                "image": "https://example.com/image.jpg",
+                "banner_image": "https://example.com/banner.jpg",
+            }
+        ],
+    }
+    data.update(overrides)
+    return json.dumps(data).encode("utf-8")
 
 
 class TestRSSParser:
@@ -114,6 +156,149 @@ class TestRSSParser:
 
         assert error is not None
         assert len(entries) == 0
+
+    def test_parse_json_feed_1_1_with_media_and_synthetic_xml(self):
+        """测试解析 JSON Feed 1.1 并合成 item XML。"""
+        parser = RSSParser()
+        entries, error = parser.parse(_json_feed_bytes())
+
+        assert error is None
+        assert len(entries) == 1
+
+        entry = entries[0]
+        assert entry.id == "post-1"
+        assert entry.entry_id == "post-1"
+        assert entry.guid == "post-1"
+        assert entry.link == "https://example.com/posts/1"
+        assert entry.title == "JSON Entry"
+        assert entry.content == "<p>Hello <strong>JSON</strong></p>"
+        assert entry.summary == "Short JSON summary"
+        assert entry.author == "Alice"
+        assert entry.tags == ["json", "feed"]
+        assert entry.published is not None
+        assert entry.updated is not None
+        assert [item.url for item in entry.enclosures] == [
+            "https://example.com/video.mp4",
+            "https://example.com/image.jpg",
+            "https://example.com/banner.jpg",
+        ]
+        assert entry.enclosures[0].length == 12345
+        assert entry.enclosures[0].type == "video/mp4"
+        assert entry.raw_xml.startswith("<item>")
+        assert '<guid isPermaLink="false">post-1</guid>' in entry.raw_xml
+        assert "&lt;p&gt;Hello" in entry.raw_xml
+        assert '<enclosure url="https://example.com/video.mp4"' in entry.raw_xml
+
+    def test_parse_json_feed_1_0_content_text_and_author_object(self):
+        """测试 JSON Feed 1.0 的 author 与 content_text fallback。"""
+        parser = RSSParser()
+        content = _json_feed_bytes(
+            version="https://jsonfeed.org/version/1",
+            items=[
+                {
+                    "id": "post-2",
+                    "external_url": "https://example.com/external/2",
+                    "title": "Text Entry",
+                    "content_text": "Plain <JSON> text",
+                    "author": {"name": "Bob"},
+                    "date_published": "2026-06-02T01:02:03+00:00",
+                }
+            ],
+        )
+
+        entries, error = parser.parse(content)
+
+        assert error is None
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.link == "https://example.com/external/2"
+        assert entry.content == "Plain &lt;JSON&gt; text"
+        assert entry.author == "Bob"
+        assert entry.published is not None
+
+    @pytest.mark.parametrize(
+        "payload,expected",
+        [
+            ({"ok": True}, "not a supported JSON Feed"),
+            (
+                {"version": "https://jsonfeed.org/version/1.1", "items": {}},
+                "items must be a list",
+            ),
+            (
+                {"version": "https://jsonfeed.org/version/9", "items": []},
+                "not a supported JSON Feed",
+            ),
+        ],
+    )
+    def test_parse_rejects_ordinary_or_unsupported_json(
+        self,
+        payload: dict[str, Any],
+        expected: str,
+    ):
+        """测试普通 JSON 不会被误当作 Feed。"""
+        parser = RSSParser()
+        entries, error = parser.parse(json.dumps(payload).encode("utf-8"))
+
+        assert entries == []
+        assert error is not None
+        assert expected in error
+
+
+@pytest.mark.asyncio
+async def test_rss_feed_fetcher_accepts_json_feed(monkeypatch: pytest.MonkeyPatch):
+    """测试抓取器能把 JSON Feed 适配为 WebFeed.rss_d。"""
+    captured_headers: dict[str, str] = {}
+
+    async def fake_fetch(
+        self: HttpFetcher,
+        url: str,
+        **kwargs: Any,
+    ) -> WebFeed:
+        captured_headers.update(kwargs.get("headers") or {})
+        return WebFeed(
+            url=url,
+            ori_url=url,
+            content=_json_feed_bytes(),
+            status=200,
+            headers={"Content-Type": "application/feed+json"},
+        )
+
+    monkeypatch.setattr(HttpFetcher, "fetch", fake_fetch)
+
+    result = await RSSFeedFetcher().fetch("https://example.com/feed.json")
+
+    assert result.error is None
+    assert result.rss_d is not None
+    assert result.rss_d.feed["title"] == "JSON Timeline"
+    assert result.rss_d.entries[0]["id"] == "post-1"
+    assert "application/feed+json" in captured_headers["Accept"]
+    assert "application/json" in captured_headers["Accept"]
+
+
+@pytest.mark.asyncio
+async def test_rss_feed_fetcher_rejects_ordinary_json(monkeypatch: pytest.MonkeyPatch):
+    """测试普通 JSON 响应不会被误判为有效 Feed。"""
+
+    async def fake_fetch(
+        self: HttpFetcher,
+        url: str,
+        **kwargs: Any,
+    ) -> WebFeed:
+        return WebFeed(
+            url=url,
+            ori_url=url,
+            content=b'{"ok": true}',
+            status=200,
+            headers={"Content-Type": "application/json"},
+        )
+
+    monkeypatch.setattr(HttpFetcher, "fetch", fake_fetch)
+
+    result = await RSSFeedFetcher().fetch("https://example.com/api.json")
+
+    assert result.rss_d is None
+    assert result.error is not None
+    assert result.error.error_name == "feed invalid"
 
 
 class TestEntryParsed:

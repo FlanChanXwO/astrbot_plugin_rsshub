@@ -107,6 +107,7 @@ handlers 按配置顺序串行执行，上一个结果作为下一个输入。
   - 只允许输出 JSON 中的 `title/summary/content`
 - `scope=xml`
   - 输入整段 `raw_xml` 与必要元信息
+  - JSON Feed 条目的 `raw_xml` 是插件合成的 RSS `<item>` 片段，不代表上游原始 XML
   - agent 可调用内部 XML 校验工具反复自检，最多 6 步
   - 最终必须返回 `{"raw_xml":"..."}` 形式 JSON
   - 插件会对改写结果再次做 XML 安全校验与重解析，再重建正文、标题、链接和媒体

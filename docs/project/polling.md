@@ -24,7 +24,7 @@ flowchart TD
   B --> C["构造条件请求头"]
   C --> D{"Feed 是否变化"}
   D -->|"304 / 无新内容"| E["返回无变化结果"]
-  D -->|"200 / 有内容"| F["解析 RSS / Atom"]
+  D -->|"200 / 有内容"| F["解析 RSS / Atom / JSON Feed"]
   F --> G{"解析成功"}
   G -->|"否"| H["返回 parse_error"]
   G -->|"是"| I["更新 Feed metadata"]
@@ -69,10 +69,12 @@ flowchart TD
 
 抓取成功后：
 
-- 用 parser 解析 RSS/Atom
+- 用 parser 解析 RSS/Atom/JSON Feed
 - 更新 feed 的 title、etag、last_modified
 
 如果解析失败，直接返回 `parse_error`，不做部分更新。
+
+JSON Feed 只支持标准 1.0 / 1.1 文档；普通 JSON API 不会被当作 Feed。为了兼容现有 XML scope handler 与 push history，JSON Feed 条目的 `raw_xml` 会合成为单个 RSS `<item>` 片段，这不是上游原始 XML。
 
 ### 3. 增量识别
 
@@ -324,7 +326,7 @@ flowchart TD
 关键点是：
 
 - 默认正文已经去掉 HTML 标签与媒体占位
-- `raw_entry` 仍保留原始文本和 `raw_xml`，供 handler 使用
+- `raw_entry` 仍保留原始文本和 `raw_xml`，供 handler 使用；JSON Feed 的 `raw_xml` 是插件合成的 `<item>` 片段
 
 这正是后来“正文不能再从原始 HTML 回退覆盖”的根基。
 

@@ -21,6 +21,7 @@ from astrbot_plugin_rsshub.src.application.services.session_push_queue import (
     PushJobResult,
     SessionPushQueue,
 )
+from astrbot_plugin_rsshub.src.domain.entities.content_types import LayoutFragment
 from astrbot_plugin_rsshub.src.domain.entities.push_history import PushHistory
 from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
 from astrbot_plugin_rsshub.src.domain.entities.user import User
@@ -433,7 +434,12 @@ async def test_dispatch_guard_skips_already_successful_entry_guid():
 
     assert stats == {"success": 0, "failed": 0, "pending": 0, "skipped": 1}
     assert sender.requests == []
-    history_repo.save.assert_not_awaited()
+    history_repo.save.assert_awaited_once()
+    saved = history_repo.save.await_args.args[0]
+    assert saved.status == "skipped"
+    assert saved.fail_reason == "dispatch guard: already successful entry_guid"
+    assert saved.max_retries == 0
+    assert saved.entry_guid == "guid-1"
 
 
 @pytest.mark.asyncio
@@ -933,6 +939,239 @@ async def test_dispatch_formats_raw_entry_with_effective_options_from_subscripti
 
 
 @pytest.mark.asyncio
+async def test_dispatch_limits_original_layout_text_with_effective_length_limit():
+    sender = FakeSender()
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        length_limit=8,
+        style=2,
+    )
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.return_value = [sub]
+    history_repo = AsyncMock()
+    history_repo.exists_success_by_scope_and_guid.return_value = False
+    history_repo.save.side_effect = lambda history: history
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    stats = await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="fallback",
+        entry_title="Title",
+        entry_link="https://example.com/entry",
+        entry_guid="guid-original-limit",
+        raw_entry=EntryContentContext(
+            title="Title",
+            summary="summary",
+            content="content",
+            link="https://example.com/entry",
+            author="",
+            feed_title="Feed",
+            feed_link="https://example.com/feed.xml",
+            layout=(
+                LayoutFragment(kind="text", text="abcdefghij"),
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url="https://example.com/a.jpg",
+                ),
+                LayoutFragment(kind="text", text="tail"),
+                LayoutFragment(
+                    kind="file",
+                    media_type="file",
+                    url="https://example.com/report.pdf",
+                    name="report.pdf",
+                ),
+            ),
+        ),
+        media_items=[
+            ("image", "https://example.com/a.jpg"),
+            ("file", "https://example.com/report.pdf"),
+        ],
+    )
+
+    assert stats == {"success": 1, "failed": 0, "pending": 0, "skipped": 0}
+    request, context = sender.requests[0]
+    assert context.style == 2
+    assert request.layout is not None
+    assert [(item.kind, item.text, item.url) for item in request.layout] == [
+        ("text", "abcde...", ""),
+        ("image", "", "https://example.com/a.jpg"),
+        ("file", "", "https://example.com/report.pdf"),
+    ]
+    assert request.media == [
+        ("image", "https://example.com/a.jpg"),
+        ("file", "https://example.com/report.pdf"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_original_layout_text_when_length_limit_disabled():
+    sender = FakeSender()
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        length_limit=0,
+        style=2,
+    )
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.return_value = [sub]
+    history_repo = AsyncMock()
+    history_repo.exists_success_by_scope_and_guid.return_value = False
+    history_repo.save.side_effect = lambda history: history
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="fallback",
+        entry_title="Title",
+        entry_link="https://example.com/entry",
+        entry_guid="guid-original-no-limit",
+        raw_entry=EntryContentContext(
+            title="Title",
+            summary="summary",
+            content="content",
+            link="https://example.com/entry",
+            author="",
+            feed_title="Feed",
+            feed_link="https://example.com/feed.xml",
+            layout=(LayoutFragment(kind="text", text="abcdefghij"),),
+        ),
+    )
+
+    request, _context = sender.requests[0]
+    assert request.layout is not None
+    assert request.layout[0].text == "abcdefghij"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_clears_original_layout_when_media_hidden():
+    sender = FakeSender()
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        display_media=-1,
+        style=2,
+    )
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.return_value = [sub]
+    history_repo = AsyncMock()
+    history_repo.exists_success_by_scope_and_guid.return_value = False
+    history_repo.save.side_effect = lambda history: history
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="fallback",
+        entry_title="Title",
+        entry_link="https://example.com/entry",
+        entry_guid="guid-original-media-hidden",
+        raw_entry=EntryContentContext(
+            title="Title",
+            summary="summary",
+            content="content",
+            link="https://example.com/entry",
+            author="",
+            feed_title="Feed",
+            feed_link="https://example.com/feed.xml",
+            layout=(
+                LayoutFragment(kind="text", text="lead"),
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url="https://example.com/a.jpg",
+                ),
+            ),
+        ),
+        media_items=[("image", "https://example.com/a.jpg")],
+    )
+
+    request, _context = sender.requests[0]
+    assert request.media is None
+    assert request.layout is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_link_only_clears_original_layout():
+    sender = FakeSender()
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        send_mode=-1,
+        style=2,
+    )
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.return_value = [sub]
+    history_repo = AsyncMock()
+    history_repo.exists_success_by_scope_and_guid.return_value = False
+    history_repo.save.side_effect = lambda history: history
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="fallback",
+        entry_title="Title",
+        entry_link="https://example.com/entry",
+        entry_guid="guid-original-link-only",
+        raw_entry=EntryContentContext(
+            title="Title",
+            summary="summary",
+            content="content",
+            link="https://example.com/entry",
+            author="",
+            feed_title="Feed",
+            feed_link="https://example.com/feed.xml",
+            layout=(
+                LayoutFragment(kind="text", text="lead"),
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url="https://example.com/a.jpg",
+                ),
+            ),
+        ),
+        media_items=[("image", "https://example.com/a.jpg")],
+    )
+
+    request, _context = sender.requests[0]
+    assert request.message == "Title\nhttps://example.com/entry"
+    assert request.media is None
+    assert request.layout is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_inherits_effective_options_from_user():
     sender = FakeSender()
     sub = Subscription(
@@ -974,7 +1213,11 @@ async def test_dispatch_inherits_effective_options_from_user():
 
     assert stats == {"success": 0, "failed": 0, "pending": 0, "skipped": 1}
     assert sender.requests == []
-    history_repo.save.assert_not_awaited()
+    history_repo.save.assert_awaited_once()
+    saved = history_repo.save.await_args.args[0]
+    assert saved.status == "skipped"
+    assert saved.fail_reason == "notify disabled"
+    assert saved.max_retries == 0
 
 
 @pytest.mark.asyncio

@@ -97,6 +97,8 @@ Telegram 不新增插件侧开关。插件只优化 Plain 文本文案，AstrBot
 
 OneBot auto/classic 使用合并转发，节点名优先使用 feed title。合并转发失败后会回退为纯文本 Nodes。OneBot original 不使用大合并转发包，而是按 layout fragments 逐条发送图文片段，适合 AI 日报这类多图长文。
 
+original layout 中的 PDF / 文档链接保持 `file` 片段语义，由 sender 按文件或尾部组件发送，不参与图片合链，也不会被当作 image 组件处理。
+
 ### Telegram 大图片
 
 Telegram Bot API 对 photo 有大小上限。发送前如果本地图片文件超过内置 photo 阈值，Telegram sender 会把它改为文件组件发送，避免平台把大图按 photo 拒绝。这个降级只改变发送组件类型，不改变原始媒体 URL 和失败历史记录。

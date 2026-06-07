@@ -4,18 +4,27 @@
 
 ## 工具列表
 
-- `rss_subscribe`: 订阅 RSS 源；公开参数为 `targets: string[]`，每项可以是完整 Feed URL、RSSHub 路径或路由路径。
-- `rss_unsubscribe`: 取消订阅。
-- `rss_unsubscribe_all`: 取消所有订阅。
-- `rss_list_subscriptions`: 列出订阅。
-- `rss_set_subscription_option`: 设置订阅选项。
+- `rss_subscribe`: 订阅已确认的 RSS/Atom Feed 或 RSSHub 路由；公开参数仍只有 `targets: string[]`。
+- `rss_unsubscribe`: 取消当前会话订阅；用户不知道 ID 时先用 `rss_list_subscriptions` 定位。
+- `rss_unsubscribe_all`: 取消当前会话全部订阅；`scope=global` 只用于明确的全局清理。
+- `rss_list_subscriptions`: 列出当前会话订阅，修改或退订前优先调用。
+- `rss_set_subscription_option`: 设置单个订阅选项。
 - `rss_set_user_default_option`: 设置用户默认选项。
-- `rss_set_session_default_option`: 设置会话默认选项。
-- `rss_get_session_defaults`: 获取会话默认配置。
-- `rss_list_push_history`: 查询当前会话推送历史。
-- `rss_push_xml_entry`: 解析 XML/HTML 标签内容并推送到当前会话。
+- `rss_set_session_default_option`: 设置当前会话的新订阅默认选项。
+- `rss_get_session_defaults`: 获取当前会话默认配置。
+- `rss_list_handlers` / `rss_get_handlers` / `rss_set_subscription_handlers` / `rss_set_user_handlers`: 管理长期 AI 过滤、总结和改写 handlers。
+- `rss_list_push_history`: 查询当前会话推送历史，用于排查 `status`、`fail_reason`、`handler_trace`、`raw_xml` 和媒体。
+- `rss_push_xml_entry`: 一次性解析 XML/HTML 标签内容并推送到当前会话。
 
 RSSHub 路由检索后续走 AstrBot 知识库和 route skill；插件不再提供 route 搜索 LLM tool。
+
+## Agent 推荐顺序
+
+- 订阅或退订前，如果用户没有给出明确 ID，先调用 `rss_list_subscriptions`。
+- 只改一个订阅时用 `rss_set_subscription_option`；改用户长期默认值用 `rss_set_user_default_option`；改当前会话新订阅默认值用 `rss_set_session_default_option`。
+- 用户要求“以后过滤 / 总结 / 改写这类推送”时，优先配置 handlers；只做临时分析时不要写入 handlers。
+- 排查没推送、发送失败或 AI 过滤行为时，先查 `rss_list_push_history`，再按需读取 handlers。
+- `rss_push_xml_entry` 只用于一次性直推，不创建长期订阅，也不读取或注入订阅 handlers。
 
 ## XML 即时推送
 

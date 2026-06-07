@@ -40,6 +40,8 @@ tests/             # 单元与集成测试
 - 让应用服务可以脱离插件入口单测
 - 让后续新增 Web API、sender、repository 时只改装配层
 
+LLM tools 的入口仍由 `main.py` 注册；具体实现按主题放在 `src/application/llmtools/`，分别覆盖订阅、配置、handlers、推送历史和 XML/HTML 直推。这个包只负责把 AstrBot tool 调用转发到现有命令、查询和应用服务，不承担启动装配职责。
+
 ## 2. 应用服务收口跨模块用例
 
 这个插件的很多用例天然跨边界：

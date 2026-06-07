@@ -34,6 +34,8 @@
 | agent push 去重 | `(source_type, source_key, user_id, target_session, entry_guid)` | 只看成功态 | 不依赖公开 `sub_id`。 |
 | agent retry | 复用历史记录中的 target 和 media 上下文 | 直接重发 | 保留审计连续性。 |
 
+`src/application/llmtools/` 按订阅、配置、handlers、历史和 XML 直推拆分工具实现；公开入口仍是 `build_llm_tools` 与 `LLM_TOOL_NAMES`。这次拆分只改变代码组织和工具说明，不改变公开参数 schema。
+
 ## 订阅、用户与历史语义
 
 | 主题 | 当前语义 | 备注 |

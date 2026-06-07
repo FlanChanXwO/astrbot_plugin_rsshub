@@ -838,11 +838,12 @@ class MediaDownloader:
         """
         from ..messaging.senders.types import MediaVariant, PreparedMedia
 
+        download_media_type = None if try_convert_gif else media_type
         local_path = await self.get_or_download(
             url=url,
             timeout_seconds=timeout_seconds,
             proxy=proxy,
-            media_type=media_type,
+            media_type=download_media_type,
             try_convert_gif=False,
             gif_transcode_timeout=gif_transcode_timeout,
             m3u8_timeout=m3u8_timeout,
@@ -855,6 +856,22 @@ class MediaDownloader:
             if detection.media_type in {"image", "video", "audio"}
             else (media_type or "file")
         )
+        if download_media_type is None:
+            validation_type = (
+                effective_type
+                if effective_type in {"image", "video", "audio"}
+                else None
+            )
+            validation = await validate_media_file(
+                local_path,
+                media_type=validation_type,
+                timeout_seconds=10,
+            )
+            if not validation.ok:
+                raise RuntimeError(
+                    f"media validation failed after detection: url={url}, "
+                    f"detail={validation.detail}"
+                )
         prepared = PreparedMedia(
             media_type=effective_type,
             original_url=url,
@@ -874,6 +891,18 @@ class MediaDownloader:
             )
         )
 
+        logger.debug(
+            "Prepared media GIF decision: url=%s, declared_media_type=%s, "
+            "download_media_type=%s, effective_type=%s, try_convert_gif=%s, "
+            "detected_suffix=%s, detection_source=%s",
+            url,
+            media_type,
+            download_media_type,
+            effective_type,
+            try_convert_gif,
+            detection.suffix,
+            detection.source,
+        )
         if try_convert_gif and effective_type == "video" and local_path.exists():
             await self._append_gif_variants(
                 prepared,
@@ -894,6 +923,14 @@ class MediaDownloader:
                 prepared.detected_mime = gif_variant.mime
                 prepared.detected_suffix = gif_variant.suffix
                 prepared.detection_source = "gif_variant"
+                logger.debug(
+                    "Prepared media selected GIF variant: url=%s, variant=%s, "
+                    "path=%s, size=%s",
+                    url,
+                    gif_variant.variant,
+                    gif_variant.path,
+                    gif_variant.size_bytes,
+                )
         return prepared
 
     async def _append_gif_variants(
@@ -912,6 +949,11 @@ class MediaDownloader:
                 auto_install_ffmpeg=True,
             )
             if has_audio:
+                logger.debug(
+                    "GIF variant skipped because video has audio: url=%s, path=%s",
+                    prepared.original_url,
+                    local_path,
+                )
                 return
             gif_path = await FFmpegTool.transcode_to_gif(
                 local_path,

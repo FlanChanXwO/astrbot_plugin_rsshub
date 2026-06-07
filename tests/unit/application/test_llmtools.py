@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from astrbot_plugin_rsshub.src.application.llmtools import build_llm_tools
+from astrbot_plugin_rsshub.src.application.llmtools import (
+    LLM_TOOL_NAMES,
+    build_llm_tools,
+)
 from astrbot_plugin_rsshub.src.application.services.agent_xml_push_service import (
     AgentXmlPushService,
 )
@@ -55,8 +59,8 @@ def test_build_llm_tools_names():
     deps = _build_deps()
     _, plugin_ctx = _make_ctx()
     tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
-    names = {tool.name for tool in tools}
-    assert names == {
+    assert [tool.name for tool in tools] == LLM_TOOL_NAMES
+    assert set(LLM_TOOL_NAMES) == {
         "rss_subscribe",
         "rss_unsubscribe",
         "rss_unsubscribe_all",
@@ -126,6 +130,31 @@ async def test_llm_tool_rss_subscribe_schema_does_not_expose_legacy_params():
     assert "url" not in tool.parameters["properties"]
     assert "interval" not in tool.parameters["properties"]
     assert "targets" in tool.parameters["properties"]
+
+
+def test_llm_tool_descriptions_guide_agent_decisions():
+    deps = _build_deps()
+    _, plugin_ctx = _make_ctx()
+    tools = {
+        tool.name: tool
+        for tool in build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    }
+
+    assert "rss_list_subscriptions" in tools["rss_subscribe"].description
+    assert "sub_id" in tools["rss_list_subscriptions"].description
+    assert "当前会话" in tools["rss_set_session_default_option"].description
+    assert "用户默认" in tools["rss_set_user_default_option"].description
+    assert "handlers" in tools["rss_list_handlers"].description
+    assert "AI 过滤" in tools["rss_set_subscription_handlers"].description
+    assert "handler_trace" in tools["rss_list_push_history"].description
+    assert "dry_run" in tools["rss_push_xml_entry"].description
+    assert "不创建长期订阅" in tools["rss_push_xml_entry"].description
+
+
+def test_llm_tools_do_not_restore_route_search_tools():
+    assert "rss_search_routes" not in LLM_TOOL_NAMES
+    assert "rss_build_route" not in LLM_TOOL_NAMES
+    assert "rss_route_search" not in LLM_TOOL_NAMES
 
 
 @pytest.mark.asyncio
@@ -538,3 +567,15 @@ async def test_llm_tool_rss_push_xml_entry_rejects_invalid_xml():
     result = await tool.handler(ctx, "daily:ai-news", "Daily", "<entry><p>bad</entry>")
 
     assert "xml 格式错误" in result
+
+
+def test_agent_skill_mentions_only_existing_plugin_tools_and_no_xml_parse_handler():
+    plugin_root = Path(__file__).resolve().parents[3]
+    skill_text = (plugin_root / "skills/rsshub-agent-tools/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    for tool_name in LLM_TOOL_NAMES:
+        assert tool_name in skill_text
+    assert "xml_parse" not in skill_text
+    assert "rss_subscribe(uri=" not in skill_text
+    assert "rss_subscribe(targets=" in skill_text

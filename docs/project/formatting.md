@@ -74,7 +74,7 @@
 
 - `0=auto`：自动选择平台经典发送方式，例如 OneBot 使用合并转发。
 - `1=RSSRT`：保留给 RSSRT 排版策略。
-- `2=original`：优先使用 HTML/XML 解析树生成的 layout fragments，尽量按原始顺序发送图文片段。
+- `2=original`：优先使用 HTML/XML 解析树生成的 layout fragments，尽量按原始顺序发送图文片段；文本片段仍遵守最终生效的 `length_limit`，媒体、文件片段只参与顺序发送，不因文本裁剪被丢弃。
 
 旧 `flowerss` 语义已经废弃，迁移时会重置为 classic。
 

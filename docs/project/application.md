@@ -34,6 +34,8 @@
 | agent push 去重 | `(source_type, source_key, user_id, target_session, entry_guid)` | 只看成功态 | 不依赖公开 `sub_id`。 |
 | agent retry | 复用历史记录中的 target 和 media 上下文 | 直接重发 | 保留审计连续性。 |
 
+`src/application/llmtools/` 按订阅、配置、handlers、历史和 XML 直推拆分工具实现；公开入口仍是 `build_llm_tools` 与 `LLM_TOOL_NAMES`。这次拆分只改变代码组织和工具说明，不改变公开参数 schema。
+
 ## 订阅、用户与历史语义
 
 | 主题 | 当前语义 | 备注 |
@@ -54,6 +56,8 @@
 | `failed_queue_max_retries` | 只控制自动重试次数上限 | 不代表可以删除失败历史。 |
 | Plugin Pages 手动重试 | 复用同一条 `push_history`，更新结果和最近活动时间 | 不新增历史行，不消耗自动重试次数。 |
 | `deduplicate_multi_bot` | 只在同一 `target_session` 且最终 payload 等价时去重 | 被压制的发送必须写入 `status=skipped`。 |
+| 规则性跳过 | handler deny、通知关闭、成功去重 guard、多 BOT 去重都写入 `status=skipped` | 这类 skipped 是可审计 ack；不能伪装成 success。 |
+| Feed 水位确认 | 只有 `success` 或明确规则性 `skipped` 会确认本轮新 entry | `pending`、`failed` 或分发异常不能推进 `entry_hashes` / 条件请求水位，避免漏推。 |
 
 ## 已移除的应用能力
 

@@ -65,7 +65,7 @@ function cloneBridgeValue(value, seen) {
 
 function normalizeFilterValue(value) {
   if (value && typeof value === 'object' && Array.isArray(value.values)) {
-    return normalizeFilterValue([...value.values, value.input]);
+    return normalizeFilterValue(value.values);
   }
   if (Array.isArray(value)) {
     return value
@@ -248,6 +248,10 @@ export async function batchUnsubscribe(subIds, userId, deletePushHistory = false
 
 export async function getStats() {
   return await apiGet('stats');
+}
+
+export async function getDashboardCharts(range = '7d') {
+  return await apiGet('dashboard/charts', { range });
 }
 
 let previousCounter = 0;

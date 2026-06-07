@@ -152,6 +152,7 @@ async def create_plugin_runtime(
     try:
         plugin_config, app_settings = _init_config(config)
         _schedule_table_font(app_settings)
+        await _configure_ffmpeg_bundler(app_settings)
         _configure_message_senders(app_settings)
         _register_bot_client_provider(context)
         await _init_database(plugin_config)
@@ -265,6 +266,46 @@ def _register_bot_client_provider(context: Context) -> None:
         return None
 
     set_bot_client_provider(_resolve_bot_client)
+
+
+async def _configure_ffmpeg_bundler(app_settings: ApplicationSettings) -> None:
+    """配置 FFmpeg 捆绑下载参数，并根据可用性决定下载策略。
+
+    - system：只使用系统 PATH
+    - auto：优先系统 PATH，并复用已有缓存，不主动联网下载
+    - bundled：系统 PATH 无 ffmpeg 且无缓存时，同步等待捆绑下载完成
+    """
+    from .src.infrastructure.utils.ffmpeg_helper import FFmpegTool
+
+    FFmpegTool.configure_bundler(
+        http_proxy=app_settings.http.proxy,
+        timeout=app_settings.http.media_timeout,
+        ffmpeg_source=app_settings.media.ffmpeg_source,
+        ffmpeg_mirror=app_settings.media.ffmpeg_mirror,
+        ffmpeg_mirror_custom_url=app_settings.media.ffmpeg_mirror_custom_url,
+    )
+
+    # ffmpeg 已可用（系统 PATH 或缓存捆绑）→ 后台预取即可
+    if FFmpegTool.ensure_ffmpeg_ready(auto_install=False) is not None:
+        FFmpegTool.prefetch_bundled_ffmpeg()
+        return
+
+    # auto/system 不做首次联网下载；bundled 由用户显式允许。
+    if not FFmpegTool.allows_bundled_download():
+        return
+
+    # 首次启动：系统无 ffmpeg 且无缓存，同步等待捆绑下载完成
+    from .src.infrastructure.utils.ffmpeg_bundler import ensure_bundled_ffmpeg
+
+    logger.info("系统未检测到 FFmpeg，正在同步等待捆绑下载完成...")
+    result = await ensure_bundled_ffmpeg(
+        http_proxy=app_settings.http.proxy,
+        timeout=app_settings.http.media_timeout,
+    )
+    if result is not None:
+        logger.info("FFmpeg 捆绑二进制首次下载成功")
+    else:
+        logger.warning("FFmpeg 捆绑二进制首次下载失败，媒体功能将受限")
 
 
 def _configure_message_senders(app_settings: ApplicationSettings) -> None:

@@ -174,7 +174,7 @@ export const subscriptionsModule = {
   currentSubUserId() {
     const subUserId =
       this.panelMode === 'edit' ? this.editForm.user_id : this.detailSub.user_id;
-    const filterUserIds = this.filterTags(this.subFilters.user_id);
+    const filterUserIds = this.committedFilterTags(this.subFilters.user_id);
     return subUserId || filterUserIds[0] || undefined;
   },
 
@@ -183,7 +183,7 @@ export const subscriptionsModule = {
     return this.filteredSubs
       .filter((sub) => selected.has(sub.id))
       .reduce((groups, sub) => {
-        const filterUserIds = this.filterTags(this.subFilters.user_id);
+        const filterUserIds = this.committedFilterTags(this.subFilters.user_id);
         const userId = sub.user_id || filterUserIds[0] || undefined;
         const key = userId || '';
         if (!groups[key]) groups[key] = { userId, ids: [] };

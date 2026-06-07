@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from astrbot_plugin_rsshub.src.application.services.html_parser import HTMLParser
 from astrbot_plugin_rsshub.src.domain.entities.content_types import (
+    FileContent,
     build_generated_media_url,
 )
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
@@ -387,6 +388,39 @@ async def test_html_parser_builds_ordered_layout_fragments():
         ("text", "Caption", ""),
         ("video", "", "https://example.com/2.mp4"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_html_parser_builds_interleaved_image_layout_fragments():
+    parsed = await HTMLParser(
+        '<p>A before</p><img src="https://example.com/a.jpg" />'
+        '<p>B middle</p><img src="https://example.com/b.jpg" />'
+        "<p>C after</p>"
+    ).parse()
+
+    assert [(item.kind, item.text, item.url) for item in parsed.layout] == [
+        ("text", "A before", ""),
+        ("image", "", "https://example.com/a.jpg"),
+        ("text", "B middle", ""),
+        ("image", "", "https://example.com/b.jpg"),
+        ("text", "C after", ""),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_html_parser_keeps_pdf_link_as_file_fragment():
+    parsed = await HTMLParser(
+        '<p>智谱 IPO 材料：<a href="https://example.com/report.pdf">招股书 PDF</a></p>'
+    ).parse()
+
+    assert [(item.kind, item.text, item.url, item.name) for item in parsed.layout] == [
+        ("text", "智谱 IPO 材料：", "", ""),
+        ("file", "", "https://example.com/report.pdf", "招股书 PDF"),
+    ]
+    assert len(parsed.media) == 1
+    assert isinstance(parsed.media[0], FileContent)
+    assert parsed.media[0].url == "https://example.com/report.pdf"
+    assert parsed.media[0].name == "招股书 PDF"
 
 
 # ------------------------------------------------------------------

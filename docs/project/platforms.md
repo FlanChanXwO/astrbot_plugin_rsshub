@@ -79,7 +79,7 @@
 
 本地生成媒体的入口不同：`HTMLParser` 生成 `GeneratedImageContent` 后，sender 会通过 `infrastructure.rendering` 的表格图片解析器把 `rsshub-generated://table/<hash>` 映射回 `cache/table_images/table_<hash>.png`，直接构造 `PreparedMedia`。如果 cache 文件缺失，会按媒体失败处理但不会把内部标识追加给用户，也不会在 original layout 中把内部标识当作图片文件发送；layout 会携带不可见的表格纯文本 fallback，供 cache 缺失或平台图片发送失败时补回正文。`media.table_to_image=false` 时表格解析阶段直接使用纯文本表格；渲染失败时也会回退为纯文本表格。
 
-无声视频转 GIF 时会保留原始视频 variant。若 GIF 超出当前内置的跨平台压缩目标，插件会按固定 FFmpeg 档位尝试压缩 GIF；发送时再按目标平台软阈值选择原 GIF、压缩 GIF、原视频、文件或原始链接。
+无声视频转 GIF 时会保留原始视频 variant。GIF 转换候选由 sender 侧综合声明类型、URL hint（含 RSSHub / 反代包装 URL 内层地址）和下载后的真实文件探测决定；声明被误标为 `image` / `file` 但下载后探测为视频的媒体，仍会进入无声视频转 GIF 分支。转换决策日志会记录 sender、声明类型、有效类型、`gif_transcode`、`try_convert_gif`、FFmpeg 来源和 URL，便于排查“配置已开但未进入转换”的问题。转换成功后的 `.gif` 通过 `MediaDispatchResolver` 按 `image` 媒体组件发送，不在各平台 sender 里重复特殊判断。若 GIF 超出当前内置的跨平台压缩目标，插件会按固定 FFmpeg 档位尝试压缩 GIF；发送时再按目标平台软阈值选择原 GIF、压缩 GIF、原视频、文件或原始链接。
 
 ## 代理与超时
 
@@ -90,6 +90,16 @@
 | 裸 `host:port` 代理 | 标准化为 `http://host:port` | 避免不同 HTTP 客户端对无 scheme 值表现不一致。 |
 | SOCKS 代理 | `socks4://` / `socks5://` / `socks5h://` | Telegraph API 通过 `aiohttp-socks` 连接；SOCKS 代理必须带明确 scheme。 |
 | `http_config.media_timeout` | 媒体预下载和 FFmpeg 下载超时 | 上限和默认值属于配置模型 / schema 约束。 |
+
+## FFmpeg 来源
+
+| 配置 | 行为 | 备注 |
+| --- | --- | --- |
+| `media.ffmpeg_source=auto` | 优先使用系统 PATH 下的 `ffmpeg` / `ffprobe`，并复用已经存在的插件缓存 | 默认值；不会在首次启动时主动联网下载新的可执行文件。 |
+| `media.ffmpeg_source=system` | 只使用系统 PATH | 切换到该模式会丢弃运行时缓存的 bundled 路径。 |
+| `media.ffmpeg_source=bundled` | 系统 PATH 缺失时允许下载捆绑 FFmpeg 到插件 cache | 下载镜像由 `media.ffmpeg_mirror` / `media.ffmpeg_mirror_custom_url` 控制；下载归档必须通过固定 SHA256 校验后才会安装。 |
+
+`media.ffmpeg_mirror` 只影响 bundled 下载，不改变 RSS 拉取、普通媒体预下载或 Telegraph API 的代理语义。自定义镜像只作为 GitHub URL 前缀使用，配置错误会回退到直连尝试，但不会绕过归档校验。
 
 ## 常量放置
 

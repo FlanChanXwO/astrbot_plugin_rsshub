@@ -38,6 +38,7 @@ from ...shared.constants import (
     SEND_MODE_AUTO,
     SEND_MODE_DIRECT,
     SEND_MODE_LINK_ONLY,
+    STYLE_ORIGINAL,
 )
 from ..ports import MessageContext, MessageSenderProvider, SendRequest
 from .content_handlers import ContentHandlerRuntime, EntryContentContext
@@ -663,10 +664,6 @@ class NotificationDispatcher:
                     processed_entry.link if processed_entry is not None else entry_link
                 )
                 effective_options = self._resolve_effective_push_options(sub, user)
-                if not effective_options.notify:
-                    logger.debug("订阅 %s 已关闭通知，跳过条目推送", sub.id)
-                    stats["skipped"] += 1
-                    continue
                 effective_content = await self._format_effective_entry_content(
                     fallback_content=content,
                     raw_entry=processed_entry,
@@ -676,6 +673,28 @@ class NotificationDispatcher:
                     feed_link=feed_link,
                     options=effective_options,
                 )
+                if not effective_options.notify:
+                    await self._save_skipped_history(
+                        subscription=sub,
+                        feed_id=feed_id,
+                        processed_entry=processed_entry,
+                        persisted_media_urls=(
+                            persisted_media_urls
+                            if effective_options.display_media and persisted_media_urls
+                            else None
+                        ),
+                        handler_trace=handler_trace,
+                        effective_title=effective_title,
+                        effective_link=effective_link,
+                        effective_content=effective_content,
+                        entry_guid=entry_guid,
+                        feed_title=feed_title,
+                        feed_link=feed_link,
+                        reason="notify disabled",
+                    )
+                    logger.debug("订阅 %s 已关闭通知，跳过条目推送", sub.id)
+                    stats["skipped"] += 1
+                    continue
                 if not handler_allowed:
                     await self._save_skipped_history(
                         subscription=sub,
@@ -722,6 +741,11 @@ class NotificationDispatcher:
                     effective_media_urls = None
                     effective_media_items = None
                     effective_layout = None
+                effective_layout = self._limit_original_layout_text(
+                    effective_layout,
+                    style=effective_options.style,
+                    length_limit=effective_options.length_limit,
+                )
 
                 # 发送前指纹保护（dispatch_guard）
                 # 检查是否已有相同 entry_guid 的成功推送记录
@@ -736,6 +760,25 @@ class NotificationDispatcher:
                         )
                     )
                     if already_sent:
+                        await self._save_skipped_history(
+                            subscription=sub,
+                            feed_id=feed_id,
+                            processed_entry=processed_entry,
+                            persisted_media_urls=(
+                                persisted_media_urls
+                                if effective_options.display_media
+                                and persisted_media_urls
+                                else None
+                            ),
+                            handler_trace=handler_trace,
+                            effective_title=effective_title,
+                            effective_link=effective_link,
+                            effective_content=effective_content,
+                            entry_guid=entry_guid,
+                            feed_title=feed_title,
+                            feed_link=feed_link,
+                            reason="dispatch guard: already successful entry_guid",
+                        )
                         logger.debug(
                             "订阅 %s 已成功推送过条目 %s，跳过", sub.id, entry_guid
                         )
@@ -1181,6 +1224,44 @@ class NotificationDispatcher:
         except Exception as e:
             logger.error("发送通知失败: %s", e, exc_info=True)
             return {"ok": False, "error": str(e)}
+
+    @staticmethod
+    def _limit_original_layout_text(
+        layout: list[LayoutFragment] | None,
+        *,
+        style: int,
+        length_limit: int,
+    ) -> list[LayoutFragment] | None:
+        if style != STYLE_ORIGINAL or not layout or length_limit <= 0:
+            return layout
+
+        limited: list[LayoutFragment] = []
+        remaining = length_limit
+        for fragment in layout:
+            kind = str(fragment.kind or "").strip()
+            if kind != "text":
+                limited.append(fragment)
+                continue
+
+            text = str(fragment.text or "")
+            if not text or remaining <= 0:
+                continue
+            if len(text) > remaining:
+                text = _entry_text_formatter._truncate(text, remaining)
+            limited.append(
+                LayoutFragment(
+                    kind=fragment.kind,
+                    text=text,
+                    media_type=fragment.media_type,
+                    url=fragment.url,
+                    local_path=fragment.local_path,
+                    name=fragment.name,
+                    fallback_text=fragment.fallback_text,
+                )
+            )
+            remaining -= len(text)
+
+        return limited
 
     @staticmethod
     async def _format_effective_entry_content(

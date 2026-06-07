@@ -133,3 +133,21 @@ async def test_m3u8_download_passes_proxy_to_ffmpeg(
     assert env["HTTPS_PROXY"] == "http://localhost:7890"
     assert env["http_proxy"] == "http://localhost:7890"
     assert env["https_proxy"] == "http://localhost:7890"
+
+
+def test_configure_bundler_clears_bundled_cache_when_switching_to_system() -> None:
+    FFmpegTool._ffmpeg_source = "auto"
+    FFmpegTool._ffmpeg_exe_cache = "/tmp/bundled-ffmpeg"
+    FFmpegTool._ffmpeg_exe_cache_source = "bundled"
+    FFmpegTool._ffprobe_exe_cache = "/tmp/bundled-ffprobe"
+    FFmpegTool._ffprobe_exe_cache_source = "bundled"
+
+    FFmpegTool.configure_bundler(ffmpeg_source="system")
+
+    assert FFmpegTool._ffmpeg_source == "system"
+    assert FFmpegTool._ffmpeg_exe_cache is None
+    assert FFmpegTool._ffmpeg_exe_cache_source is None
+    assert FFmpegTool._ffprobe_exe_cache is None
+    assert FFmpegTool._ffprobe_exe_cache_source is None
+
+    FFmpegTool.configure_bundler(ffmpeg_source="auto")

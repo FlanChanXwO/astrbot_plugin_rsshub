@@ -248,3 +248,22 @@ class AsyncContextManagerMock:
 def async_context_mock():
     """提供 AsyncContextManagerMock 工厂."""
     return AsyncContextManagerMock
+
+
+@pytest.fixture
+def media_data_dir():
+    """返回测试媒体文件目录路径。
+
+    开发者需自行准备测试媒体文件到此目录。
+    缺失文件时相关测试应跳过（pytest.importorskip 或 skipIf）。
+    """
+    return Path(__file__).parent / "data"
+
+
+@pytest.fixture
+def m3u8_test_url():
+    """公开的 m3u8 测试流 URL（Big Buck Bunny 240p VOD）。
+
+    由 Mux/hls.js 官方维护，长期稳定。
+    """
+    return "https://test-streams.mux.dev/x36xhzz/url_2/193039199_mp4_h264_aac_ld_7.m3u8"

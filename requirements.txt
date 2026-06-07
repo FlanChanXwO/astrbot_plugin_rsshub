@@ -1,33 +1,13 @@
 # feed parsing - RSS 解析核心
 feedparser>=6.0.11
-listparser>=0.20
 
-# HTML 处理
-rapidfuzz>=3.13.0
-emoji>=2.14.1
-minify-html>=0.16.4
-minify-html-onepass>=0.16.4
+# HTML 解析与表格结构提取
+beautifulsoup4>=4.13.4
+lxml>=5.4.0
 
-# 表格转图片功能
-matplotlib>=3.9.4
-jinja2>=3.1.6
+# 表格转图片与媒体校验
 pillow>=11.3.0
-playwright>=1.52.0
 filetype>=1.2.0
 
-# 网络代理支持
+# Telegraph SOCKS 代理支持
 aiohttp-socks>=0.10.1
-aiohttp-retry>=2.9.1
-python-socks[asyncio]>=2.7.1
-dnspython[idna]>=2.7.0
-
-# URL 和缓存工具
-yarl>=1.20.1
-propcache>=0.3.2
-multidict>=6.6.3
-
-# 异步工具
-asyncstdlib>=3.13.1
-cachetools>=6.1.0
-CJKwrap>=2.2
-imageio-ffmpeg>=0.6.0

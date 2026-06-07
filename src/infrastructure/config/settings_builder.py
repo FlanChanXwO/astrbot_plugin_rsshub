@@ -90,6 +90,9 @@ def _merge_legacy_ffmpeg_media(config: Any, media_cfg: Any) -> Any:
             "video_transcode_timeout",
             "gif_transcode",
             "gif_transcode_timeout",
+            "ffmpeg_source",
+            "ffmpeg_mirror",
+            "ffmpeg_mirror_custom_url",
         ):
             value = getattr(media_cfg, key, None)
             if value is not None:
@@ -415,6 +418,13 @@ def build_application_settings(config: Any) -> ApplicationSettings:
             gif_transcode_timeout=max(
                 1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
             ),
+            ffmpeg_source=str(_get_value(media_cfg, "ffmpeg_source", "auto") or "auto"),
+            ffmpeg_mirror=str(
+                _get_value(media_cfg, "ffmpeg_mirror", "default") or "default"
+            ),
+            ffmpeg_mirror_custom_url=str(
+                _get_value(media_cfg, "ffmpeg_mirror_custom_url", "") or ""
+            ).strip(),
         ),
         route_knowledge=RouteKnowledgeSettings(
             kb_name=str(

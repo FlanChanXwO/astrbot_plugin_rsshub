@@ -21,6 +21,10 @@ downloads/
 eggs/
 .eggs/
 lib/
+!pages/dashboard/lib/
+!pages/dashboard/lib/petite-vue.iife.js
+!pages/dashboard/lib/chart.umd.min.js
+!pages/dashboard/lib/chartjs.LICENSE.md
 lib64/
 parts/
 sdist/
@@ -221,3 +225,14 @@ __marimo__/
 /.playwright-mcp/
 /pyrightconfig.*
 /tsconfig.json
+
+# Test media files (developers prepare locally)
+tests/data/*.mp4
+tests/data/*.mp3
+tests/data/*.jpg
+tests/data/*.jpeg
+tests/data/*.gif
+tests/data/*.png
+tests/data/*.webp
+tests/data/*.wav
+tests/data/*.flac

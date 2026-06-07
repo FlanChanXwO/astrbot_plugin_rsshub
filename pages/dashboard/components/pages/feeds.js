@@ -1,11 +1,17 @@
-import { batchToolbarTemplate, filterSummaryTemplate, tagFilterTemplate, textFilterTemplate } from '../shared/filters.js';
+import { batchToolbarTemplate, compactFilterToolbarTemplate } from '../shared/filters.js';
 
 export const feedsActionsTemplate = [
-  "    <div class=\"action-bar\" v-if=\"activeTab === 'feeds'\">",
-  tagFilterTemplate({ groupName: 'feedFilters', fieldName: 'feed_id', label: 'Feed ID' }),
-  textFilterTemplate({ groupName: 'feedFilters', fieldName: 'keyword', label: '关键词' }),
-  "      <button class=\"btn btn-secondary\" @click=\"clearFeedFilters()\" :disabled=\"isPending('feeds:refresh') || !hasFeedFilters()\">清空筛选</button>\n      <button class=\"btn\" :class=\"feedEditMode ? 'btn-primary' : 'btn-secondary'\" @click=\"toggleFeedEditMode()\">\n        {{ feedEditMode ? '完成编辑' : '批量操作' }}\n      </button>\n      <button class=\"btn btn-icon\" :class=\"{ 'is-loading': isPending('feeds:refresh') }\" :disabled=\"isPending('feeds:refresh')\" @click=\"runPending('feeds:refresh', () => loadFeeds())\" title=\"刷新\">⟳</button>\n    </div>",
-  filterSummaryTemplate({ tab: 'feeds', guard: 'hasFeedFilters', summary: 'feedFilterSummary', clearAction: 'clearFeedFilters' }),
+  compactFilterToolbarTemplate({
+    groupName: 'feedFilters',
+    visibleExpr: "activeTab === 'feeds'",
+    pendingKey: 'feeds:refresh',
+    loadAction: 'loadFeeds()',
+    clearAction: 'clearFeedFilters',
+    hasFilters: 'hasFeedFilters',
+    extraButtons: [
+      `<button class="btn" :class="feedEditMode ? 'btn-primary' : 'btn-secondary'" type="button" @click="toggleFeedEditMode()">{{ feedEditMode ? '完成编辑' : '批量操作' }}</button>`,
+    ],
+  }),
   batchToolbarTemplate({ visibleExpr: 'feedEditMode && selectedFeedIds.length > 0', countExpr: 'selectedFeedIds.length', buttons: [
     `<button class="btn btn-primary btn-small" :class="{ 'is-loading': isPending('feeds:refresh-batch') }" :disabled="isPending('feeds:refresh-batch')" @click="refreshSelectedFeeds()">批量刷新</button>`,
     `<button class="btn btn-danger btn-small" :class="{ 'is-loading': isPending('feeds:delete-batch') }" :disabled="isPending('feeds:delete-batch')" @click="deleteSelectedFeeds()">批量删除</button>`,

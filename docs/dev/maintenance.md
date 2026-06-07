@@ -50,6 +50,20 @@
 - 不要恢复 `webadmin` fallback 用户。
 - Plugin Pages 不暴露 `link_preview` 控件或状态。
 
+## 依赖管理
+
+- 依赖分两层：`requirements.txt` 是最终用户安装的 runtime 依赖；`requirements-dev.txt` 通过 `-r requirements.txt` 继承，再追加测试与帮助图生成所需的开发依赖。安装命令见 [`testing.md`](./testing.md)。
+- Runtime 依赖归属（删除或软依赖化前必须先评估这些角色）：
+  - `feedparser`：RSS / Atom 解析核心，见 `src/infrastructure/fetcher/rss/`。
+  - `beautifulsoup4`：HTML 内容清洗、表格解析与 Feed 自动发现，见 `src/application/services/html_parser.py`、`src/infrastructure/rendering/table_image_renderer.py`、`src/infrastructure/fetcher/rss/discoverer.py`。
+  - `lxml`：`BeautifulSoup(html, "lxml")` 的 parser backend，三处硬编码引用，性能与畸形 HTML 容错优先。
+  - `pillow`：仅服务"表格 → PNG"渲染（`table_image_renderer.py`），辅以 `src/infrastructure/utils/media_integrity.py` 的图片 verify。
+  - `filetype`：RSS enclosure 与已下载媒体的类型识别（`src/infrastructure/utils/media_type_detector.py`），存在手写 magic bytes fallback 但保留以提高识别率。
+  - `aiohttp-socks`：Telegraph SOCKS5 代理（aiohttp 原生不支持 SOCKS），见 `src/infrastructure/messaging/senders/telegraph_client.py`。
+- 媒体处理边界：音视频 / GIF / 转码一律走 FFmpeg（见 [`../project/platforms.md`](../project/platforms.md) 与 `src/infrastructure/utils/ffmpeg_helper.py`）；`pillow` 只承担表格 PNG 渲染和图片完整性校验，不承担音视频处理。
+- Dev 依赖归属：`pytest` + `pytest-asyncio` 服务测试，`jinja2` + `playwright` 服务 `scripts/generate_rsshelp_image.py` 的帮助图渲染；这类依赖体积可观（playwright + browsers 数百 MB），不得塞进 runtime。
+- 后续想减小安装体积时，优先评估 `lxml` 软依赖化（fallback 到标准库 `html.parser`），而不是动 `pillow` / `filetype`——它们的角色已固化。
+
 ## 测试与检查
 
 常用命令见 [`testing.md`](./testing.md)。涉及下列行为时，优先补回归测试：

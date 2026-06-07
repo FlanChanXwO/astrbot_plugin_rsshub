@@ -6,14 +6,27 @@
 | --- | --- | --- |
 | Python 格式化 | AstrBot 根目录 | `uv run ruff format data/plugins/astrbot_plugin_rsshub` |
 | Python lint | AstrBot 根目录 | `uv run ruff check data/plugins/astrbot_plugin_rsshub` |
-| 全量 pytest | 插件目录 | `pytest tests/ -v` |
-| 单元分类测试 | 插件目录 | `python tests/run_tests.py --category unit` |
-| 集成分类测试 | 插件目录 | `python tests/run_tests.py --category integration` |
+| 全量 pytest | AstrBot 根目录 | `uv run python -m pytest data/plugins/astrbot_plugin_rsshub/tests/ -v` |
+| 单元分类测试 | AstrBot 根目录 | `uv run python data/plugins/astrbot_plugin_rsshub/tests/run_tests.py --category unit` |
+| 集成分类测试 | AstrBot 根目录 | `uv run python data/plugins/astrbot_plugin_rsshub/tests/run_tests.py --category integration` |
 | shell 分类单测 | 插件目录 | `./tests/run_tests.sh --category unit` |
 | shell 分类集成 | 插件目录 | `./tests/run_tests.sh --category integration` |
 
 > [!TIP]
 > 从 IDE 直接运行脚本时，优先使用 `tests/run_tests.sh --category ...` 或 `python tests/run_tests.py --category ...`，避免当前 shell 的隐式目录影响结果。
+> AstrBot CLI 初始化的开发环境优先从 AstrBot 根目录使用 `uv run python ...`，这样会进入 CLI 创建的 `.venv` 并能导入 `astrbot`。
+
+公网 m3u8 集成测试默认跳过。需要真实验证 Mux/hls.js 测试流时，先确认系统 FFmpeg 可用，再显式设置：
+
+```bash
+RSSHUB_RUN_NETWORK_TESTS=1 uv run python -m pytest data/plugins/astrbot_plugin_rsshub/tests/integration/test_m3u8_download.py -v
+```
+
+`requirements.txt` 只保留插件运行时依赖。pytest 与帮助图生成脚本依赖放在 `requirements-dev.txt`，从 AstrBot 根目录安装：
+
+```bash
+uv pip install --python .venv/bin/python -r data/plugins/astrbot_plugin_rsshub/requirements-dev.txt
+```
 
 ## 分层验证矩阵
 

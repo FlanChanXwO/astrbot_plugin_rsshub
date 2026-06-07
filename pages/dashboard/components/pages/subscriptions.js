@@ -1,14 +1,17 @@
-import { batchToolbarTemplate, filterSummaryTemplate, tagFilterTemplate, textFilterTemplate } from '../shared/filters.js';
+import { batchToolbarTemplate, compactFilterToolbarTemplate } from '../shared/filters.js';
 
 export const subscriptionsActionsTemplate = [
-  "    <div class=\"action-bar\" v-if=\"activeTab === 'subs'\">",
-  tagFilterTemplate({ groupName: 'subFilters', fieldName: 'user_id', label: '用户 ID' }),
-  tagFilterTemplate({ groupName: 'subFilters', fieldName: 'feed_id', label: 'Feed ID' }),
-  tagFilterTemplate({ groupName: 'subFilters', fieldName: 'feed_link', label: 'Feed URL', wide: true }),
-  tagFilterTemplate({ groupName: 'subFilters', fieldName: 'sub_id', label: '订阅 ID' }),
-  textFilterTemplate({ groupName: 'subFilters', fieldName: 'keyword', label: '关键词' }),
-  "      <button class=\"btn btn-secondary\" @click=\"clearSubscriptionFilters()\" :disabled=\"isPending('subs:refresh') || !hasSubscriptionFilters()\">清空筛选</button>\n      <button class=\"btn\" :class=\"editMode ? 'btn-primary' : 'btn-secondary'\" @click=\"toggleEditMode()\">\n        {{ editMode ? '完成编辑' : '批量操作' }}\n      </button>\n      <button class=\"btn btn-icon\" :class=\"{ 'is-loading': isPending('subs:refresh') }\" :disabled=\"isPending('subs:refresh')\" @click=\"runPending('subs:refresh', () => loadData())\" title=\"刷新\">⟳</button>\n    </div>",
-  filterSummaryTemplate({ tab: 'subs', guard: 'hasSubscriptionFilters', summary: 'subscriptionFilterSummary', clearAction: 'clearSubscriptionFilters' }),
+  compactFilterToolbarTemplate({
+    groupName: 'subFilters',
+    visibleExpr: "activeTab === 'subs'",
+    pendingKey: 'subs:refresh',
+    loadAction: 'loadData()',
+    clearAction: 'clearSubscriptionFilters',
+    hasFilters: 'hasSubscriptionFilters',
+    extraButtons: [
+      `<button class="btn" :class="editMode ? 'btn-primary' : 'btn-secondary'" type="button" @click="toggleEditMode()">{{ editMode ? '完成编辑' : '批量操作' }}</button>`,
+    ],
+  }),
   batchToolbarTemplate({ visibleExpr: 'editMode && selectedIds.length > 0', countExpr: 'selectedIds.length', buttons: [
     `<button class="btn btn-primary btn-small" :class="{ 'is-loading': isPending('batch:activate') }" :disabled="isPending('batch:activate')" @click="batchActivate()">批量启用</button>`,
     `<button class="btn btn-secondary btn-small" :class="{ 'is-loading': isPending('batch:deactivate') }" :disabled="isPending('batch:deactivate')" @click="batchDeactivate()">批量禁用</button>`,

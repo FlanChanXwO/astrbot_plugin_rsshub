@@ -568,6 +568,57 @@ async def test_qq_official_original_style_single_video_uses_video_then_fallback(
 
 
 @pytest.mark.asyncio
+async def test_qq_official_original_style_file_fragment_uses_file_component(
+    monkeypatch,
+):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(qq_official_media_threshold=0)
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="fallback",
+            layout=[
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url="https://example.com/cover.jpg",
+                ),
+                LayoutFragment(kind="text", text="caption"),
+                LayoutFragment(
+                    kind="file",
+                    media_type="file",
+                    url="https://example.com/report.pdf",
+                    name="report.pdf",
+                ),
+                LayoutFragment(kind="text", text="after file"),
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official", style=2),
+    )
+
+    assert result.ok is True
+    assert len(calls) == 3
+    assert isinstance(calls[0][0], _Image)
+    assert isinstance(calls[0][1], _Plain)
+    assert isinstance(calls[1][0], _File)
+    assert not isinstance(calls[1][0], _Image)
+    assert calls[1][0].file == "https://example.com/report.pdf"
+    assert calls[1][0].url == "https://example.com/report.pdf"
+    assert calls[1][0].name == "report.pdf"
+    assert isinstance(calls[2][0], _Plain)
+    assert calls[2][0].text == "after file"
+
+
+@pytest.mark.asyncio
 async def test_qq_official_file_degrade_failure_continues_and_appends_url(
     monkeypatch,
 ):

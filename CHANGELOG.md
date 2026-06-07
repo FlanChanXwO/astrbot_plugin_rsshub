@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.1.0] - 2026-06-03
+
+### Added
+
+- Plugin Pages 新增独立「概览」页，展示总订阅、启用订阅、Feed 源和用户数，并加入 Feed 新鲜度、推送成功率、Feed 订阅占比三类图表。
+- 新增 Dashboard 图表 Web API：`GET /dashboard/charts?range=24h|7d|30d`。推送成功率按 `success / (success + failed + stopped + skipped)` 计算，`pending` / `retrying` 仅作为积压参考。
+- Plugin Pages 引入本地 Chart.js 静态资源，不依赖 CDN；仓库体积仍控制在 16 MB 上限内。
+- 推送历史仓储新增按最后活动时间聚合状态桶的查询能力，用于 Dashboard 成功率趋势。
+- 新增 `requirements-dev.txt`，将测试、帮助图生成等开发依赖从运行时依赖中拆出。
+- FFmpeg 来源配置新增 `bundled` 选项：`auto` 只优先系统 PATH 并复用已有缓存，只有 `bundled` 才允许在系统缺失时下载捆绑 FFmpeg。
+
+### Changed
+
+- Feed 轮询水位推进改为内部 ack 语义：只有发送成功或明确规则性跳过后才写入已见 hash，发送失败、pending、dispatcher 异常或进程中断不会永久吞掉条目。
+- `history_entry_limit` 现在只限制本轮尝试分发数量，不再把未尝试分发的条目提前写入水位。
+- Plugin Pages 布局从顶部指标 + 横向标签页改为左侧侧边栏 + 页面内容区；原指标卡移动到「概览」页，列表页高度占用更少。
+- 订阅、用户、Feed 和推送历史列表筛选改为紧凑筛选栏：关键词搜索常驻，精确条件通过「筛选列 + 筛选值 + 添加条件」生成 chip；刷新按钮改为 icon-only。
+- LLM tools 从单文件 `src/application/llmtools.py` 拆分为 `src/application/llmtools/` 包，保持 `build_llm_tools` 与 `LLM_TOOL_NAMES` 对外导入不变。
+- 优化 AI tool 描述、`skills/rsshub-agent-tools/SKILL.md` 与 `docs/usage/ai-tools.md`，让 agent 更明确区分订阅、用户默认、会话默认、handlers、push history 和一次性 XML/HTML 直推。
+- 原始顺序排版 `style=original` 的 layout 文本现在同样遵守订阅最终生效的 `length_limit`；`length_limit<=0` 时保持完整正文。
+- FFmpeg 自动准备策略更保守：`auto` 不再主动联网下载，避免插件启动时产生用户未显式允许的下载动作。
+- 运行时依赖瘦身：`requirements.txt` 仅保留插件运行必需依赖，`pytest`、`pytest-asyncio`、`jinja2`、`playwright` 迁移到开发依赖。
+
+### Fixed
+
+- 修复轮询链路在分发前提前标记条目已见，导致发送失败、异常中断或分发异常后下轮无法补推的问题。
+- 修复无声视频可被 FFmpeg 转 GIF，但 sender 侧因媒体类型识别不稳导致没有进入 GIF 转换分支的问题；RSSHub wrapped URL、无扩展 URL 和下载后探测为 video 的媒体都可触发转换。
+- 修复转换成功后的 `.gif` 仍可能按视频发送的问题；GIF 转换产物统一按图片组件发送。
+- 修复配置 reload 后 sender 的 GIF 转码开关可能没有刷新到最新 `media.gif_transcode` 的问题。
+- 修复 `original` 模式下长正文 layout text 未按 `length_limit` 裁剪的问题，同时保持原解析结果和历史正文不被改写。
+- 修复 original layout 中 PDF/doc 等文档链接可能被误按图片路径处理的风险；文档链接继续作为 file 媒体走文件/尾部组件。
+- 修复 Plugin Pages 从「概览」切换到其他侧边栏项时可能无法切换的问题；Chart.js 实例不再放入 PetiteVue reactive state。
+- 修复推送历史状态聚合排序不稳定的问题。
+
+### Removed
+
+- 移除运行时依赖中不必要的开发依赖，降低普通用户安装体积。
+- 移除把 `xml_parse` 作为可配置 handler 的 agent skill 推荐示例。
+
+### Notes
+
+- 本版本不新增聊天命令，不新增用户可见配置项；防漏推 ack、GIF 判定补强和 original 行为修正均为内部语义修复。
+- `ffmpeg_source=auto` 的语义有所收紧：它会使用系统 FFmpeg 或已有缓存；如果希望允许插件在系统缺失时下载 FFmpeg，请选择 `bundled`。
+- Plugin Pages 新增图表只读接口，不改变已有筛选 query 参数和列表 Web API 语义。
+
 ## [2.0.3] - 2026-06-01
 
 ### Added

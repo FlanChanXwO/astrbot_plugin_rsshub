@@ -5,6 +5,7 @@ import { formatBytes, formatDate, formatUserState, prettyJson } from './helpers.
 import { pendingModule } from './modules/pending.js';
 import { lifecycleModule } from './modules/lifecycle.js';
 import { filterModule } from './modules/filters.js';
+import { overviewModule } from './modules/overview.js';
 import { subscriptionsModule } from './modules/subscriptions.js';
 import { usersModule } from './modules/users.js';
 import { feedsModule } from './modules/feeds.js';
@@ -23,6 +24,7 @@ export function createDashboardStore(PetiteVue) {
     ...pendingModule,
     ...lifecycleModule,
     ...filterModule,
+    ...overviewModule,
     ...subscriptionsModule,
     ...usersModule,
     ...feedsModule,

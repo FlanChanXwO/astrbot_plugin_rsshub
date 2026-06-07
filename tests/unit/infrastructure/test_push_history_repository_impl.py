@@ -553,3 +553,98 @@ async def test_delete_all_removes_every_push_history_row(monkeypatch, tmp_path):
 
     assert removed == 2
     assert await repo.get_all(limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_get_status_buckets_groups_by_last_activity(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 5, 25, 12, tzinfo=timezone.utc)
+    db = await _build_test_database(
+        tmp_path / "push_history_status_buckets.db",
+        [
+            _build_history_row(
+                user_id="created-old-updated-current",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                created_at=base - timedelta(days=3),
+                updated_at=base,
+            ),
+            _build_history_row(
+                user_id="completed-next-day",
+                status="skipped",
+                retry_count=0,
+                max_retries=3,
+                created_at=base,
+                updated_at=base,
+                completed_at=base + timedelta(days=1, hours=2),
+            ),
+            _build_history_row(
+                user_id="too-old",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                created_at=base - timedelta(days=10),
+                updated_at=base - timedelta(days=10),
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    rows = await repo.get_status_buckets(since=base - timedelta(days=1), bucket="day")
+
+    assert rows == [
+        {
+            "bucket": "2026-05-25T00:00:00+00:00",
+            "status": "success",
+            "count": 1,
+        },
+        {
+            "bucket": "2026-05-26T00:00:00+00:00",
+            "status": "skipped",
+            "count": 1,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_status_buckets_supports_hour_bucket(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 5, 25, 12, 30, tzinfo=timezone.utc)
+    db = await _build_test_database(
+        tmp_path / "push_history_status_hour_buckets.db",
+        [
+            _build_history_row(
+                user_id="u1",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                created_at=base,
+                updated_at=base,
+            ),
+            _build_history_row(
+                user_id="u2",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                created_at=base.replace(minute=50),
+                updated_at=base.replace(minute=50),
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    rows = await repo.get_status_buckets(since=base - timedelta(hours=1), bucket="hour")
+
+    assert rows == [
+        {
+            "bucket": "2026-05-25T12:00:00+00:00",
+            "status": "failed",
+            "count": 1,
+        },
+        {
+            "bucket": "2026-05-25T12:00:00+00:00",
+            "status": "success",
+            "count": 1,
+        },
+    ]

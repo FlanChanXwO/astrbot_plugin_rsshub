@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -9,7 +10,10 @@ from astrbot_plugin_rsshub.src.application.services.feed_polling_service import 
     FeedPollingService,
 )
 from astrbot_plugin_rsshub.src.domain.entities.feed import Feed
-from astrbot_plugin_rsshub.src.infrastructure.fetcher.rss.parser import EntryParsed
+from astrbot_plugin_rsshub.src.infrastructure.fetcher.rss.parser import (
+    EntryParsed,
+    RSSParser,
+)
 from astrbot_plugin_rsshub.src.infrastructure.config import RSSSettings
 
 
@@ -24,6 +28,36 @@ def _web_feed(**kwargs):
     }
     data.update(kwargs)
     return MagicMock(**data)
+
+
+def _json_feed_content() -> bytes:
+    return json.dumps(
+        {
+            "version": "https://jsonfeed.org/version/1.1",
+            "title": "JSON Timeline",
+            "home_page_url": "https://example.com/",
+            "feed_url": "https://example.com/feed.json",
+            "items": [
+                {
+                    "id": "json-1",
+                    "url": "https://example.com/posts/json-1",
+                    "title": "JSON Feed Entry",
+                    "content_html": "<p>JSON body</p>",
+                    "summary": "JSON summary",
+                    "authors": [{"name": "JSON Author"}],
+                    "date_published": "2026-06-01T09:00:00Z",
+                    "attachments": [
+                        {
+                            "url": "https://example.com/clip.mp4",
+                            "mime_type": "video/mp4",
+                            "size_in_bytes": 123,
+                        }
+                    ],
+                    "image": "https://example.com/card.jpg",
+                }
+            ],
+        }
+    ).encode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -231,6 +265,160 @@ async def test_poll_feed_dispatches_new_entries_when_enabled():
     assert (
         "via https://example.com/1 | https://example.com/rss.xml" in dispatched_content
     )
+
+
+@pytest.mark.asyncio
+async def test_poll_feed_dispatches_json_feed_entries_with_synthetic_raw_xml():
+    feed = Feed(id=1, link="https://example.com/feed.json", title="Old")
+    feed_repo = MagicMock()
+    feed_repo.get_by_id = AsyncMock(return_value=feed)
+    feed_repo.save = AsyncMock(side_effect=lambda value: value)
+
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = _web_feed(
+        content=_json_feed_content(),
+        rss_d=MagicMock(feed={"title": "JSON Timeline"}),
+    )
+    fetcher.close = AsyncMock()
+
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_to_feed_subscribers.return_value = {
+        "success": 1,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+    }
+
+    service = FeedPollingService(
+        feed_repo=feed_repo,
+        subscription_repo=MagicMock(),
+        fetcher_factory=MagicMock(return_value=fetcher),
+        parser=RSSParser(),
+        notification_dispatcher=dispatcher,
+        rss_settings=RSSSettings(bootstrap_skip_history=False),
+    )
+
+    result = await service.poll_feed(1, notify_new_entries=True)
+
+    assert result.success is True
+    assert result.dispatched == 1
+    assert result.feed.title == "JSON Timeline"
+    assert result.feed.entry_hashes is not None
+    assert result.feed.entry_hashes[0][0].startswith("sid:")
+
+    call_kwargs = dispatcher.dispatch_to_feed_subscribers.await_args.kwargs
+    assert call_kwargs["entry_guid"] == "json-1"
+    assert call_kwargs["entry_link"] == "https://example.com/posts/json-1"
+    assert call_kwargs["media_urls"] == [
+        "https://example.com/clip.mp4",
+        "https://example.com/card.jpg",
+    ]
+    assert call_kwargs["raw_entry"].raw_xml.startswith("<item>")
+    assert '<guid isPermaLink="false">json-1</guid>' in call_kwargs["raw_entry"].raw_xml
+
+
+@pytest.mark.parametrize(
+    "stats",
+    [
+        {"success": 0, "failed": 1, "pending": 0, "skipped": 0},
+        {"success": 0, "failed": 0, "pending": 1, "skipped": 0},
+    ],
+)
+@pytest.mark.asyncio
+async def test_poll_feed_keeps_unacknowledged_entries_retryable(stats):
+    old_last_modified = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    new_last_modified = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    feed = Feed(
+        id=1,
+        link="https://example.com/rss.xml",
+        etag="old-etag",
+        last_modified=old_last_modified,
+    )
+    entry = EntryParsed(
+        guid="guid-1",
+        title="One",
+        link="https://example.com/1",
+        summary="Summary",
+    )
+    feed_repo = MagicMock()
+    feed_repo.get_by_id = AsyncMock(return_value=feed)
+    feed_repo.save = AsyncMock(side_effect=lambda value: value)
+
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = _web_feed(
+        etag="new-etag",
+        last_modified=new_last_modified,
+    )
+    fetcher.close = AsyncMock()
+
+    parser = MagicMock()
+    parser.parse.return_value = ([entry], None)
+
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_to_feed_subscribers.return_value = stats
+
+    service = FeedPollingService(
+        feed_repo=feed_repo,
+        subscription_repo=MagicMock(),
+        fetcher_factory=MagicMock(return_value=fetcher),
+        parser=parser,
+        notification_dispatcher=dispatcher,
+        rss_settings=RSSSettings(bootstrap_skip_history=False),
+    )
+
+    result = await service.poll_feed(1, notify_new_entries=True)
+
+    assert result.success is True
+    assert result.dispatched == 1
+    assert feed.entry_hashes is None
+    assert feed.etag == "old-etag"
+    assert feed.last_modified == old_last_modified
+
+
+@pytest.mark.asyncio
+async def test_poll_feed_marks_explicitly_skipped_entries_seen():
+    feed = Feed(id=1, link="https://example.com/rss.xml", etag="old-etag")
+    entry = EntryParsed(
+        guid="guid-1",
+        title="One",
+        link="https://example.com/1",
+        summary="Summary",
+    )
+    feed_repo = MagicMock()
+    feed_repo.get_by_id = AsyncMock(return_value=feed)
+    feed_repo.save = AsyncMock(side_effect=lambda value: value)
+
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = _web_feed(etag="new-etag")
+    fetcher.close = AsyncMock()
+
+    parser = MagicMock()
+    parser.parse.return_value = ([entry], None)
+
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_to_feed_subscribers.return_value = {
+        "success": 0,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 1,
+    }
+
+    service = FeedPollingService(
+        feed_repo=feed_repo,
+        subscription_repo=MagicMock(),
+        fetcher_factory=MagicMock(return_value=fetcher),
+        parser=parser,
+        notification_dispatcher=dispatcher,
+        rss_settings=RSSSettings(bootstrap_skip_history=False),
+    )
+
+    result = await service.poll_feed(1, notify_new_entries=True)
+
+    assert result.success is True
+    assert result.dispatched == 0
+    assert feed.entry_hashes
+    assert "guid-1" in feed.entry_hashes[0]
+    assert feed.etag == "new-etag"
 
 
 @pytest.mark.asyncio
@@ -503,6 +691,72 @@ async def test_poll_feed_group_limits_dispatch_to_selected_subscriptions():
 
 
 @pytest.mark.asyncio
+async def test_history_entry_limit_does_not_mark_unattempted_entries_seen():
+    old_last_modified = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = EntryParsed(
+        guid="guid-newer",
+        title="Newer",
+        link="https://example.com/newer",
+        published=datetime(2026, 1, 3, tzinfo=timezone.utc),
+    )
+    older = EntryParsed(
+        guid="guid-older",
+        title="Older",
+        link="https://example.com/older",
+        published=datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    feed = Feed(
+        id=1,
+        link="https://example.com/rss.xml",
+        etag="old-etag",
+        last_modified=old_last_modified,
+    )
+    feed_repo = MagicMock()
+    feed_repo.get_by_id = AsyncMock(return_value=feed)
+    feed_repo.save = AsyncMock(side_effect=lambda value: value)
+
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = _web_feed(
+        etag="new-etag",
+        last_modified=datetime(2026, 1, 4, tzinfo=timezone.utc),
+    )
+    fetcher.close = AsyncMock()
+
+    parser = MagicMock()
+    parser.parse.return_value = ([older, newer], None)
+
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_to_feed_subscribers.return_value = {
+        "success": 1,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+    }
+
+    service = FeedPollingService(
+        feed_repo=feed_repo,
+        subscription_repo=MagicMock(),
+        fetcher_factory=MagicMock(return_value=fetcher),
+        parser=parser,
+        notification_dispatcher=dispatcher,
+        rss_settings=RSSSettings(bootstrap_skip_history=False),
+        history_entry_limit=1,
+    )
+
+    result = await service.poll_feed(1, notify_new_entries=True)
+
+    assert result.success is True
+    assert result.new_entries == 2
+    assert result.dispatched == 1
+    assert dispatcher.dispatch_to_feed_subscribers.await_count == 1
+    assert feed.entry_hashes
+    assert "guid-newer" in feed.entry_hashes[0]
+    assert all("guid-older" not in group for group in feed.entry_hashes)
+    assert feed.etag == "old-etag"
+    assert feed.last_modified == old_last_modified
+
+
+@pytest.mark.asyncio
 async def test_poll_feed_bootstrap_records_history_without_dispatching():
     feed = Feed(id=1, link="https://example.com/rss.xml")
     entry = EntryParsed(
@@ -668,6 +922,27 @@ def test_tracking_query_params_stripped_for_hash_and_dispatch_link():
         service._hash_entry(entry)[0]
         == service._hash_entry(entry_with_other_tracking)[0]
     )
+
+
+def test_pixiv_artwork_url_is_stable_identity_when_content_changes():
+    original = EntryParsed(
+        guid="https://www.pixiv.net/artworks/145521627",
+        title="フランちゃんと海！！！",
+        link="https://www.pixiv.net/artworks/145521627",
+        summary="First summary",
+    )
+    changed = EntryParsed(
+        guid="https://www.pixiv.net/artworks/145521627",
+        title="Updated title",
+        link="https://www.pixiv.net/artworks/145521627",
+        summary="Changed summary",
+    )
+    service = FeedPollingService(
+        feed_repo=MagicMock(),
+        subscription_repo=MagicMock(),
+    )
+
+    assert service._hash_entry(original)[0] == service._hash_entry(changed)[0]
 
 
 def test_build_conditional_headers_from_feed_etag_and_last_modified():

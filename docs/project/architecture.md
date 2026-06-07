@@ -40,6 +40,8 @@ tests/             # 单元与集成测试
 - 让应用服务可以脱离插件入口单测
 - 让后续新增 Web API、sender、repository 时只改装配层
 
+LLM tools 的入口仍由 `main.py` 注册；具体实现按主题放在 `src/application/llmtools/`，分别覆盖订阅、配置、handlers、推送历史和 XML/HTML 直推。这个包只负责把 AstrBot tool 调用转发到现有命令、查询和应用服务，不承担启动装配职责。
+
 ## 2. 应用服务收口跨模块用例
 
 这个插件的很多用例天然跨边界：
@@ -81,8 +83,8 @@ tests/             # 单元与集成测试
 ### 1. 正常轮询推送
 
 1. scheduler 按订阅与 Feed 状态挑选待检查目标
-2. `FeedPollingService` 抓取并解析 RSS/Atom
-3. 用“条目指纹组”完成轮询去重，再把 HTML/XML 内容整理为纯文本 + 结构化媒体
+2. `FeedPollingService` 抓取并解析 RSS/Atom/JSON Feed
+3. 用“条目指纹组”完成轮询去重，再把 HTML/XML/JSON Feed 内容整理为纯文本 + 结构化媒体
 4. `NotificationDispatcher` 为每个订阅解析生效配置
 5. 基础清洗完成后，handler runtime 按顺序执行 `ai_filter` / `ai_transform`
 6. sender 将文本与媒体转换为平台消息
@@ -223,7 +225,7 @@ Plugin Pages 当前不负责：
 最重要的排障资产是 `push_history`：
 
 - `content`: 最终可发送文本
-- `raw_xml`: 原始条目 XML
+- `raw_xml`: 原始条目 XML；JSON Feed 条目会保存插件合成的 RSS `<item>` 片段
 - `media_urls`: 媒体链接
 - `handler_trace`: handler 执行摘要
 - `fail_reason`: 失败原因

@@ -1,35 +1,35 @@
-"""RSS 数据源子包
+"""Feed 数据源子包
 
-提供 RSS/Atom 订阅源的抓取、解析和自动发现能力。
+提供 RSS/Atom/JSON Feed 订阅源的抓取、解析和自动发现能力。
 """
 
 from __future__ import annotations
 
-from io import BytesIO
 from typing import Final
 
 import aiohttp
-import feedparser
 
 from ....application.dto import WebFeed
 from ....domain.exceptions import WebError
 from ...utils import get_logger
 from ..http import HttpFetcher
 from .discoverer import FeedDiscoverer, FeedDiscoveryResult
+from .document_parser import FeedDocumentParser
 from .parser import Enclosure, EntryParsed, RSSParser
 
 logger = get_logger()
 
 FEED_ACCEPT: Final = (
     "application/rss+xml, application/rdf+xml, application/atom+xml, "
-    "application/xml;q=0.9, text/xml;q=0.8, text/*;q=0.7, application/*;q=0.6"
+    "application/feed+json, application/xml;q=0.9, text/xml;q=0.8, "
+    "application/json;q=0.7, text/*;q=0.7, application/*;q=0.6"
 )
 
 
 class RSSFeedFetcher(HttpFetcher):
-    """RSS Feed 专用抓取器
+    """Feed 专用抓取器
 
-    在 HttpFetcher 基础上添加 feedparser 解析和 RSS/Atom 内容校验。
+    在 HttpFetcher 基础上添加 RSS/Atom/JSON Feed 内容校验。
     """
 
     async def fetch(
@@ -42,7 +42,7 @@ class RSSFeedFetcher(HttpFetcher):
         proxy: str | None = None,
         session: aiohttp.ClientSession | None = None,
     ) -> WebFeed:
-        """抓取 RSS/Atom 内容并解析为 WebFeed。
+        """抓取 RSS/Atom/JSON Feed 内容并解析为 WebFeed。
 
         Args:
             url: Feed URL
@@ -75,36 +75,26 @@ class RSSFeedFetcher(HttpFetcher):
 
         log_level = 30 if verbose else 10
 
-        try:
-            with BytesIO(ret.content) as rss_content_io:
-                rss_d = feedparser.parse(rss_content_io, sanitize_html=False)
+        parser = FeedDocumentParser()
+        rss_d, parse_error, base_error = parser.parse_feedparser_dict(
+            ret.content,
+            fallback_title=ret.url,
+        )
+        if parse_error:
+            ret.error = WebError(
+                error_name=parse_error,
+                url=ret.url,
+                base_error=base_error,
+                log_level=40 if parse_error == "feed parse error" else log_level,
+            )
+            return ret
 
-            if not rss_d.feed.get("title"):
-                if not rss_d.entries and (
-                    rss_d.bozo
-                    or not (rss_d.feed.get("link") or rss_d.feed.get("updated"))
-                ):
-                    ret.error = WebError(
-                        error_name="feed invalid",
-                        url=ret.url,
-                        log_level=log_level,
-                    )
-                    return ret
-                rss_d.feed["title"] = ret.url
-
+        if rss_d is not None:
             ret.rss_d = rss_d
 
             etag_header = ret.etag
             if etag_header:
                 logger.debug("feed_get: Received ETag '%s' for %s", etag_header, url)
-
-        except Exception as e:
-            ret.error = WebError(
-                error_name="feed parse error",
-                url=url,
-                base_error=e,
-                log_level=40,
-            )
 
         return ret
 

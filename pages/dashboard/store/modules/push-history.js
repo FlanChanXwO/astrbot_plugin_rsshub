@@ -22,7 +22,7 @@ export const pushHistoryModule = {
       }
       const result = await getPushHistory({
         status: this.pushHistoryFilter.status,
-        feedLink: this.filterTags(this.pushHistoryFilter.feed_link),
+        feedLink: this.committedFilterTags(this.pushHistoryFilter.feed_link),
         keyword: this.pushHistoryFilter.keyword,
         page: this.pushHistoryFilter.page,
         pageSize: this.pushHistoryFilter.pageSize,

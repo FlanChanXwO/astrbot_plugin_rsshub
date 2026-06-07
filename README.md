@@ -51,6 +51,26 @@ git clone https://github.com/FlanChanXwO/astrbot_plugin_rsshub.git
 - 项目与架构：[`docs/project/README.md`](./docs/project/README.md)
 - 开发与贡献：[`docs/dev/README.md`](./docs/dev/README.md)
 
+## 开发与测试
+
+运行完整测试需要系统 FFmpeg（或已有插件缓存）和测试媒体文件。公网 m3u8 测试需额外设置 `RSSHUB_RUN_NETWORK_TESTS=1`。详见 [`docs/dev/README.md`](./docs/dev/README.md)。
+
+`requirements.txt` 只包含插件运行时依赖。运行 pytest 或重新生成帮助图前，请在 AstrBot 根目录安装开发依赖：
+
+```bash
+uv pip install --python .venv/bin/python -r data/plugins/astrbot_plugin_rsshub/requirements-dev.txt
+```
+
+测试媒体文件放在 `tests/data/` 下（已排除版本控制，需开发者自行准备）：
+
+| 文件名 | 说明 |
+|--------|------|
+| `silent-video.mp4` | 无声短视频（GIF 转换测试用） |
+| `audio-video.mp4` | 有声短视频（音频检测测试用） |
+| `sample-image.jpg` | 测试图片 |
+| `sample-gif.gif` | 测试动图 |
+| `sample-audio.mp3` | 测试音频 |
+
 ## 命令一览
 
 ![命令一览](https://raw.githubusercontent.com/FlanChanXwO/astrbot_plugin_rsshub/master/assets/help/rsshelp_light.png)

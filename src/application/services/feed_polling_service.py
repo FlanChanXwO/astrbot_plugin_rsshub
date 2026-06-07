@@ -86,6 +86,14 @@ class FeedPollingResult:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class _DispatchEntriesResult:
+    """Result of dispatching entries before committing dedup watermarks."""
+
+    dispatched: int = 0
+    acknowledged_entries: list[Any] = field(default_factory=list)
+
+
 class FeedPollingService:
     """Unified application service for polling RSS feeds."""
 
@@ -249,6 +257,8 @@ class FeedPollingService:
             )
 
         entries = read_result.entries
+        previous_etag = feed.etag
+        previous_last_modified = feed.last_modified
         self._apply_feed_metadata(feed, web_feed)
         old_groups = normalize_entry_hashes(feed.entry_hashes) or []
         new_groups, new_entries = self._calculate_update(
@@ -256,15 +266,9 @@ class FeedPollingService:
             entries,
             feed_link=feed.link,
         )
-        feed.entry_hashes = self._merge_hash_history(
-            old_groups,
-            new_groups,
-            len(entries),
-        )
-        feed.updated_at = datetime.now(timezone.utc)
-        saved_feed = await self._feed_repo.save(feed)
 
         dispatched = 0
+        acknowledged_entries: list[Any] = []
         bootstrap_skipped = bool(
             notify_new_entries
             and new_entries
@@ -277,11 +281,45 @@ class FeedPollingService:
             and not bootstrap_skipped
             and self._notification_dispatcher
         ):
-            dispatched = await self._dispatch_entries(
-                saved_feed,
+            dispatch_result = await self._dispatch_entries(
+                feed,
                 new_entries,
                 subscription_ids=subscription_ids,
             )
+            dispatched = dispatch_result.dispatched
+            acknowledged_entries = dispatch_result.acknowledged_entries
+
+        if notify_new_entries and new_entries and not bootstrap_skipped:
+            acknowledged_ids = {id(entry) for entry in acknowledged_entries}
+            unacknowledged_entries = [
+                entry for entry in new_entries if id(entry) not in acknowledged_ids
+            ]
+            unacknowledged_ids = {id(entry) for entry in unacknowledged_entries}
+            committed_groups = [
+                group
+                for entry, group in zip(entries, new_groups, strict=False)
+                if id(entry) not in unacknowledged_ids
+            ]
+            if unacknowledged_entries:
+                # 未确认处理的新条目不能推进条件请求水位，否则下一轮可能 304 而无法补推。
+                feed.etag = previous_etag
+                feed.last_modified = previous_last_modified
+                logger.debug(
+                    "poll_feed: keep previous validators for unacknowledged entries: "
+                    "feed=%s, unacked=%d",
+                    feed.link,
+                    len(unacknowledged_entries),
+                )
+        else:
+            committed_groups = new_groups
+
+        feed.entry_hashes = self._merge_hash_history(
+            old_groups,
+            committed_groups,
+            len(entries),
+        )
+        feed.updated_at = datetime.now(timezone.utc)
+        saved_feed = await self._feed_repo.save(feed)
 
         message = f"刷新完成 (ID: {feed_id})，发现 {len(entries)} 个条目"
         if bootstrap_skipped:
@@ -597,11 +635,12 @@ class FeedPollingService:
         entries: list[Any],
         *,
         subscription_ids: list[int] | None = None,
-    ) -> int:
+    ) -> _DispatchEntriesResult:
         if self._notification_dispatcher is None or feed.id is None:
-            return 0
+            return _DispatchEntriesResult()
 
         dispatched = 0
+        acknowledged_entries: list[Any] = []
         sorted_entries = sorted(entries, key=self._entry_sort_key, reverse=True)
         if self._history_entry_limit > 0:
             sorted_entries = sorted_entries[: self._history_entry_limit]
@@ -688,7 +727,20 @@ class FeedPollingService:
                 + stats.get("failed", 0)
                 + stats.get("pending", 0)
             )
-        return dispatched
+            if self._dispatch_stats_acknowledged(stats):
+                acknowledged_entries.append(entry)
+        return _DispatchEntriesResult(
+            dispatched=dispatched,
+            acknowledged_entries=acknowledged_entries,
+        )
+
+    @staticmethod
+    def _dispatch_stats_acknowledged(stats: dict[str, Any]) -> bool:
+        failed = int(stats.get("failed", 0) or 0)
+        pending = int(stats.get("pending", 0) or 0)
+        success = int(stats.get("success", 0) or 0)
+        skipped = int(stats.get("skipped", 0) or 0)
+        return failed == 0 and pending == 0 and (success + skipped) > 0
 
     @staticmethod
     def _format_dispatch_content(

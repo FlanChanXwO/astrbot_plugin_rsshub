@@ -33,8 +33,9 @@ flowchart TD
   K -->|"否"| L["合并历史窗口"]
   K -->|"是"| M["构造 dispatch 输入"]
   M --> N["交给 NotificationDispatcher"]
+  N --> P["只确认 success / 明确 skipped"]
+  P --> L
   L --> O["保存 Feed 状态"]
-  N --> O
 ```
 
 ## 输入与输出
@@ -265,6 +266,14 @@ JSON Feed 只支持标准 1.0 / 1.1 文档；普通 JSON API 不会被当作 Fee
 ### 4. 历史窗口合并
 
 历史不是平铺字符串列表，而是按 entry 分组的 hash groups。
+
+如果本轮需要推送新条目，历史窗口只合并已经确认处理的 entry：
+
+- `success`：已经成功投递，可以推进水位
+- 明确规则性 `skipped`：例如 handler skip 或多 BOT 去重，已有审计，可以推进水位
+- `pending` / `failed` / dispatcher 异常：不能推进水位，下轮仍应可补推或进入重试
+
+当存在未确认的新条目时，Feed 的 `etag` / `last_modified` 也保持旧值，避免下一轮条件请求直接得到 304，导致未确认条目失去重新解析机会。
 
 合并策略：
 

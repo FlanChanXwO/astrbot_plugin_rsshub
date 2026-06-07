@@ -1,11 +1,18 @@
-import { filterSummaryTemplate, tagFilterTemplate, textFilterTemplate } from '../shared/filters.js';
+import { compactFilterToolbarTemplate } from '../shared/filters.js';
 
 export const pushHistoryActionsTemplate = [
-  "    <div class=\"action-bar push-history-action-bar\" v-if=\"activeTab === 'push-history'\">",
-  tagFilterTemplate({ groupName: 'pushHistoryFilter', fieldName: 'feed_link', label: 'Feed URL', wide: true }),
-  textFilterTemplate({ groupName: 'pushHistoryFilter', fieldName: 'keyword', label: '关键词或 ID', placeholder: '输入关键词或 ID', wide: true }),
-  "      <select class=\"select-input\" v-model=\"pushHistoryFilter.status\" @change=\"onPushHistoryStatusChanged()\">\n        <option value=\"\">全部状态</option>\n        <option value=\"pending\">待推送</option>\n        <option value=\"success\">成功</option>\n        <option value=\"failed\">失败</option>\n        <option value=\"stopped\">已停止</option>\n      </select>\n      <button class=\"btn btn-secondary\" :disabled=\"isPending('push-history:refresh') || !hasPushHistoryFilters()\" @click=\"clearPushHistoryFilters()\">清空筛选</button>\n      <button class=\"btn\" :class=\"pushHistoryEditMode ? 'btn-primary' : 'btn-secondary'\" @click=\"togglePushHistoryEditMode()\">\n        {{ pushHistoryEditMode ? '完成编辑' : '批量操作' }}\n      </button>\n      <button class=\"btn btn-secondary\" @click=\"openPushHistorySettingsPanel()\">清理设置</button>\n      <button class=\"btn btn-icon\" :class=\"{ 'is-loading': isPending('push-history:refresh') }\" :disabled=\"isPending('push-history:refresh')\" @click=\"runPending('push-history:refresh', () => loadPushHistory())\" title=\"刷新\">⟳</button>\n    </div>",
-  filterSummaryTemplate({ tab: 'push-history', guard: 'hasPushHistoryFilters', summary: 'pushHistoryFilterSummary', clearAction: 'clearPushHistoryFilters' }),
+  compactFilterToolbarTemplate({
+    groupName: 'pushHistoryFilter',
+    visibleExpr: "activeTab === 'push-history'",
+    pendingKey: 'push-history:refresh',
+    loadAction: 'loadPushHistory()',
+    clearAction: 'clearPushHistoryFilters',
+    hasFilters: 'hasPushHistoryFilters',
+    extraButtons: [
+      `<button class="btn" :class="pushHistoryEditMode ? 'btn-primary' : 'btn-secondary'" type="button" @click="togglePushHistoryEditMode()">{{ pushHistoryEditMode ? '完成编辑' : '批量操作' }}</button>`,
+      `<button class="btn btn-secondary" type="button" @click="openPushHistorySettingsPanel()">清理设置</button>`,
+    ],
+  }),
 ].join('\n');
 
 export const pushHistoryPageTemplate = String.raw`

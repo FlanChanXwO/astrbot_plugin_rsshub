@@ -15,7 +15,12 @@ ready()
     await store.loadData();
     pollTimer = setInterval(async () => {
       const { changed } = await checkUpdates();
-      if (changed) store.loadData(false);
+      if (!changed) return;
+      if (store.activeTab === 'overview') {
+        store.loadOverview();
+      } else {
+        store.loadData(false);
+      }
     }, 10000);
     window.addEventListener('beforeunload', () => {
       if (pollTimer) clearInterval(pollTimer);

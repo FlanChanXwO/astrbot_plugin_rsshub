@@ -75,6 +75,13 @@ def _history_last_activity_expr():
     )
 
 
+def _history_bucket_expr(bucket: str):
+    pattern = (
+        "%Y-%m-%dT%H:00:00+00:00" if bucket == "hour" else "%Y-%m-%dT00:00:00+00:00"
+    )
+    return func.strftime(pattern, _history_last_activity_expr())
+
+
 class PushHistoryRepositoryImpl:
     """推送历史仓库实现类"""
 
@@ -423,6 +430,39 @@ class PushHistoryRepositoryImpl:
                 "total": int(total),
                 **status_counts,
             }
+
+    async def get_status_buckets(
+        self,
+        *,
+        since: datetime,
+        bucket: str,
+    ) -> list[dict[str, int | str]]:
+        """按最后活动时间聚合推送状态，服务 Dashboard 成功率图。"""
+        normalized_bucket = "hour" if bucket == "hour" else "day"
+        bucket_expr = _history_bucket_expr(normalized_bucket)
+        last_activity = _history_last_activity_expr()
+        db = get_database()
+        async with db.get_session() as session:
+            stmt = (
+                select(bucket_expr, PushHistoryORM.status, func.count())
+                .select_from(PushHistoryORM)
+                .where(last_activity >= since)
+                .group_by(bucket_expr, PushHistoryORM.status)
+                .order_by(bucket_expr, PushHistoryORM.status)
+            )
+            result = await session.execute(stmt)
+            rows: list[dict[str, int | str]] = []
+            for bucket_value, status, count in result.all():
+                if not bucket_value:
+                    continue
+                rows.append(
+                    {
+                        "bucket": str(bucket_value),
+                        "status": str(status or "unknown"),
+                        "count": int(count or 0),
+                    }
+                )
+            return rows
 
     @staticmethod
     def _to_entity(orm: PushHistoryORM) -> PushHistory:

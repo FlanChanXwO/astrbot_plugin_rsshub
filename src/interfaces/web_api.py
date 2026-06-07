@@ -10,7 +10,7 @@ import asyncio
 import json
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -46,6 +46,7 @@ from ..domain.repositories.feed_repository import FeedRepository
 from ..domain.repositories.push_history_repository import PushHistoryRepository
 from ..domain.repositories.subscription_repository import SubscriptionRepository
 from ..domain.repositories.user_repository import UserRepository
+from ..shared.constants import INHERIT_VALUE
 from ..infrastructure.config import (
     RsshubPluginConfig,
     build_application_settings,
@@ -58,6 +59,13 @@ PLUGIN_NAME = "astrbot_plugin_rsshub"
 USER_ID_REQUIRED_ERROR = "user_id 不能为空"
 SUGGESTION_DEFAULT_LIMIT = 10
 SUGGESTION_MAX_LIMIT = 20
+DASHBOARD_CHART_RANGES: dict[str, tuple[timedelta, str]] = {
+    "24h": (timedelta(hours=24), "hour"),
+    "7d": (timedelta(days=7), "day"),
+    "30d": (timedelta(days=30), "day"),
+}
+FEED_HEALTH_BUCKETS = ("healthy", "warning", "stale", "disabled")
+FEED_SHARE_LIMIT = 8
 SUGGESTION_SCOPES: dict[str, set[str]] = {
     "subscriptions": {"user_id", "feed_id", "feed_link", "sub_id", "keyword"},
     "users": {"user_id", "keyword"},
@@ -173,6 +181,12 @@ class WebApiHandler:
             ("POST", "/export", self.handle_export, "导出订阅"),
             ("POST", "/import", self.handle_import, "导入订阅"),
             ("GET", "/stats", self.handle_stats, "插件统计"),
+            (
+                "GET",
+                "/dashboard/charts",
+                self.handle_dashboard_charts,
+                "Dashboard 图表数据",
+            ),
             ("GET", "/push-history", self.handle_push_history, "推送历史"),
             (
                 "GET",
@@ -1525,6 +1539,50 @@ class WebApiHandler:
             }
         )
 
+    async def handle_dashboard_charts(self):
+        """获取 Dashboard 概览页图表数据。"""
+        requested_range = str(request.args.get("range", "") or "").strip().lower()
+        range_key = (
+            requested_range if requested_range in DASHBOARD_CHART_RANGES else "7d"
+        )
+        duration, bucket_unit = DASHBOARD_CHART_RANGES[range_key]
+        now = datetime.now(timezone.utc)
+        since = now - duration
+
+        feeds = await self._feed_repo.get_all()
+        subscriptions = await self._sub_repo.list_for_dashboard()
+        status_buckets = await self._push_history_repo.get_status_buckets(
+            since=since,
+            bucket=bucket_unit,
+        )
+
+        default_interval = _resolve_default_interval(self._config)
+        return jsonify(
+            {
+                "ok": True,
+                "range": range_key,
+                "bucket_unit": bucket_unit,
+                "generated_at": now.isoformat(),
+                "push_success": _build_push_success_chart(
+                    status_buckets,
+                    since=since,
+                    now=now,
+                    bucket_unit=bucket_unit,
+                ),
+                "feed_health": _build_feed_health_chart(
+                    feeds,
+                    subscriptions,
+                    now=now,
+                    default_interval=default_interval,
+                ),
+                "feed_share": _build_feed_share_chart(
+                    feeds,
+                    subscriptions,
+                    limit=FEED_SHARE_LIMIT,
+                ),
+            }
+        )
+
     async def handle_data_management_overview(self):
         """获取插件 cache / exports 目录统计。"""
         try:
@@ -1957,6 +2015,263 @@ def _coerce_suggestion_limit(raw: Any) -> int:
     except (TypeError, ValueError):
         limit = SUGGESTION_DEFAULT_LIMIT
     return max(1, min(SUGGESTION_MAX_LIMIT, limit))
+
+
+def _resolve_default_interval(config: Any | None) -> int:
+    try:
+        interval = int(getattr(config, "default_interval", 10) or 10)
+    except (TypeError, ValueError):
+        interval = 10
+    return max(1, interval)
+
+
+def _ensure_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _bucket_floor(value: datetime, bucket_unit: str) -> datetime:
+    if bucket_unit == "hour":
+        return value.replace(minute=0, second=0, microsecond=0)
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _iter_time_buckets(
+    *,
+    since: datetime,
+    now: datetime,
+    bucket_unit: str,
+) -> list[datetime]:
+    step = timedelta(hours=1) if bucket_unit == "hour" else timedelta(days=1)
+    current = _bucket_floor(since, bucket_unit)
+    end = _bucket_floor(now, bucket_unit)
+    buckets = []
+    while current <= end:
+        buckets.append(current)
+        current += step
+    return buckets
+
+
+def _parse_bucket_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return _ensure_aware_utc(parsed)
+
+
+def _build_push_success_chart(
+    rows: list[dict[str, int | str]],
+    *,
+    since: datetime,
+    now: datetime,
+    bucket_unit: str,
+) -> dict[str, Any]:
+    by_bucket: dict[str, dict[str, int]] = {}
+    for row in rows:
+        bucket_time = _parse_bucket_time(row.get("bucket"))
+        if bucket_time is None:
+            continue
+        bucket_key = _bucket_floor(bucket_time, bucket_unit).isoformat()
+        status = str(row.get("status") or "unknown")
+        by_bucket.setdefault(bucket_key, {})[status] = int(row.get("count") or 0)
+
+    points = []
+    for bucket in _iter_time_buckets(since=since, now=now, bucket_unit=bucket_unit):
+        key = bucket.isoformat()
+        counts = by_bucket.get(key, {})
+        success = int(counts.get("success", 0))
+        failed = int(counts.get("failed", 0))
+        stopped = int(counts.get("stopped", 0))
+        skipped = int(counts.get("skipped", 0))
+        pending = int(counts.get("pending", 0)) + int(counts.get("retrying", 0))
+        denominator = success + failed + stopped + skipped
+        points.append(
+            {
+                "bucket": key,
+                "success": success,
+                "failed": failed,
+                "stopped": stopped,
+                "skipped": skipped,
+                "pending": pending,
+                "denominator": denominator,
+                "rate": round(success / denominator, 4) if denominator else None,
+            }
+        )
+
+    return {
+        "unit": bucket_unit,
+        "points": points,
+        "statuses": ["success", "failed", "stopped", "skipped", "pending"],
+    }
+
+
+def _build_feed_health_chart(
+    feeds: list[Any],
+    subscriptions: list[Any],
+    *,
+    now: datetime,
+    default_interval: int,
+) -> dict[str, Any]:
+    active_subscriptions_by_feed: dict[int, list[Any]] = {}
+    for sub in subscriptions:
+        feed_id = int(getattr(sub, "feed_id", 0) or 0)
+        if feed_id <= 0 or int(getattr(sub, "state", 1) or 0) != 1:
+            continue
+        active_subscriptions_by_feed.setdefault(feed_id, []).append(sub)
+
+    buckets = {name: {"status": name, "count": 0} for name in FEED_HEALTH_BUCKETS}
+    items: list[dict[str, Any]] = []
+    for feed in feeds:
+        feed_id = int(getattr(feed, "id", 0) or 0)
+        feed_subscriptions = active_subscriptions_by_feed.get(feed_id, [])
+        interval = _resolve_feed_interval(feed_subscriptions, default_interval)
+        updated_at = _ensure_aware_utc(getattr(feed, "updated_at", None))
+        status = _resolve_feed_health_status(
+            feed,
+            updated_at=updated_at,
+            now=now,
+            interval_minutes=interval,
+            active_subscription_count=len(feed_subscriptions),
+        )
+        buckets[status]["count"] += 1
+        age_minutes = (
+            max(0, int((now - updated_at).total_seconds() // 60))
+            if updated_at is not None
+            else None
+        )
+        items.append(
+            {
+                "feed_id": feed_id,
+                "title": str(getattr(feed, "title", "") or ""),
+                "link": str(getattr(feed, "link", "") or ""),
+                "status": status,
+                "interval_minutes": interval,
+                "active_subscription_count": len(feed_subscriptions),
+                "updated_at": updated_at.isoformat() if updated_at else None,
+                "age_minutes": age_minutes,
+            }
+        )
+
+    return {
+        "buckets": list(buckets.values()),
+        "items": sorted(
+            items,
+            key=lambda item: (
+                {"stale": 0, "warning": 1, "healthy": 2, "disabled": 3}.get(
+                    str(item["status"]), 9
+                ),
+                -(item["age_minutes"] or 0),
+                str(item["title"] or item["link"]),
+            ),
+        ),
+    }
+
+
+def _resolve_feed_interval(subscriptions: list[Any], default_interval: int) -> int:
+    intervals = []
+    for sub in subscriptions:
+        try:
+            interval = int(getattr(sub, "interval", INHERIT_VALUE) or INHERIT_VALUE)
+        except (TypeError, ValueError):
+            interval = INHERIT_VALUE
+        if interval != INHERIT_VALUE and interval > 0:
+            intervals.append(interval)
+    return max(1, min(intervals) if intervals else default_interval)
+
+
+def _resolve_feed_health_status(
+    feed: Any,
+    *,
+    updated_at: datetime | None,
+    now: datetime,
+    interval_minutes: int,
+    active_subscription_count: int,
+) -> str:
+    if active_subscription_count <= 0 or int(getattr(feed, "state", 1) or 0) != 1:
+        return "disabled"
+    if updated_at is None:
+        return "stale"
+    age_minutes = max(0, (now - updated_at).total_seconds() / 60)
+    # Dashboard 展示分档：超过 2 个刷新周期提示，超过 5 个周期视作明显陈旧。
+    if age_minutes > interval_minutes * 5:
+        return "stale"
+    if age_minutes > interval_minutes * 2:
+        return "warning"
+    return "healthy"
+
+
+def _build_feed_share_chart(
+    feeds: list[Any],
+    subscriptions: list[Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    feed_map = {int(getattr(feed, "id", 0) or 0): feed for feed in feeds}
+    counts: dict[int, int] = {}
+    for sub in subscriptions:
+        if int(getattr(sub, "state", 1) or 0) != 1:
+            continue
+        feed_id = int(getattr(sub, "feed_id", 0) or 0)
+        if feed_id <= 0:
+            continue
+        counts[feed_id] = counts.get(feed_id, 0) + 1
+
+    total = sum(counts.values())
+    ranked = sorted(
+        counts.items(),
+        key=lambda item: (-item[1], _feed_share_label(feed_map.get(item[0]))),
+    )
+    visible = ranked[: max(1, limit)]
+    hidden = ranked[max(1, limit) :]
+    items = [
+        _feed_share_item(feed_id, count, feed_map.get(feed_id), total)
+        for feed_id, count in visible
+    ]
+    other_count = sum(count for _, count in hidden)
+    if other_count:
+        items.append(
+            {
+                "feed_id": None,
+                "title": "其他",
+                "link": "",
+                "count": other_count,
+                "ratio": round(other_count / total, 4) if total else 0,
+            }
+        )
+
+    return {"total": total, "limit": limit, "items": items}
+
+
+def _feed_share_item(
+    feed_id: int,
+    count: int,
+    feed: Any | None,
+    total: int,
+) -> dict[str, Any]:
+    return {
+        "feed_id": feed_id,
+        "title": _feed_share_label(feed),
+        "link": str(getattr(feed, "link", "") or "") if feed else "",
+        "count": count,
+        "ratio": round(count / total, 4) if total else 0,
+    }
+
+
+def _feed_share_label(feed: Any | None) -> str:
+    if feed is None:
+        return "未知 Feed"
+    title = str(getattr(feed, "title", "") or "").strip()
+    if title:
+        return title
+    link = str(getattr(feed, "link", "") or "").strip()
+    return link or "未知 Feed"
 
 
 def _suggestion(

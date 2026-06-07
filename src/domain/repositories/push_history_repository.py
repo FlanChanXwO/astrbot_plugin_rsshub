@@ -3,6 +3,7 @@
 定义推送历史实体的持久化操作规范。具体实现由基础设施层提供。
 """
 
+from datetime import datetime
 from typing import Protocol
 
 from ..entities.push_history import PushHistory
@@ -236,4 +237,13 @@ class PushHistoryRepository(Protocol):
         Returns:
             统计信息字典，包含 total, pending, success, failed
         """
+        ...
+
+    async def get_status_buckets(
+        self,
+        *,
+        since: datetime,
+        bucket: str,
+    ) -> list[dict[str, int | str]]:
+        """按时间桶统计推送历史状态，用于 Dashboard 图表。"""
         ...

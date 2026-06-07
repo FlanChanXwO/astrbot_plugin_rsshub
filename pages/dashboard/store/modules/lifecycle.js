@@ -6,6 +6,7 @@ export const lifecycleModule = {
     this.activeTab = tab;
     const loaders = {
       subs: () => this.loadData(false),
+      overview: () => this.loadOverview(),
       users: () => this.loadUsers(),
       feeds: () => this.loadFeeds(),
       'push-history': () => this.loadPushHistory(),
@@ -35,6 +36,9 @@ export const lifecycleModule = {
     if (tab !== 'push-history') {
       this.pushHistoryEditMode = false;
       this.selectedPushHistoryIds = [];
+    }
+    if (tab !== 'overview') {
+      this.destroyOverviewCharts();
     }
   }
 };

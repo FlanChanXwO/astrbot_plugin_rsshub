@@ -21,6 +21,10 @@ downloads/
 eggs/
 .eggs/
 lib/
+!pages/dashboard/lib/
+!pages/dashboard/lib/petite-vue.iife.js
+!pages/dashboard/lib/chart.umd.min.js
+!pages/dashboard/lib/chartjs.LICENSE.md
 lib64/
 parts/
 sdist/

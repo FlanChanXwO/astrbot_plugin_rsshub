@@ -1,11 +1,17 @@
-import { batchToolbarTemplate, filterSummaryTemplate, tagFilterTemplate, textFilterTemplate } from '../shared/filters.js';
+import { batchToolbarTemplate, compactFilterToolbarTemplate } from '../shared/filters.js';
 
 export const usersActionsTemplate = [
-  "    <div class=\"action-bar\" v-if=\"activeTab === 'users'\">",
-  tagFilterTemplate({ groupName: 'userFilters', fieldName: 'user_id', label: '用户 ID' }),
-  textFilterTemplate({ groupName: 'userFilters', fieldName: 'keyword', label: '关键词' }),
-  "      <button class=\"btn btn-secondary\" @click=\"clearUserFilters()\" :disabled=\"isPending('users:refresh') || !hasUserFilters()\">清空筛选</button>\n      <button class=\"btn\" :class=\"userEditMode ? 'btn-primary' : 'btn-secondary'\" @click=\"toggleUserEditMode()\">\n        {{ userEditMode ? '完成编辑' : '批量操作' }}\n      </button>\n      <button class=\"btn btn-icon\" :class=\"{ 'is-loading': isPending('users:refresh') }\" :disabled=\"isPending('users:refresh')\" @click=\"runPending('users:refresh', () => loadUsers())\" title=\"刷新\">⟳</button>\n    </div>",
-  filterSummaryTemplate({ tab: 'users', guard: 'hasUserFilters', summary: 'userFilterSummary', clearAction: 'clearUserFilters' }),
+  compactFilterToolbarTemplate({
+    groupName: 'userFilters',
+    visibleExpr: "activeTab === 'users'",
+    pendingKey: 'users:refresh',
+    loadAction: 'loadUsers()',
+    clearAction: 'clearUserFilters',
+    hasFilters: 'hasUserFilters',
+    extraButtons: [
+      `<button class="btn" :class="userEditMode ? 'btn-primary' : 'btn-secondary'" type="button" @click="toggleUserEditMode()">{{ userEditMode ? '完成编辑' : '批量操作' }}</button>`,
+    ],
+  }),
   batchToolbarTemplate({ visibleExpr: 'userEditMode && selectedUserIds.length > 0', countExpr: 'selectedUserIds.length', buttons: [
     `<button class="btn btn-danger btn-small" :class="{ 'is-loading': isPending('users:delete-batch') }" :disabled="isPending('users:delete-batch')" @click="deleteSelectedUsers()">批量删除</button>`,
   ] }),

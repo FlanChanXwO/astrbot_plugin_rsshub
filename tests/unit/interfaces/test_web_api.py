@@ -2623,3 +2623,140 @@ async def test_clear_cache_removes_all_cached_files(monkeypatch, tmp_path):
     assert payload["ok"] is True
     assert payload["removed_count"] == 2
     assert list(cache_dir.rglob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_dashboard_charts_builds_overview_payload_with_default_range():
+    now = datetime.now(timezone.utc)
+    feed_repo = MagicMock()
+    feed_repo.get_all = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                id=1,
+                title="Feed A",
+                link="https://example.com/a.xml",
+                state=1,
+                updated_at=now,
+            ),
+            SimpleNamespace(
+                id=2,
+                title="Feed B",
+                link="https://example.com/b.xml",
+                state=1,
+                updated_at=now,
+            ),
+            SimpleNamespace(
+                id=3,
+                title="Feed C",
+                link="https://example.com/c.xml",
+                state=1,
+                updated_at=now,
+            ),
+        ]
+    )
+    sub_repo = MagicMock()
+    sub_repo.list_for_dashboard = AsyncMock(
+        return_value=[
+            SimpleNamespace(id=1, feed_id=1, state=1, interval=10),
+            SimpleNamespace(id=2, feed_id=1, state=1, interval=-100),
+            SimpleNamespace(id=3, feed_id=2, state=1, interval=20),
+        ]
+    )
+    push_history_repo = MagicMock()
+    push_history_repo.get_status_buckets = AsyncMock(
+        return_value=[
+            {
+                "bucket": now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "status": "success",
+                "count": 1,
+            },
+            {
+                "bucket": now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "status": "skipped",
+                "count": 1,
+            },
+        ]
+    )
+    config = SimpleNamespace(default_interval=15)
+    handler = _handler(
+        polling_service=MagicMock(),
+        config=config,
+        sub_repo=sub_repo,
+        push_history_repo=push_history_repo,
+    )
+    handler._feed_repo = feed_repo
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/dashboard/charts?range=bad",
+        method="GET",
+    ):
+        response = await handler.handle_dashboard_charts()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["range"] == "7d"
+    assert payload["bucket_unit"] == "day"
+    assert set(payload) >= {"push_success", "feed_health", "feed_share"}
+    push_history_repo.get_status_buckets.assert_awaited_once()
+    call_kwargs = push_history_repo.get_status_buckets.await_args.kwargs
+    assert call_kwargs["bucket"] == "day"
+    assert payload["push_success"]["points"][-1]["success"] == 1
+    assert payload["push_success"]["points"][-1]["skipped"] == 1
+    assert payload["push_success"]["points"][-1]["denominator"] == 2
+    assert payload["push_success"]["points"][-1]["rate"] == 0.5
+    assert payload["feed_share"]["total"] == 3
+    assert payload["feed_share"]["items"][0]["title"] == "Feed A"
+    assert payload["feed_share"]["items"][0]["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_dashboard_charts_merges_feed_share_tail():
+    now = datetime.now(timezone.utc)
+    feed_repo = MagicMock()
+    feed_repo.get_all = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                id=index,
+                title=f"Feed {index}",
+                link=f"https://example.com/{index}.xml",
+                state=1,
+                updated_at=now,
+            )
+            for index in range(1, 11)
+        ]
+    )
+    sub_repo = MagicMock()
+    sub_repo.list_for_dashboard = AsyncMock(
+        return_value=[
+            SimpleNamespace(id=index, feed_id=index, state=1, interval=10)
+            for index in range(1, 11)
+        ]
+    )
+    push_history_repo = MagicMock()
+    push_history_repo.get_status_buckets = AsyncMock(return_value=[])
+    handler = _handler(
+        polling_service=MagicMock(),
+        config=SimpleNamespace(default_interval=10),
+        sub_repo=sub_repo,
+        push_history_repo=push_history_repo,
+    )
+    handler._feed_repo = feed_repo
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/dashboard/charts?range=24h",
+        method="GET",
+    ):
+        response = await handler.handle_dashboard_charts()
+
+    payload = await response.get_json()
+    assert payload["range"] == "24h"
+    assert payload["bucket_unit"] == "hour"
+    assert len(payload["feed_share"]["items"]) == 9
+    assert payload["feed_share"]["items"][-1]["title"] == "其他"
+    assert payload["feed_share"]["items"][-1]["count"] == 2

@@ -70,22 +70,23 @@ RSSHUB_TEST_PYTHON=/path/to/python ./run_tests.sh --quick
 ### 方法四：使用 pytest（如果已安装）
 
 ```bash
-pip install pytest pytest-asyncio
+# 从 AstrBot 根目录安装测试与资源生成依赖
+uv pip install --python .venv/bin/python -r data/plugins/astrbot_plugin_rsshub/requirements-dev.txt
 
 # 运行所有测试
-pytest tests/
+uv run python -m pytest data/plugins/astrbot_plugin_rsshub/tests/
 
 # 详细输出
-pytest tests/ -v
+uv run python -m pytest data/plugins/astrbot_plugin_rsshub/tests/ -v
 
 # 仅运行单元测试
-pytest tests/unit/ -v
+uv run python -m pytest data/plugins/astrbot_plugin_rsshub/tests/unit/ -v
 
 # 仅运行集成测试
-pytest tests/integration/ -v
+uv run python -m pytest data/plugins/astrbot_plugin_rsshub/tests/integration/ -v
 
 # 显示覆盖率
-pytest tests/ --cov=src --cov-report=html
+uv run python -m pytest data/plugins/astrbot_plugin_rsshub/tests/ --cov=src --cov-report=html
 ```
 
 ## 目录结构

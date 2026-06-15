@@ -125,7 +125,7 @@ async def test_create_runtime_does_not_start_scheduler_when_register_web_api_fai
     monkeypatch.setattr(
         bootstrap,
         "_build_dependencies",
-        AsyncMock(return_value=({}, MagicMock())),
+        lambda **_kwargs: ({}, MagicMock()),
     )
     monkeypatch.setattr(
         bootstrap,
@@ -176,11 +176,9 @@ async def test_create_runtime_configures_message_senders_with_current_app_settin
     monkeypatch.setattr(
         bootstrap,
         "_build_dependencies",
-        AsyncMock(
-            return_value=(
-                {"route_knowledge_service": route_knowledge_service},
-                MagicMock(),
-            )
+        lambda **_kwargs: (
+            {"route_knowledge_service": route_knowledge_service},
+            MagicMock(),
         ),
     )
     monkeypatch.setattr(bootstrap, "_register_web_api", lambda *_args: MagicMock())

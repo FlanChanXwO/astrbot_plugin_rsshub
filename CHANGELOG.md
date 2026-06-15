@@ -9,11 +9,7 @@
 - Plugin Pages 引入本地 Chart.js 静态资源，不依赖 CDN；仓库体积仍控制在 16 MB 上限内。
 - 推送历史仓储新增按最后活动时间聚合状态桶的查询能力，用于 Dashboard 成功率趋势。
 - 新增 `requirements-dev.txt`，将测试、帮助图生成等开发依赖从运行时依赖中拆出。
-- FFmpeg 来源配置简化为 `auto` / `system` 两个选项：`auto` 优先系统 PATH，系统缺失时后台异步下载捆绑 FFmpeg，不阻塞插件启动；`system` 仅使用系统 PATH。原 `bundled` 选项已合并为 `auto`。
-- 新增共享镜像测速模块 (`mirror_helper.py`)：FFmpeg 下载和知识库同步共用同一套镜像列表和 HEAD 测速逻辑。
-- FFmpeg 下载镜像新增 `auto` 选项（默认）：并发测速内置镜像 + 直连 GitHub + 用户配置的 `ffmpeg_mirror_custom_url`（如有），选最快的下载，并保留直连 GitHub 作为最终兜底。
-- 知识库同步来源新增 `speed_test` 模式（默认）：启动时自动测速选最快镜像下载 Routes 知识库。
-- 新增 JSON Feed 1.0 / 1.1 解析支持；Feed 抓取链路现在兼容 RSS 2.0、Atom 1.0 和 JSON Feed 三种格式，自动按响应内容识别并委派对应解析器。
+- FFmpeg 来源配置新增 `bundled` 选项：`auto` 只优先系统 PATH 并复用已有缓存，只有 `bundled` 才允许在系统缺失时下载捆绑 FFmpeg。
 
 ### Changed
 
@@ -24,7 +20,7 @@
 - LLM tools 从单文件 `src/application/llmtools.py` 拆分为 `src/application/llmtools/` 包，保持 `build_llm_tools` 与 `LLM_TOOL_NAMES` 对外导入不变。
 - 优化 AI tool 描述、`skills/rsshub-agent-tools/SKILL.md` 与 `docs/usage/ai-tools.md`，让 agent 更明确区分订阅、用户默认、会话默认、handlers、push history 和一次性 XML/HTML 直推。
 - 原始顺序排版 `style=original` 的 layout 文本现在同样遵守订阅最终生效的 `length_limit`；`length_limit<=0` 时保持完整正文。
-- FFmpeg 捆绑下载目录从插件缓存目录 (`cache/ffmpeg/`) 改为插件数据目录 (`ffmpeg/`)；插件重载时自动清理上次中断遗留的 `.tmp_*` 临时目录。
+- FFmpeg 自动准备策略更保守：`auto` 不再主动联网下载，避免插件启动时产生用户未显式允许的下载动作。
 - 运行时依赖瘦身：`requirements.txt` 仅保留插件运行必需依赖，`pytest`、`pytest-asyncio`、`jinja2`、`playwright` 迁移到开发依赖。
 
 ### Fixed
@@ -43,16 +39,10 @@
 - 移除运行时依赖中不必要的开发依赖，降低普通用户安装体积。
 - 移除把 `xml_parse` 作为可配置 handler 的 agent skill 推荐示例。
 
-### Security
-
-- 镜像测速恢复 TLS 证书验证，攻破 mirror HTTPS 才能影响候选选择。
-- FFmpeg 归档当前未配 SHA256（`latest` 源校验值不稳定），由 1 MB 大小检查 + 解包路径校验兜底；ZIP 解包前拒绝绝对路径和 `..` 跨目录条目，封掉 zip slip 风险面。
-
 ### Notes
 
 - 本版本不新增聊天命令，不新增用户可见配置项；防漏推 ack、GIF 判定补强和 original 行为修正均为内部语义修复。
-- `ffmpeg_source` 仅保留 `auto` 和 `system`；原 `bundled` 选项已合并为 `auto`，旧配置文件中的 `bundled` 会自动回退为 `auto` 并打 warning。
-- 知识库同步 `source_mode` 默认值升级为 `speed_test`；现存配置经 schema heal 维持原值，全新安装会自动启用测速选最快镜像。
+- `ffmpeg_source=auto` 的语义有所收紧：它会使用系统 FFmpeg 或已有缓存；如果希望允许插件在系统缺失时下载 FFmpeg，请选择 `bundled`。
 - Plugin Pages 新增图表只读接口，不改变已有筛选 query 参数和列表 Web API 语义。
 
 ## [2.0.3] - 2026-06-01

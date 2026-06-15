@@ -161,7 +161,7 @@ async def create_plugin_runtime(
         sender_provider = InfrastructureMessageSenderProvider(
             app_settings.sender_strategies
         )
-        deps, notification_dispatcher = await _build_dependencies(
+        deps, notification_dispatcher = _build_dependencies(
             app_settings=app_settings,
             sender_provider=sender_provider,
             push_job_queue=queue,
@@ -269,10 +269,11 @@ def _register_bot_client_provider(context: Context) -> None:
 
 
 async def _configure_ffmpeg_bundler(app_settings: ApplicationSettings) -> None:
-    """配置 FFmpeg 捆绑下载参数，后台异步准备。
+    """配置 FFmpeg 捆绑下载参数，并根据可用性决定下载策略。
 
-    - system：只使用系统 PATH，不下载
-    - auto：优先系统 PATH；系统缺失时后台异步下载捆绑 FFmpeg，不阻塞启动
+    - system：只使用系统 PATH
+    - auto：优先系统 PATH，并复用已有缓存，不主动联网下载
+    - bundled：系统 PATH 无 ffmpeg 且无缓存时，同步等待捆绑下载完成
     """
     from .src.infrastructure.utils.ffmpeg_helper import FFmpegTool
 
@@ -284,17 +285,27 @@ async def _configure_ffmpeg_bundler(app_settings: ApplicationSettings) -> None:
         ffmpeg_mirror_custom_url=app_settings.media.ffmpeg_mirror_custom_url,
     )
 
-    # ffmpeg 已可用（系统 PATH 或已有捆绑缓存）→ 无需下载
-    if FFmpegTool.ensure_ffmpeg_ready(auto_install=True) is not None:
+    # ffmpeg 已可用（系统 PATH 或缓存捆绑）→ 后台预取即可
+    if FFmpegTool.ensure_ffmpeg_ready(auto_install=False) is not None:
+        FFmpegTool.prefetch_bundled_ffmpeg()
         return
 
-    # system 模式不下载
+    # auto/system 不做首次联网下载；bundled 由用户显式允许。
     if not FFmpegTool.allows_bundled_download():
         return
 
-    # 后台异步下载，不阻塞插件启动；需要 ffmpeg 的媒体操作在下载完成前静默跳过
-    logger.info("系统未检测到 FFmpeg，正在后台异步下载捆绑包...")
-    FFmpegTool.prefetch_bundled_ffmpeg()
+    # 首次启动：系统无 ffmpeg 且无缓存，同步等待捆绑下载完成
+    from .src.infrastructure.utils.ffmpeg_bundler import ensure_bundled_ffmpeg
+
+    logger.info("系统未检测到 FFmpeg，正在同步等待捆绑下载完成...")
+    result = await ensure_bundled_ffmpeg(
+        http_proxy=app_settings.http.proxy,
+        timeout=app_settings.http.media_timeout,
+    )
+    if result is not None:
+        logger.info("FFmpeg 捆绑二进制首次下载成功")
+    else:
+        logger.warning("FFmpeg 捆绑二进制首次下载失败，媒体功能将受限")
 
 
 def _configure_message_senders(app_settings: ApplicationSettings) -> None:
@@ -337,7 +348,7 @@ async def _init_database(config: RsshubPluginConfig) -> None:
     logger.info("数据库已初始化: %s", db_path)
 
 
-async def _build_dependencies(
+def _build_dependencies(
     *,
     app_settings: ApplicationSettings,
     sender_provider: InfrastructureMessageSenderProvider,
@@ -372,7 +383,7 @@ async def _build_dependencies(
         notification_dispatcher=notification_dispatcher,
         history_entry_limit=app_settings.scheduler.history_entry_limit,
     )
-    route_source = await build_route_knowledge_source(
+    route_source = build_route_knowledge_source(
         app_settings.route_knowledge,
         proxy=app_settings.http.proxy,
     )

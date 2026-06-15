@@ -419,7 +419,9 @@ def build_application_settings(config: Any) -> ApplicationSettings:
                 1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
             ),
             ffmpeg_source=str(_get_value(media_cfg, "ffmpeg_source", "auto") or "auto"),
-            ffmpeg_mirror=str(_get_value(media_cfg, "ffmpeg_mirror", "auto") or "auto"),
+            ffmpeg_mirror=str(
+                _get_value(media_cfg, "ffmpeg_mirror", "default") or "default"
+            ),
             ffmpeg_mirror_custom_url=str(
                 _get_value(media_cfg, "ffmpeg_mirror_custom_url", "") or ""
             ).strip(),
@@ -436,8 +438,7 @@ def build_application_settings(config: Any) -> ApplicationSettings:
                 _get_value(route_knowledge_cfg, "rerank_provider_id", "") or ""
             ),
             source_mode=str(
-                _get_value(route_knowledge_cfg, "source_mode", "speed_test")
-                or "speed_test"
+                _get_value(route_knowledge_cfg, "source_mode", "mirror") or "mirror"
             ),
             source_base_url=str(
                 _normalize_route_knowledge_base_url(

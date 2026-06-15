@@ -150,7 +150,7 @@ class MediaSettings:
     gif_transcode: bool = False
     gif_transcode_timeout: int = 60
     ffmpeg_source: str = "auto"
-    ffmpeg_mirror: str = "auto"
+    ffmpeg_mirror: str = "default"
     ffmpeg_mirror_custom_url: str = ""
 
 
@@ -161,7 +161,7 @@ class RouteKnowledgeSettings:
     kb_name: str = "RSSHub Routes"
     embedding_provider_id: str = ""
     rerank_provider_id: str = ""
-    source_mode: str = "speed_test"
+    source_mode: str = "mirror"
     source_base_url: str = (
         "https://raw.githubusercontent.com/FlanChanXwO/rsshub-routes-knowledgebase/main"
     )

@@ -224,9 +224,9 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert "unknown_basic" not in healed["basic_config"]
     assert "media_config" not in healed
     assert healed["media"]["ffmpeg_source"] == "auto"
-    assert healed["media"]["ffmpeg_mirror"] == "auto"
+    assert healed["media"]["ffmpeg_mirror"] == "default"
     assert healed["media"]["ffmpeg_mirror_custom_url"] == ""
-    assert healed["route_knowledge"]["source_mode"] == "speed_test"
+    assert healed["route_knowledge"]["source_mode"] == "mirror"
     assert healed["route_knowledge"]["timeout"] == 300
     assert "ffmpeg" not in healed
     assert healed["media"]["video_transcode"] is False
@@ -824,14 +824,14 @@ def test_build_application_settings_normalizes_ffmpeg_media_config():
     settings = build_application_settings(
         SimpleNamespace(
             media=SimpleNamespace(
-                ffmpeg_source="auto",
+                ffmpeg_source="bundled",
                 ffmpeg_mirror="custom",
                 ffmpeg_mirror_custom_url="  https://mirror.example/  ",
             )
         )
     )
 
-    assert settings.media.ffmpeg_source == "auto"
+    assert settings.media.ffmpeg_source == "bundled"
     assert settings.media.ffmpeg_mirror == "custom"
     assert settings.media.ffmpeg_mirror_custom_url == "https://mirror.example/"
 

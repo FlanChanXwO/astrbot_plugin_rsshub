@@ -244,7 +244,7 @@ class RouteKnowledgeConfig(BaseModel):
     rerank_provider_id: str = Field(
         default="", description="默认重排序模型 Provider ID"
     )
-    source_mode: str = Field(default="speed_test", description="知识库来源模式")
+    source_mode: str = Field(default="mirror", description="知识库来源模式")
     source_base_url: str = Field(
         default=(
             "https://raw.githubusercontent.com/"

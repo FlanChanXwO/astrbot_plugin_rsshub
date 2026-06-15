@@ -227,16 +227,16 @@
       "ffmpeg_source": {
         "type": "string",
         "description": "FFmpeg 来源",
-        "hint": "auto=优先系统 PATH，并复用已有缓存；system=仅使用系统 PATH；bundled=系统缺失时允许下载捆绑 ffmpeg",
+        "hint": "auto=优先系统 PATH，系统缺失时自动下载捆绑 ffmpeg；system=仅使用系统 PATH，不下载",
         "default": "auto",
-        "options": ["auto", "system", "bundled"]
+        "options": ["auto", "system"]
       },
       "ffmpeg_mirror": {
         "type": "string",
         "description": "FFmpeg 下载镜像",
-        "hint": "ffmpeg_source=bundled 且需要下载时使用的镜像；国内推荐 ghfast 或 ghproxy，国外保持 default",
-        "default": "default",
-        "options": ["default", "ghfast", "ghproxy", "mirror_ghproxy", "gh_proxy", "custom"]
+        "hint": "auto=自动测速选最快镜像；国内可选手动 ghfast/ghproxy 等，国外保持 default",
+        "default": "auto",
+        "options": ["auto", "default", "ghfast", "ghproxy", "mirror_ghproxy", "gh_proxy", "custom"]
       },
       "ffmpeg_mirror_custom_url": {
         "type": "string",
@@ -359,9 +359,10 @@
       "source_mode": {
         "type": "string",
         "description": "同步来源模式",
-        "hint": "mirror 使用 source_base_url；auto 失败后尝试 fallback_base_url；github 使用内置 GitHub Raw；local 从本地目录读取",
-        "default": "mirror",
+        "hint": "mirror 使用 source_base_url；auto 失败后尝试 fallback_base_url；speed_test 自动测速选最快镜像；github 使用内置 GitHub Raw；local 从本地目录读取",
+        "default": "speed_test",
         "options": [
+          "speed_test",
           "mirror",
           "auto",
           "github",

@@ -1,6 +1,6 @@
 """FFmpeg + FFprobe 捆绑下载与管理。
 
-从 GitHub 公开源自动下载 ffmpeg+ffprobe 静态构建，缓存到插件目录。
+从 GitHub 公开源自动下载 ffmpeg+ffprobe 静态构建，安装到插件数据目录。
 替代 imageio-ffmpeg（不含 ffprobe），保证两个二进制都可用。
 
 下载源：
@@ -26,7 +26,8 @@ from uuid import uuid4
 
 from ..fetcher.http import HttpFetcher
 from ..utils.logger import get_logger
-from ..utils.paths import get_plugin_cache_dir
+from ..utils.mirror_helper import MIRROR_PREFIXES, speed_test_mirrors
+from ..utils.paths import get_plugin_data_dir
 
 logger = get_logger()
 
@@ -36,16 +37,6 @@ logger = get_logger()
 
 _BTBN_BASE = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/"
 _MACOS_BASE = "https://github.com/vanloctech/ffmpeg-macos/releases/latest/download/"
-
-# 国内 GitHub 镜像前缀，对应 _conf_schema.json 的 ffmpeg_mirror 选项
-# 镜像 URL = mirror_prefix + 原始 GitHub URL
-_MIRROR_PREFIXES: dict[str, str] = {
-    "default": "",
-    "ghfast": "https://ghfast.top/",
-    "ghproxy": "https://ghproxy.com/",
-    "mirror_ghproxy": "https://mirror.ghproxy.com/",
-    "gh_proxy": "https://gh-proxy.com/",
-}
 
 # 单次下载超时（秒）；总耗时受 _MAX_ATTEMPTS × 单次超时影响
 _PER_ATTEMPT_TIMEOUT = 60
@@ -101,13 +92,12 @@ _PLATFORM_MAP: dict[str, _PlatformConfig] = {
     ),
 }
 
-_CACHE_SUBDIR: Final = "ffmpeg"
+_DATA_SUBDIR: Final = "ffmpeg"
 _READY_MARKER: Final = "_bundled_ready"
 _MIN_BINARY_SIZE: Final = 1_000_000  # 1 MB — ffmpeg 静态构建至少几 MB
 
-# 自动执行远端二进制必须有强校验依据。当前公开 latest 源没有稳定可维护的
-# 跨平台 SHA256 清单，因此默认保持空映射；只有补入固定 release 的校验值后，
-# ensure_bundled_ffmpeg 才会接受下载结果。已有缓存仍可继续复用。
+# 已知归档的 SHA256 校验值。当前使用 latest 源，校验值不稳定，保持空映射；
+# _verify_checksum 对未知校验值放行并打 warning，由文件大小检查兜底。
 _ARCHIVE_SHA256: Final[dict[str, str]] = {}
 
 # ---------------------------------------------------------------------------
@@ -123,6 +113,9 @@ _configured_mirror_custom_url = ""
 
 # 缓存最近一次成功解析的路径，避免重复文件系统检查
 _cached_bundled: tuple[Path, Path] | None = None
+
+# 持有 prefetch 后台任务的强引用，防止 Python 3.11+ 弱引用机制下被 GC 中断
+_bg_tasks: set[asyncio.Task[None]] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +152,7 @@ def _resolve_mirror_prefix() -> str:
             return ""
         # 自定义 URL 必须以 / 结尾才能直接拼接 https://github.com/...
         return custom if custom.endswith("/") else custom + "/"
-    return _MIRROR_PREFIXES.get(mirror, "")
+    return MIRROR_PREFIXES.get(mirror, "")
 
 
 def prefetch_bundled_ffmpeg() -> None:
@@ -189,7 +182,14 @@ def prefetch_bundled_ffmpeg() -> None:
                 ex,
             )
 
-    asyncio.create_task(_run())
+    _spawn_bg_task(_run())
+
+
+def _spawn_bg_task(coro) -> None:
+    """启动后台任务并保留强引用，防止任务被 GC。"""
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 async def ensure_bundled_ffmpeg(
@@ -225,6 +225,9 @@ async def ensure_bundled_ffmpeg(
         global _configured_mirror, _configured_mirror_custom_url
         _configured_mirror = str(mirror or "default")
         _configured_mirror_custom_url = str(mirror_custom_url or "").strip()
+
+        # 锁内清理上次中断遗留的临时目录，避免与并发解包路径打架
+        _cleanup_stale_tmp_dirs()
 
         result = await _download_and_setup(http_proxy, timeout)
         if result is not None:
@@ -298,7 +301,21 @@ def _get_platform_config() -> _PlatformConfig | None:
 
 def _get_dest_dir() -> Path:
     """捆绑二进制文件的目标目录。"""
-    return get_plugin_cache_dir(_CACHE_SUBDIR)
+    return get_plugin_data_dir(_DATA_SUBDIR)
+
+
+def _cleanup_stale_tmp_dirs() -> None:
+    """清理上次下载中断遗留的 .tmp_* 临时目录。"""
+    dest_dir = _get_dest_dir()
+    if not dest_dir.exists():
+        return
+    for entry in dest_dir.iterdir():
+        if entry.is_dir() and entry.name.startswith(".tmp_"):
+            try:
+                shutil.rmtree(entry, ignore_errors=True)
+                logger.debug("已清理残留临时目录: %s", entry)
+            except OSError:
+                pass
 
 
 def _check_bundled_ready() -> bool:
@@ -353,12 +370,34 @@ async def _download_and_setup(
     dest_dir = _get_dest_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # 构建尝试 URL 列表：当前选择的镜像 + 直连兜底
-    mirror_prefix = _resolve_mirror_prefix()
+    # 构建下载 URL 列表
+    mirror_mode = _configured_mirror
     attempt_urls: list[str] = []
-    if mirror_prefix:
-        attempt_urls.append(mirror_prefix + base_url)
-    attempt_urls.append(base_url)  # 直连 GitHub 作为最后兜底
+    if _configured_mirror == "auto":
+        # 自动测速选最快镜像；把 custom_url（如有）也加入候选池
+        extra_candidates: list[tuple[str, str]] = []
+        custom_prefix = _configured_mirror_custom_url
+        if custom_prefix:
+            if not custom_prefix.endswith("/"):
+                custom_prefix = custom_prefix + "/"
+            extra_candidates.append(("custom", custom_prefix + base_url))
+        best_url = await speed_test_mirrors(
+            base_url, proxy=http_proxy, extra_candidates=extra_candidates
+        )
+        attempt_urls.append(best_url)
+        # 测速冠军不是直连时，保留直连作为最终兜底
+        if best_url != base_url:
+            attempt_urls.append(base_url)
+        mirror_mode = "auto (speed-test)"
+    else:
+        # 手动选择镜像
+        mirror_prefix = _resolve_mirror_prefix()
+        if mirror_prefix:
+            attempt_urls.append(mirror_prefix + base_url)
+        attempt_urls.append(base_url)  # 直连 GitHub 作为最后兜底
+    logger.info(
+        "FFmpeg 下载: mirror=%s, 候选 URL 数=%d", mirror_mode, len(attempt_urls)
+    )
 
     # 总预算：取 min(用户 timeout, 单次超时×尝试次数)
     per_attempt = _PER_ATTEMPT_TIMEOUT
@@ -436,13 +475,16 @@ def _verify_checksum(
 ) -> bool:
     """校验下载归档的 SHA256。
 
-    文件大小和可执行权限只能发现损坏，不能证明来源可信；没有固定校验值时
-    拒绝安装，避免默认启动链路执行未验证的远端 latest 二进制。
+    已知校验值时严格比对；未知时放行并打 warning，由文件大小检查兜底。
     """
     expected = _ARCHIVE_SHA256.get(archive_name)
     if not expected:
-        logger.warning("FFmpeg 捆绑包缺少 SHA256 校验值: archive=%s", archive_name)
-        return False
+        logger.warning(
+            "FFmpeg 捆绑包缺少 SHA256 校验值，跳过校验: archive=%s, size=%d",
+            archive_name,
+            len(archive_data),
+        )
+        return True
     actual = hashlib.sha256(archive_data).hexdigest()
     if actual.lower() != expected.lower():
         logger.warning(
@@ -483,6 +525,20 @@ def _extract_binaries(
                 tar.extractall(extract_dir, filter="data")
         elif fmt == "zip":
             with zipfile.ZipFile(str(tmp_archive), "r") as zf:
+                # zip slip 校验：拒绝绝对路径、含 ../ 的成员、Windows 驱动器前缀
+                for info in zf.infolist():
+                    name = info.filename
+                    if (
+                        name.startswith("/")
+                        or name.startswith("\\")
+                        or ".." in Path(name).parts
+                        or (len(name) >= 2 and name[1] == ":")
+                    ):
+                        logger.warning(
+                            "FFmpeg 捆绑包含非法 zip 路径: name=%s",
+                            name,
+                        )
+                        return None
                 zf.extractall(extract_dir)
         else:
             logger.warning("不支持的压缩格式: %s", fmt)

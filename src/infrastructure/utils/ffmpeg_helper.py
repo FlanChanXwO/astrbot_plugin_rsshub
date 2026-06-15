@@ -25,7 +25,7 @@ class FFmpegTool:
     _ffprobe_exe_cache: str | None = None
     _ffmpeg_exe_cache_source: str | None = None
     _ffprobe_exe_cache_source: str | None = None
-    _ffmpeg_source: str = "auto"  # "auto" | "system" | "bundled"
+    _ffmpeg_source: str = "auto"  # "auto" | "system"
 
     _GIF_TRANSCODE_FPS: Final = 30
     _GIF_TRANSCODE_SCALE: Final = "iw:-1"
@@ -81,7 +81,7 @@ class FFmpegTool:
             logger.debug("Using system ffmpeg: %s", FFmpegTool._ffmpeg_exe_cache)
             return FFmpegTool._ffmpeg_exe_cache
 
-        if auto_install and FFmpegTool._ffmpeg_source in ("auto", "bundled"):
+        if auto_install and FFmpegTool._ffmpeg_source != "system":
             from .ffmpeg_bundler import get_bundled_ffmpeg_path
 
             bundled = get_bundled_ffmpeg_path()
@@ -142,7 +142,7 @@ class FFmpegTool:
             FFmpegTool._ffprobe_exe_cache_source = "system"
             return FFmpegTool._ffprobe_exe_cache
 
-        if auto_install and FFmpegTool._ffmpeg_source in ("auto", "bundled"):
+        if auto_install and FFmpegTool._ffmpeg_source != "system":
             from .ffmpeg_bundler import get_bundled_ffprobe_path
 
             bundled = get_bundled_ffprobe_path()
@@ -843,7 +843,10 @@ class FFmpegTool:
     ) -> None:
         """配置 ffmpeg bundler 的代理、超时、来源模式和镜像（启动时调用）。"""
         new_source = str(ffmpeg_source or "auto")
-        if new_source not in ("auto", "system", "bundled"):
+        if new_source == "bundled":
+            logger.warning("ffmpeg_source 'bundled' 已合并为 'auto'，请更新配置")
+            new_source = "auto"
+        if new_source not in ("auto", "system"):
             new_source = "auto"
         if new_source != FFmpegTool._ffmpeg_source:
             FFmpegTool._clear_ffmpeg_cache()
@@ -862,7 +865,7 @@ class FFmpegTool:
     @staticmethod
     def prefetch_bundled_ffmpeg() -> None:
         """后台异步预取 ffmpeg 捆绑包，不阻塞插件启动。"""
-        if FFmpegTool._ffmpeg_source != "bundled":
+        if FFmpegTool._ffmpeg_source == "system":
             return
         from .ffmpeg_bundler import prefetch_bundled_ffmpeg
 
@@ -870,8 +873,8 @@ class FFmpegTool:
 
     @staticmethod
     def allows_bundled_download() -> bool:
-        """返回当前配置是否允许首次联网下载捆绑 FFmpeg。"""
-        return FFmpegTool._ffmpeg_source == "bundled"
+        """返回当前配置是否允许联网下载捆绑 FFmpeg。"""
+        return FFmpegTool._ffmpeg_source != "system"
 
     @staticmethod
     def _clear_ffmpeg_cache() -> None:

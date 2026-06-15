@@ -38,7 +38,7 @@
 
 ### 插件负责
 
-- Feed 抓取、去重、调度和推送
+- Feed 抓取（RSS 2.0、Atom 1.0、JSON Feed 1.0/1.1）、去重、调度和推送
 - 用户/订阅/推送历史持久化
 - Plugin Pages 管理界面
 - 多平台 sender 适配

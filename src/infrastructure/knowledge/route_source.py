@@ -15,23 +15,45 @@ from ...application.ports.route_knowledge import (
 )
 from ...infrastructure.config import RouteKnowledgeSettings
 from ..fetcher.http import HttpFetcher
+from ..utils.logger import get_logger
+from ..utils.mirror_helper import speed_test_mirrors
+
+logger = get_logger()
 
 GITHUB_RAW_BASE_URL = (
     "https://raw.githubusercontent.com/FlanChanXwO/rsshub-routes-knowledgebase/main"
 )
 
 
-def build_route_knowledge_source(
+async def build_route_knowledge_source(
     settings: RouteKnowledgeSettings,
     *,
     proxy: str = "",
 ) -> RouteKnowledgeSource:
-    mode = (settings.source_mode or "mirror").strip().lower()
+    mode = (settings.source_mode or "speed_test").strip().lower()
     if mode == "local":
         return LocalRouteKnowledgeSource(settings.local_source_dir)
     if mode == "github":
         return HttpRouteKnowledgeSource(
             GITHUB_RAW_BASE_URL,
+            timeout=settings.timeout,
+            proxy=proxy,
+        )
+    if mode == "speed_test":
+        # 测速选最快镜像，探测 metadata.json；测速失败时回退 GitHub 直连
+        probe_url = GITHUB_RAW_BASE_URL.rstrip("/") + "/metadata.json"
+        base_url = GITHUB_RAW_BASE_URL
+        try:
+            best_url = await speed_test_mirrors(probe_url, proxy=proxy)
+            base_url = best_url.rsplit("/metadata.json", 1)[0]
+        except Exception as ex:
+            logger.warning(
+                "Routes KB 镜像测速失败，回退 GitHub 直连: err_type=%s, err=%s",
+                type(ex).__name__,
+                ex,
+            )
+        return HttpRouteKnowledgeSource(
+            base_url,
             timeout=settings.timeout,
             proxy=proxy,
         )

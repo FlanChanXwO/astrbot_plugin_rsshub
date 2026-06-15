@@ -312,10 +312,15 @@ def _cleanup_stale_tmp_dirs() -> None:
     for entry in dest_dir.iterdir():
         if entry.is_dir() and entry.name.startswith(".tmp_"):
             try:
-                shutil.rmtree(entry, ignore_errors=True)
+                shutil.rmtree(entry)
                 logger.debug("已清理残留临时目录: %s", entry)
-            except OSError:
-                pass
+            except OSError as ex:
+                logger.debug(
+                    "清理残留临时目录失败: path=%s, err_type=%s, err=%s",
+                    entry,
+                    type(ex).__name__,
+                    ex,
+                )
 
 
 def _check_bundled_ready() -> bool:
@@ -381,14 +386,25 @@ async def _download_and_setup(
             if not custom_prefix.endswith("/"):
                 custom_prefix = custom_prefix + "/"
             extra_candidates.append(("custom", custom_prefix + base_url))
-        best_url = await speed_test_mirrors(
-            base_url, proxy=http_proxy, extra_candidates=extra_candidates
-        )
-        attempt_urls.append(best_url)
-        # 测速冠军不是直连时，保留直连作为最终兜底
-        if best_url != base_url:
+        try:
+            best_url = await speed_test_mirrors(
+                base_url, proxy=http_proxy, extra_candidates=extra_candidates
+            )
+        except Exception as ex:
+            # 测速本身异常（aiohttp / 事件循环问题等）时退到直连，避免影响下载
+            logger.warning(
+                "FFmpeg 下载: 镜像测速异常，回退直连 GitHub: err_type=%s, err=%s",
+                type(ex).__name__,
+                ex,
+            )
             attempt_urls.append(base_url)
-        mirror_mode = "auto (speed-test)"
+            mirror_mode = "auto (fallback-direct)"
+        else:
+            attempt_urls.append(best_url)
+            # 测速冠军不是直连时，保留直连作为最终兜底
+            if best_url != base_url:
+                attempt_urls.append(base_url)
+            mirror_mode = "auto (speed-test)"
     else:
         # 手动选择镜像
         mirror_prefix = _resolve_mirror_prefix()

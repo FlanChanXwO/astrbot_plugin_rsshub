@@ -60,23 +60,24 @@ async def speed_test_mirrors(
     mirror_names = ", ".join(label for label, _ in candidates)
     logger.info("镜像测速开始: 候选 = [%s]", mirror_names)
 
-    async def _probe(label: str, url: str) -> tuple[str, str, float]:
+    async def _probe(
+        session: aiohttp.ClientSession, label: str, url: str
+    ) -> tuple[str, str, float]:
         """返回 (label, url, elapsed)。失败时 url 为空。"""
         try:
-            async with aiohttp.ClientSession() as session:
-                start = time.monotonic()
-                async with session.head(
-                    url,
-                    timeout=aiohttp.ClientTimeout(total=probe_timeout),
-                    allow_redirects=True,
-                    proxy=proxy or None,
-                ) as resp:
-                    elapsed = time.monotonic() - start
-                    if resp.status < 400:
-                        logger.debug("镜像测速: %s = %.2fs", label, elapsed)
-                        return label, url, elapsed
-                    logger.debug("镜像测速: %s = HTTP %d", label, resp.status)
-                    return label, "", float("inf")
+            start = time.monotonic()
+            async with session.head(
+                url,
+                timeout=aiohttp.ClientTimeout(total=probe_timeout),
+                allow_redirects=True,
+                proxy=proxy or None,
+            ) as resp:
+                elapsed = time.monotonic() - start
+                if resp.status < 400:
+                    logger.debug("镜像测速: %s = %.2fs", label, elapsed)
+                    return label, url, elapsed
+                logger.debug("镜像测速: %s = HTTP %d", label, resp.status)
+                return label, "", float("inf")
         except Exception as ex:
             logger.debug(
                 "镜像测速: %s = 不可达 (err_type=%s, err=%s)",
@@ -86,8 +87,11 @@ async def speed_test_mirrors(
             )
             return label, "", float("inf")
 
-    # 并发探测
-    results = await asyncio.gather(*[_probe(label, url) for label, url in candidates])
+    # 共享一个 session + connector，所有候选并发探测，省连接 / SSL 握手开销
+    async with aiohttp.ClientSession() as session:
+        results = await asyncio.gather(
+            *[_probe(session, label, url) for label, url in candidates]
+        )
 
     # 选最快
     best_label = ""

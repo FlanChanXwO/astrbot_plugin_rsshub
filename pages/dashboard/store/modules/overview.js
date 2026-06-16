@@ -4,7 +4,7 @@ import {
   CHART_COLORS,
   chartGridColor,
   chartTextColor,
-  createLineChartOptions,
+  createPushSuccessLineChartOptions,
   formatBucketLabel,
   percentLabel,
 } from './charts.js';
@@ -192,7 +192,7 @@ export const overviewModule = {
   },
 
   lineChartOptions(points) {
-    return createLineChartOptions(points);
+    return createPushSuccessLineChartOptions(points);
   },
 
   barChartOptions() {

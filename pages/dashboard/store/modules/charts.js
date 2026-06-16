@@ -51,13 +51,12 @@ export function buildPushSuccessDataset(points) {
   };
 }
 
-export function createLineChartOptions(points) {
+export function createPushSuccessLineChartOptions(points) {
   return {
     responsive: true,
     maintainAspectRatio: false,
     interaction: { mode: 'index', intersect: false },
     layout: { padding: { top: 18, right: 16, bottom: 8, left: 4 } },
-    elements: { line: { spanGaps: true } },
     plugins: {
       legend: { display: false },
       tooltip: {

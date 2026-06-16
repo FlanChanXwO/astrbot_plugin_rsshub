@@ -4,6 +4,10 @@ data/
 # Reference clone for architecture analysis
 _ref/
 
+# Local agent planning artifacts
+.claude/
+goal-*/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

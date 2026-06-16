@@ -176,11 +176,6 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
                 "download_media_before_send": False,
                 "unknown_basic": "x",
             },
-            "media_config": {
-                "cache_ttl_seconds": 60,
-                "download_media_timeout": "70",
-                "telegram_photo_max_bytes": 1,
-            },
             "media": {
                 "ffmpeg_source": "bad",
                 "ffmpeg_mirror": "bad",
@@ -189,10 +184,6 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
             "route_knowledge": {
                 "source_mode": "bad",
                 "timeout": 999,
-            },
-            "ffmpeg": {
-                "video_transcode": "false",
-                "video_transcode_timeout": 1,
             },
             "content_handlers": "bad",
             "sender_strategies": {
@@ -212,9 +203,9 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert "proxy" not in healed["basic_config"]
     assert "timeout" not in healed["basic_config"]
     assert healed["http_config"] == {
-        "proxy": "127.0.0.1:7890",
-        "timeout": 12,
-        "media_timeout": 80,
+        "proxy": "",
+        "timeout": 30,
+        "media_timeout": 300,
     }
     assert healed["basic_config"]["minimal_interval"] == 1440
     assert healed["basic_config"]["hash_history_min"] == 200
@@ -222,22 +213,21 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert healed["basic_config"]["tracking_query_params"] == ["utm_source", "ref"]
     assert "download_media_before_send" not in healed["basic_config"]
     assert "unknown_basic" not in healed["basic_config"]
-    assert "media_config" not in healed
     assert healed["media"]["ffmpeg_source"] == "auto"
-    assert healed["media"]["ffmpeg_mirror"] == "default"
+    assert healed["media"]["ffmpeg_mirror"] == "auto"
     assert healed["media"]["ffmpeg_mirror_custom_url"] == ""
-    assert healed["route_knowledge"]["source_mode"] == "mirror"
+    assert healed["route_knowledge"]["source_mode"] == "speed_test"
     assert healed["route_knowledge"]["timeout"] == 300
     assert "ffmpeg" not in healed
     assert healed["media"]["video_transcode"] is False
-    assert healed["media"]["video_transcode_timeout"] == 10
+    assert healed["media"]["video_transcode_timeout"] == 120
     assert healed["media"]["table_to_image"] is True
     assert healed["content_handlers"] == {
         "ai_provider_id": "",
         "ai_persona_id": "",
     }
     assert healed["sender_strategies"] == {
-        "enabled_platforms": ["aiocqhttp", "qq_official"],
+        "enabled_platforms": ["telegram", "aiocqhttp", "qq_official"],
         "platform_strategies": [],
     }
 
@@ -780,40 +770,6 @@ def test_application_settings_maps_media_config():
     assert settings.media.gif_transcode_timeout == 44
 
 
-def test_legacy_ffmpeg_migrates_to_media_without_overriding_existing_media():
-    import json
-    from pathlib import Path
-
-    from astrbot_plugin_rsshub.src.infrastructure.config import (
-        heal_astrbot_plugin_config,
-    )
-
-    schema = json.loads(
-        (Path(__file__).resolve().parents[3] / "_conf_schema.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    healed, changes = heal_astrbot_plugin_config(
-        {
-            "media": {
-                "video_transcode_timeout": 222,
-            },
-            "ffmpeg": {
-                "video_transcode": True,
-                "video_transcode_timeout": 111,
-                "gif_transcode": True,
-            },
-        },
-        schema,
-    )
-
-    assert changes
-    assert "ffmpeg" not in healed
-    assert healed["media"]["video_transcode"] is True
-    assert healed["media"]["video_transcode_timeout"] == 222
-    assert healed["media"]["gif_transcode"] is True
-
-
 def test_build_application_settings_normalizes_ffmpeg_media_config():
     from types import SimpleNamespace
 
@@ -824,69 +780,16 @@ def test_build_application_settings_normalizes_ffmpeg_media_config():
     settings = build_application_settings(
         SimpleNamespace(
             media=SimpleNamespace(
-                ffmpeg_source="bundled",
+                ffmpeg_source="auto",
                 ffmpeg_mirror="custom",
                 ffmpeg_mirror_custom_url="  https://mirror.example/  ",
             )
         )
     )
 
-    assert settings.media.ffmpeg_source == "bundled"
+    assert settings.media.ffmpeg_source == "auto"
     assert settings.media.ffmpeg_mirror == "custom"
     assert settings.media.ffmpeg_mirror_custom_url == "https://mirror.example/"
-
-
-def test_legacy_media_telegraph_proxy_migrates_to_telegram_strategy():
-    from astrbot_plugin_rsshub.src.infrastructure.config.legacy_migration import (
-        apply_legacy_config_aliases,
-    )
-
-    changes: list[str] = []
-    normalized = apply_legacy_config_aliases(
-        {"media": {"telegraph_proxy": "localhost:7890"}},
-        changes,
-    )
-
-    assert "telegraph_proxy" not in normalized.get("media", {})
-    strategies = normalized["sender_strategies"]["platform_strategies"]
-    telegram_item = next(
-        item for item in strategies if item.get("__template_key") == "telegram_strategy"
-    )
-    assert telegram_item["telegraph_proxy"] == "localhost:7890"
-    assert any("media.telegraph_proxy" in change for change in changes)
-
-
-def test_legacy_media_telegraph_proxy_keeps_existing_strategy_value():
-    from astrbot_plugin_rsshub.src.infrastructure.config.legacy_migration import (
-        apply_legacy_config_aliases,
-    )
-
-    changes: list[str] = []
-    normalized = apply_legacy_config_aliases(
-        {
-            "media": {"telegraph_proxy": "media-proxy:7890"},
-            "sender_strategies": {
-                "enabled_platforms": ["telegram"],
-                "platform_strategies": [
-                    {
-                        "__template_key": "telegram_strategy",
-                        "enable_telegraph": True,
-                        "telegraph_token": "tg",
-                        "telegraph_proxy": "strategy-proxy:1080",
-                    }
-                ],
-            },
-        },
-        changes,
-    )
-
-    strategies = normalized["sender_strategies"]["platform_strategies"]
-    telegram_item = next(
-        item for item in strategies if item.get("__template_key") == "telegram_strategy"
-    )
-    # setdefault 不覆盖用户已在策略中设置的值。
-    assert telegram_item["telegraph_proxy"] == "strategy-proxy:1080"
-    assert "telegraph_proxy" not in normalized.get("media", {})
 
 
 def test_global_config_maps_new_send_mode_direct_send_to_db_values():

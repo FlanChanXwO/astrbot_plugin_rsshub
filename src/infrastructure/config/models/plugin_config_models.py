@@ -174,28 +174,20 @@ class GlobalConfig(BaseModel):
         return cls.model_validate({**cls().model_dump(), **(data or {})})
 
 
-class FFmpegConfig(BaseModel):
-    """FFmpeg 配置"""
-
-    video_transcode: bool = Field(default=False, description="视频转码")
-    video_transcode_timeout: int = Field(default=120, description="视频转码超时")
-    gif_transcode: bool = Field(default=False, description="GIF转码")
-    gif_transcode_timeout: int = Field(default=60, description="GIF转码超时")
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> FFmpegConfig:
-        if not data:
-            return cls()
-        return cls.model_validate({**cls().model_dump(), **(data or {})})
-
-
 class MediaConfig(BaseModel):
-    """兼容旧配置；新配置请使用 HttpConfig.media_timeout。"""
+    """媒体与转码配置，字段集与 _conf_schema.json media.items 对齐。"""
 
-    download_media_timeout: int = Field(
-        default=_DEFAULT_MEDIA_TIMEOUT_SECONDS,
-        description="媒体下载超时",
-    )
+    image_relay_base_url: str = Field(default="", description="图片反代基础URL")
+    media_relay_base_url: str = Field(default="", description="通用媒体反代基础URL")
+    media_download_concurrency: int = Field(default=1, description="媒体预下载并发数")
+    table_to_image: bool = Field(default=True, description="HTML表格转图片")
+    video_transcode: bool = Field(default=False, description="视频转码为MP4(H264)")
+    video_transcode_timeout: int = Field(default=120, description="视频转码超时（秒）")
+    gif_transcode: bool = Field(default=False, description="无声视频自动转GIF")
+    gif_transcode_timeout: int = Field(default=60, description="GIF转码超时（秒）")
+    ffmpeg_source: str = Field(default="auto", description="FFmpeg来源")
+    ffmpeg_mirror: str = Field(default="auto", description="FFmpeg下载镜像")
+    ffmpeg_mirror_custom_url: str = Field(default="", description="自定义FFmpeg镜像URL")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> MediaConfig:
@@ -244,7 +236,7 @@ class RouteKnowledgeConfig(BaseModel):
     rerank_provider_id: str = Field(
         default="", description="默认重排序模型 Provider ID"
     )
-    source_mode: str = Field(default="mirror", description="知识库来源模式")
+    source_mode: str = Field(default="speed_test", description="知识库来源模式")
     source_base_url: str = Field(
         default=(
             "https://raw.githubusercontent.com/"
@@ -278,8 +270,7 @@ class RsshubPluginConfig(BaseModel):
     basic_config: BasicConfig = Field(default_factory=BasicConfig)
     http_config: HttpConfig = Field(default_factory=HttpConfig)
     global_config: GlobalConfig = Field(default_factory=GlobalConfig)
-    media_config: MediaConfig = Field(default_factory=MediaConfig)
-    ffmpeg: FFmpegConfig = Field(default_factory=FFmpegConfig)
+    media: MediaConfig = Field(default_factory=MediaConfig)
     content_handlers: ContentHandlersConfig = Field(
         default_factory=ContentHandlersConfig
     )
@@ -299,7 +290,7 @@ class RsshubPluginConfig(BaseModel):
         astrbot_config = dict(astrbot_config)
         astrbot_config.pop("download_image_before_send", None)
         http_cfg = dict(astrbot_config.get("http_config") or {})
-        media_cfg = dict(astrbot_config.get("media_config") or {})
+        media_cfg = dict(astrbot_config.get("media") or {})
         if "m3u8_download_timeout" in astrbot_config:
             http_cfg.setdefault(
                 "media_timeout", astrbot_config.pop("m3u8_download_timeout")
@@ -323,7 +314,6 @@ class RsshubPluginConfig(BaseModel):
             )
 
         global_cfg = astrbot_config.get("global_config", {})
-        ffmpeg_cfg = astrbot_config.get("ffmpeg", {})
         content_handlers_cfg = astrbot_config.get("content_handlers", {})
         sender_strategies_cfg = astrbot_config.get("sender_strategies")
         route_knowledge_cfg = astrbot_config.get("route_knowledge", {})
@@ -332,8 +322,7 @@ class RsshubPluginConfig(BaseModel):
             basic_config=BasicConfig.from_dict(basic_cfg),
             http_config=HttpConfig.from_dict(http_cfg),
             global_config=GlobalConfig.from_dict(global_cfg),
-            media_config=MediaConfig.from_dict(media_cfg),
-            ffmpeg=FFmpegConfig.from_dict(ffmpeg_cfg),
+            media=MediaConfig.from_dict(media_cfg),
             content_handlers=ContentHandlersConfig.from_dict(content_handlers_cfg),
             sender_strategies=SenderStrategiesConfig.from_config(sender_strategies_cfg),
             route_knowledge=RouteKnowledgeConfig.from_dict(route_knowledge_cfg),
@@ -346,7 +335,6 @@ class RsshubPluginConfig(BaseModel):
         config_dict.get("basic_config", {}).pop("download_media_timeout", None)
         config_dict.get("basic_config", {}).pop("proxy", None)
         config_dict.get("basic_config", {}).pop("timeout", None)
-        config_dict.pop("media_config", None)
         config_dict["sender_strategies"] = self.sender_strategies.to_config_dict()
         return config_dict
 

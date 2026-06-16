@@ -25,7 +25,6 @@ def mock_config():
         "rsshub": {
             "db": {"database": "test.db"},
             "basic": {"timeout": 30, "proxy": ""},
-            "ffmpeg": {"video_transcode": False},
         }
     }
 

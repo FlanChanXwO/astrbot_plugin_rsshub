@@ -384,39 +384,29 @@ def build_application_settings(config: Any) -> ApplicationSettings:
         http=http,
         media_platform_limits=media_platform_limits,
         media=MediaSettings(
-            **{
-                **_propagate_fields(media_cfg, MediaSettings),
-                "image_relay_base_url": str(
-                    _get_value(media_cfg, "image_relay_base_url", "") or ""
-                ).strip(),
-                "media_relay_base_url": str(
-                    _get_value(media_cfg, "media_relay_base_url", "") or ""
-                ).strip(),
-                "media_download_concurrency": max(
-                    1, int(_get_value(media_cfg, "media_download_concurrency", 1) or 1)
-                ),
-                "table_to_image": bool(_get_value(media_cfg, "table_to_image", True)),
-                "video_transcode": bool(
-                    _get_value(media_cfg, "video_transcode", False)
-                ),
-                "video_transcode_timeout": max(
-                    1,
-                    int(_get_value(media_cfg, "video_transcode_timeout", 120) or 120),
-                ),
-                "gif_transcode": bool(_get_value(media_cfg, "gif_transcode", False)),
-                "gif_transcode_timeout": max(
-                    1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
-                ),
-                "ffmpeg_source": str(
-                    _get_value(media_cfg, "ffmpeg_source", "auto") or "auto"
-                ),
-                "ffmpeg_mirror": str(
-                    _get_value(media_cfg, "ffmpeg_mirror", "auto") or "auto"
-                ),
-                "ffmpeg_mirror_custom_url": str(
-                    _get_value(media_cfg, "ffmpeg_mirror_custom_url", "") or ""
-                ).strip(),
-            }
+            image_relay_base_url=str(
+                _get_value(media_cfg, "image_relay_base_url", "") or ""
+            ).strip(),
+            media_relay_base_url=str(
+                _get_value(media_cfg, "media_relay_base_url", "") or ""
+            ).strip(),
+            media_download_concurrency=max(
+                1, int(_get_value(media_cfg, "media_download_concurrency", 1) or 1)
+            ),
+            table_to_image=bool(_get_value(media_cfg, "table_to_image", True)),
+            video_transcode=bool(_get_value(media_cfg, "video_transcode", False)),
+            video_transcode_timeout=max(
+                1, int(_get_value(media_cfg, "video_transcode_timeout", 120) or 120)
+            ),
+            gif_transcode=bool(_get_value(media_cfg, "gif_transcode", False)),
+            gif_transcode_timeout=max(
+                1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
+            ),
+            ffmpeg_source=str(_get_value(media_cfg, "ffmpeg_source", "auto") or "auto"),
+            ffmpeg_mirror=str(_get_value(media_cfg, "ffmpeg_mirror", "auto") or "auto"),
+            ffmpeg_mirror_custom_url=str(
+                _get_value(media_cfg, "ffmpeg_mirror_custom_url", "") or ""
+            ).strip(),
         ),
         route_knowledge=RouteKnowledgeSettings(
             kb_name=str(

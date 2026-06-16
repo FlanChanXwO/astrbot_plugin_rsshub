@@ -141,17 +141,17 @@ class MediaPlatformLimits:
 class MediaSettings:
     """Public media sending settings used by senders."""
 
-    image_relay_base_url: str
-    media_relay_base_url: str
-    media_download_concurrency: int
-    table_to_image: bool
-    video_transcode: bool
-    video_transcode_timeout: int
-    gif_transcode: bool
-    gif_transcode_timeout: int
-    ffmpeg_source: str
-    ffmpeg_mirror: str
-    ffmpeg_mirror_custom_url: str
+    image_relay_base_url: str = ""
+    media_relay_base_url: str = ""
+    media_download_concurrency: int = 1
+    table_to_image: bool = True
+    video_transcode: bool = False
+    video_transcode_timeout: int = 120
+    gif_transcode: bool = False
+    gif_transcode_timeout: int = 60
+    ffmpeg_source: str = "auto"
+    ffmpeg_mirror: str = "auto"
+    ffmpeg_mirror_custom_url: str = ""
 
 
 @dataclass(frozen=True)

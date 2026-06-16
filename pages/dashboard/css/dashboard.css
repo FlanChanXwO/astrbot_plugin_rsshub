@@ -9,10 +9,11 @@
 .overview-chart-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 16px; margin-top: 16px; }
 .overview-chart-panel { min-width: 0; border: 1px solid #e2e8f0; border-radius: 8px; background: white; padding: 16px; }
 .overview-chart-panel-wide { grid-column: 1 / -1; }
-.overview-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.overview-chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .overview-chart-head h3 { margin: 0; color: #1b1c1d; font-size: 15px; font-weight: 700; }
-.overview-chart-meta { min-width: 0; color: #94a3b8; font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.overview-chart-canvas { position: relative; width: 100%; height: 260px; min-width: 0; }
+.overview-chart-meta { min-width: 0; max-width: min(100%, 420px); color: #94a3b8; font-size: 12px; line-height: 1.45; text-align: right; overflow-wrap: anywhere; }
+.overview-chart-canvas { position: relative; width: 100%; height: 280px; min-width: 0; }
+.overview-chart-panel-wide .overview-chart-canvas { height: 340px; }
 .overview-chart-canvas-small { height: 220px; }
 .overview-doughnut-layout { display: grid; grid-template-columns: minmax(190px, 0.8fr) minmax(260px, 1.2fr); gap: 18px; align-items: center; }
 .overview-doughnut-canvas { height: 300px; }
@@ -309,7 +310,8 @@ textarea.select-input { resize: vertical; line-height: 1.5; }
   .overview-chart-panel { padding: 14px; }
   .overview-chart-head { align-items: flex-start; flex-direction: column; gap: 4px; }
   .overview-chart-meta { text-align: left; white-space: normal; }
-  .overview-chart-canvas { height: 240px; }
+  .overview-chart-canvas,
+  .overview-chart-panel-wide .overview-chart-canvas { height: 280px; }
   .overview-doughnut-canvas { height: 260px; }
   .overview-health-summary { grid-template-columns: 1fr; }
   .segmented-control { width: 100%; justify-content: stretch; }

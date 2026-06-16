@@ -21,6 +21,7 @@
 - `history_entry_limit` 现在只限制本轮尝试分发数量，不再把未尝试分发的条目提前写入水位。
 - Plugin Pages 布局从顶部指标 + 横向标签页改为左侧侧边栏 + 页面内容区；原指标卡移动到「概览」页，列表页高度占用更少。
 - 订阅、用户、Feed 和推送历史列表筛选改为紧凑筛选栏：关键词搜索常驻，精确条件通过「筛选列 + 筛选值 + 添加条件」生成 chip；刷新按钮改为 icon-only。
+- 订阅、用户、Feed 和推送历史列表移除与刷新按钮位置重复的「搜索」按钮，关键词输入回车与刷新按钮继续保留。
 - LLM tools 从单文件 `src/application/llmtools.py` 拆分为 `src/application/llmtools/` 包，保持 `build_llm_tools` 与 `LLM_TOOL_NAMES` 对外导入不变。
 - 优化 AI tool 描述、`skills/rsshub-agent-tools/SKILL.md` 与 `docs/usage/ai-tools.md`，让 agent 更明确区分订阅、用户默认、会话默认、handlers、push history 和一次性 XML/HTML 直推。
 - 原始顺序排版 `style=original` 的 layout 文本现在同样遵守订阅最终生效的 `length_limit`；`length_limit<=0` 时保持完整正文。
@@ -36,6 +37,7 @@
 - 修复 `original` 模式下长正文 layout text 未按 `length_limit` 裁剪的问题，同时保持原解析结果和历史正文不被改写。
 - 修复 original layout 中 PDF/doc 等文档链接可能被误按图片路径处理的风险；文档链接继续作为 file 媒体走文件/尾部组件。
 - 修复 Plugin Pages 从「概览」切换到其他侧边栏项时可能无法切换的问题；Chart.js 实例不再放入 PetiteVue reactive state。
+- 修复 Plugin Pages「概览」推送成功率折线图空间拥挤，以及稀疏历史节点没有连线的问题。
 - 修复推送历史状态聚合排序不稳定的问题。
 
 ### Removed

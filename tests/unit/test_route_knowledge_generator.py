@@ -6,12 +6,18 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
+_KB_SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / ".github"
+    / "scripts"
+    / "generate_knowledgebase.py"
+)
+
 
 def _load_generator():
-    script = (
-        Path(__file__).parents[2] / ".github" / "scripts" / "generate_knowledgebase.py"
-    )
-    spec = importlib.util.spec_from_file_location("generate_knowledgebase", script)
+    spec = importlib.util.spec_from_file_location("generate_knowledgebase", _KB_SCRIPT)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -20,6 +26,10 @@ def _load_generator():
     return module
 
 
+@pytest.mark.skipif(
+    not _KB_SCRIPT.exists(),
+    reason="KB generator script lives in external repo; only present in CI envs that vendor it",
+)
 def test_route_knowledge_generator_writes_metadata(tmp_path, monkeypatch):
     module = _load_generator()
     routes_json = tmp_path / "routes.json"

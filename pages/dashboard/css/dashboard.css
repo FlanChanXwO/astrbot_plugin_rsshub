@@ -88,7 +88,6 @@
 .compact-filter-funnel { flex: 0 0 auto; position: static; transform: none; color: #64748b; }
 .compact-filter-field { flex: 0 0 150px; min-width: 130px; }
 .compact-filter-value { flex: 1 1 190px; min-width: 160px; max-width: 280px; }
-.compact-search-button { min-width: 90px; }
 .compact-clear-button { min-width: 72px; }
 .compact-toolbar-spacer { flex: 1 1 40px; min-width: 0; }
 .compact-filter-row > .btn-icon { flex: 0 0 40px; }
@@ -296,12 +295,10 @@ textarea.select-input { resize: vertical; line-height: 1.5; }
   .compact-filter-funnel,
   .compact-filter-field,
   .compact-filter-value,
-  .compact-search-button,
   .compact-clear-button,
   .compact-filter-row > .btn:not(.btn-icon) { grid-column: 1 / -1; width: 100%; }
   .compact-filter-row > .btn-add-circle { grid-column: 1; width: 40px; justify-self: start; }
   .compact-filter-row > .btn-icon { grid-column: 2; grid-row: auto; justify-self: end; }
-  .compact-search-button { min-width: 0; }
   .compact-filter-chips { gap: 6px; }
   .filter-chip { max-width: 100%; }
   .dashboard-content { min-height: auto; display: block; overflow: visible; padding-bottom: 0; scrollbar-gutter: auto; }

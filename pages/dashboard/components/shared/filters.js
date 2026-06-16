@@ -73,7 +73,6 @@ export function compactFilterToolbarTemplate({
         </select>
         ${compactFilterInput(groupName, activeFieldExpr)}
         <button class="btn btn-add-circle" type="button" title="添加筛选条件" aria-label="添加筛选条件" @click="addCompactFilterCondition('${groupName}')">+</button>
-        <button class="btn btn-primary compact-search-button" type="button" :class="{ 'is-loading': isPending('${pendingKey}') }" :disabled="isPending('${pendingKey}')" @click="runPending('${pendingKey}', () => ${loadAction})"><span aria-hidden="true">⌕</span><span>搜索</span></button>
         <button class="btn btn-secondary compact-clear-button" v-if="${hasFilters}()" type="button" :disabled="isPending('${pendingKey}')" @click="${clearAction}()">清空</button>
         <div class="compact-toolbar-spacer"></div>
         ${extraButtons.join('\n        ')}

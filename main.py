@@ -35,7 +35,7 @@ class RSSHubPlugin(Star):
         self._db_initialized = False
         self._web_api: WebApiHandler | None = None
         self._deps: PluginDeps = {}
-        self._app_settings = ApplicationSettings()
+        self._app_settings: ApplicationSettings | None = None
         self._push_job_queue = SessionPushQueue()
         self._notification_dispatcher = None
         self._runtime: PluginRuntime | None = None

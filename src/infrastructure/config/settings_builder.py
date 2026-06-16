@@ -23,7 +23,7 @@ from .models import (
     ContentHandlerSettings,
     FeedFetchSettings,
     HttpSettings,
-    MediaRuntimeSettings,
+    MediaPlatformLimits,
     MediaSettings,
     PlatformStrategySettings,
     RouteKnowledgeSettings,
@@ -73,31 +73,28 @@ def _normalize_route_knowledge_base_url(value: Any) -> str:
     return raw.replace(old, new)
 
 
-def _merge_legacy_ffmpeg_media(config: Any, media_cfg: Any) -> Any:
-    legacy_ffmpeg = _get_value(config, "ffmpeg")
-    if not isinstance(legacy_ffmpeg, dict):
-        return media_cfg
-    merged = dict(legacy_ffmpeg)
-    if isinstance(media_cfg, dict):
-        merged.update(media_cfg)
-    elif media_cfg is not None:
-        for key in (
-            "image_relay_base_url",
-            "media_relay_base_url",
-            "media_download_concurrency",
-            "table_to_image",
-            "video_transcode",
-            "video_transcode_timeout",
-            "gif_transcode",
-            "gif_transcode_timeout",
-            "ffmpeg_source",
-            "ffmpeg_mirror",
-            "ffmpeg_mirror_custom_url",
-        ):
-            value = getattr(media_cfg, key, None)
-            if value is not None:
-                merged[key] = value
-    return merged
+def _propagate_fields(source: Any, target_cls: type) -> dict[str, Any]:
+    """Copy same-named fields from a Pydantic/dataclass/dict source to a target's __init__ kwargs.
+
+    Fields not present on source are skipped (target must supply them explicitly).
+    """
+    import dataclasses
+
+    if dataclasses.is_dataclass(target_cls):
+        names = {f.name for f in dataclasses.fields(target_cls)}
+    else:
+        names = set(getattr(target_cls, "model_fields", {}).keys())
+    if source is None:
+        return {}
+    result: dict[str, Any] = {}
+    for name in names:
+        if isinstance(source, dict):
+            if name in source:
+                result[name] = source[name]
+        else:
+            if hasattr(source, name):
+                result[name] = getattr(source, name)
+    return result
 
 
 _SENDER_STRATEGY_KEYS: tuple[str, ...] = SENDER_STRATEGY_ENABLED_PLATFORMS
@@ -229,8 +226,7 @@ def build_application_settings(config: Any) -> ApplicationSettings:
     basic_cfg = _get_value(config, "basic_config")
     http_cfg = _get_value(config, "http_config")
     global_cfg = _get_value(config, "global_config")
-    legacy_media_cfg = _get_value(config, "media_config")
-    media_cfg = _merge_legacy_ffmpeg_media(config, _get_value(config, "media"))
+    media_cfg = _get_value(config, "media")
     content_handlers_cfg = _get_value(config, "content_handlers")
     sender_cfg = _get_value(config, "sender_strategies")
     route_knowledge_cfg = _get_value(config, "route_knowledge")
@@ -256,19 +252,7 @@ def build_application_settings(config: Any) -> ApplicationSettings:
             _get_value(
                 http_cfg,
                 "media_timeout",
-                _get_value(
-                    legacy_media_cfg,
-                    "download_media_timeout",
-                    _get_value(
-                        basic_cfg,
-                        "download_media_timeout",
-                        _get_value(
-                            config,
-                            "download_media_timeout",
-                            _DEFAULT_MEDIA_TIMEOUT_SECONDS,
-                        ),
-                    ),
-                ),
+                _DEFAULT_MEDIA_TIMEOUT_SECONDS,
             )
             or _DEFAULT_MEDIA_TIMEOUT_SECONDS
         ),
@@ -332,7 +316,7 @@ def build_application_settings(config: Any) -> ApplicationSettings:
         download_media_before_send=True,
         download_media_timeout=http.media_timeout,
     )
-    media_config = MediaRuntimeSettings(
+    media_platform_limits = MediaPlatformLimits(
         download_media_timeout=http.media_timeout,
         telegram_photo_max_bytes=TELEGRAM_PHOTO_MAX_BYTES,
         onebot_napcat_stream_mode=ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
@@ -398,31 +382,41 @@ def build_application_settings(config: Any) -> ApplicationSettings:
         content_handlers=_build_content_handler_settings(content_handlers_cfg),
         sender_strategies=_build_sender_strategy_settings(sender_cfg),
         http=http,
-        media_config=media_config,
+        media_platform_limits=media_platform_limits,
         media=MediaSettings(
-            image_relay_base_url=str(
-                _get_value(media_cfg, "image_relay_base_url", "") or ""
-            ).strip(),
-            media_relay_base_url=str(
-                _get_value(media_cfg, "media_relay_base_url", "") or ""
-            ).strip(),
-            media_download_concurrency=max(
-                1, int(_get_value(media_cfg, "media_download_concurrency", 1) or 1)
-            ),
-            table_to_image=bool(_get_value(media_cfg, "table_to_image", True)),
-            video_transcode=bool(_get_value(media_cfg, "video_transcode", False)),
-            video_transcode_timeout=max(
-                1, int(_get_value(media_cfg, "video_transcode_timeout", 120) or 120)
-            ),
-            gif_transcode=bool(_get_value(media_cfg, "gif_transcode", False)),
-            gif_transcode_timeout=max(
-                1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
-            ),
-            ffmpeg_source=str(_get_value(media_cfg, "ffmpeg_source", "auto") or "auto"),
-            ffmpeg_mirror=str(_get_value(media_cfg, "ffmpeg_mirror", "auto") or "auto"),
-            ffmpeg_mirror_custom_url=str(
-                _get_value(media_cfg, "ffmpeg_mirror_custom_url", "") or ""
-            ).strip(),
+            **{
+                **_propagate_fields(media_cfg, MediaSettings),
+                "image_relay_base_url": str(
+                    _get_value(media_cfg, "image_relay_base_url", "") or ""
+                ).strip(),
+                "media_relay_base_url": str(
+                    _get_value(media_cfg, "media_relay_base_url", "") or ""
+                ).strip(),
+                "media_download_concurrency": max(
+                    1, int(_get_value(media_cfg, "media_download_concurrency", 1) or 1)
+                ),
+                "table_to_image": bool(_get_value(media_cfg, "table_to_image", True)),
+                "video_transcode": bool(
+                    _get_value(media_cfg, "video_transcode", False)
+                ),
+                "video_transcode_timeout": max(
+                    1,
+                    int(_get_value(media_cfg, "video_transcode_timeout", 120) or 120),
+                ),
+                "gif_transcode": bool(_get_value(media_cfg, "gif_transcode", False)),
+                "gif_transcode_timeout": max(
+                    1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
+                ),
+                "ffmpeg_source": str(
+                    _get_value(media_cfg, "ffmpeg_source", "auto") or "auto"
+                ),
+                "ffmpeg_mirror": str(
+                    _get_value(media_cfg, "ffmpeg_mirror", "auto") or "auto"
+                ),
+                "ffmpeg_mirror_custom_url": str(
+                    _get_value(media_cfg, "ffmpeg_mirror_custom_url", "") or ""
+                ).strip(),
+            }
         ),
         route_knowledge=RouteKnowledgeSettings(
             kb_name=str(

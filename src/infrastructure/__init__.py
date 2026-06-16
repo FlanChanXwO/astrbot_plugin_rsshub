@@ -10,7 +10,6 @@ from typing import Any
 
 _EXPORT_MAP = {
     "BasicConfig": ("config", "BasicConfig"),
-    "FFmpegConfig": ("config", "FFmpegConfig"),
     "GlobalConfig": ("config", "GlobalConfig"),
     "RsshubPluginConfig": ("config", "RsshubPluginConfig"),
     "SenderStrategiesConfig": ("config", "SenderStrategiesConfig"),

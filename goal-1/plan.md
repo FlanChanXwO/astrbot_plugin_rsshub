@@ -28,7 +28,7 @@
 
 ## 验证方式
 
-每组修完跑 `pytest tests/ -v` 确认不引入新 fail。最终目票：全部通过或合理 skip。
+每组修完跑 `pytest tests/ -v` 确认不引入新 fail。最终目标：全部通过或合理 skip。
 
 ## 风险
 

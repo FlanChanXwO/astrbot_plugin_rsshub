@@ -179,6 +179,9 @@ class RouteKnowledgeSettings:
 class ApplicationSettings:
     """Settings consumed by the application layer."""
 
+    # Required fields first (no defaults)
+    media: MediaSettings  # No default to prevent silent omissions in builder
+    # Optional fields with defaults
     basic: BasicSettings = field(default_factory=BasicSettings)
     fetch: FeedFetchSettings = field(default_factory=FeedFetchSettings)
     rss: RSSSettings = field(default_factory=RSSSettings)
@@ -196,7 +199,6 @@ class ApplicationSettings:
     media_platform_limits: MediaPlatformLimits = field(
         default_factory=MediaPlatformLimits
     )
-    media: MediaSettings = field(default_factory=MediaSettings)
     route_knowledge: RouteKnowledgeSettings = field(
         default_factory=RouteKnowledgeSettings
     )

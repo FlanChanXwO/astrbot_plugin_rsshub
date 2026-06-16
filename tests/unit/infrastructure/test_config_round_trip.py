@@ -9,17 +9,36 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 
 # ── helpers ────────────────────────────────────────────────────────────
 
 
+def _find_runtime_config() -> Path | None:
+    """尝试定位 runtime config，从插件根向上查找 data/config/ 目录。
+
+    优先在开发环境（../../../data/config/）查找；找不到时返回 None，
+    由调用方决定是否 skip 测试。
+    """
+    plugin_root = Path(__file__).resolve().parents[3]
+    # 尝试相对路径：从插件根目录向上 3 层找 data/config/
+    candidates = [
+        plugin_root.parents[2]
+        / "data"
+        / "config"
+        / "astrbot_plugin_rsshub_config.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _load_live_config() -> dict:
     """Load the running plugin config from the AstrBot runtime data dir."""
-    config_path = Path(
-        "/Users/flanchan/Development/SourceCode/GithubProjects/"
-        "astrbot-plugin-dev/data/config/"
-        "astrbot_plugin_rsshub_config.json"
-    )
+    config_path = _find_runtime_config()
+    if config_path is None:
+        pytest.skip("Runtime config not found (not in dev environment)")
     return json.loads(config_path.read_text(encoding="utf-8-sig"))
 
 

@@ -7,7 +7,7 @@ from astrbot_plugin_rsshub import bootstrap
 from astrbot_plugin_rsshub.src.infrastructure.config import (
     ApplicationSettings,
     HttpSettings,
-    MediaRuntimeSettings,
+    MediaPlatformLimits,
     MediaSettings,
     RsshubPluginConfig,
 )
@@ -91,15 +91,15 @@ def test_init_config_heals_dirty_astrbot_config_before_parsing(monkeypatch):
         "minimal_interval": 1,
     }
     assert fake_config["http_config"] == {
-        "timeout": 12,
+        "timeout": 30,
         "media_timeout": 30,
         "proxy": "",
     }
     assert fake_config["sender_strategies"] == {
-        "enabled_platforms": ["aiocqhttp", "qq_official"],
+        "enabled_platforms": ["telegram", "aiocqhttp", "qq_official"],
         "platform_strategies": [],
     }
-    assert settings.http.timeout == 12
+    assert settings.http.timeout == 30
 
 
 @pytest.mark.asyncio
@@ -158,8 +158,20 @@ async def test_create_runtime_configures_message_senders_with_current_app_settin
     fake_queue = _FakeQueue()
     app_settings = ApplicationSettings(
         http=HttpSettings(media_timeout=44, proxy="http://localhost:7890"),
-        media=MediaSettings(gif_transcode=True, gif_transcode_timeout=33),
-        media_config=MediaRuntimeSettings(cache_ttl_seconds=60),
+        media=MediaSettings(
+            image_relay_base_url="",
+            media_relay_base_url="",
+            media_download_concurrency=1,
+            table_to_image=True,
+            video_transcode=False,
+            video_transcode_timeout=120,
+            gif_transcode=True,
+            gif_transcode_timeout=33,
+            ffmpeg_source="auto",
+            ffmpeg_mirror="auto",
+            ffmpeg_mirror_custom_url="",
+        ),
+        media_platform_limits=MediaPlatformLimits(cache_ttl_seconds=60),
     )
     route_knowledge_service = MagicMock()
     route_knowledge_service.close = AsyncMock()

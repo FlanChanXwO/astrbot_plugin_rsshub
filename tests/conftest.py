@@ -23,7 +23,7 @@ _src_dir = PLUGIN_DIR / "src"
 _pkg_spec = importlib.util.spec_from_file_location(
     "astrbot_plugin_rsshub",
     str(_src_dir / "__init__.py"),
-    submodule_search_locations=[str(_src_dir)],
+    submodule_search_locations=[str(_src_dir), str(PLUGIN_DIR)],
 )
 _pkg = importlib.util.module_from_spec(_pkg_spec)
 sys.modules["astrbot_plugin_rsshub"] = _pkg
@@ -51,6 +51,22 @@ _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 sys.modules["astrbot_plugin_rsshub.bootstrap"] = _bootstrap_mod
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
 _pkg.bootstrap = _bootstrap_mod
+
+# 注册 main 模块（位于插件根目录）
+_main_path = PLUGIN_DIR / "main.py"
+_main_spec = importlib.util.spec_from_file_location(
+    "astrbot_plugin_rsshub.main",
+    str(_main_path),
+)
+_main_mod = importlib.util.module_from_spec(_main_spec)
+sys.modules["astrbot_plugin_rsshub.main"] = _main_mod
+try:
+    _main_spec.loader.exec_module(_main_mod)
+except (ImportError, ModuleNotFoundError, AttributeError):
+    # main.py 可能依赖尚未 mock 的 astrbot 符号；此时只占位。
+    # 让测试侧 importlib.import_module 按需触发，暴露实际错误。
+    pass
+_pkg.main = _main_mod
 
 # 模拟 AstrBot 相关导入
 sys.modules["astrbot"] = MagicMock()

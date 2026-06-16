@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .legacy_migration import apply_legacy_config_aliases, record_config_heal
+from .legacy_migration import record_config_heal
 
 _SCHEMA_DEFAULTS: dict[str, Any] = {
     "bool": False,
@@ -275,9 +275,8 @@ def heal_astrbot_plugin_config(
         return dict(raw_config or {}), []
 
     changes: list[str] = []
-    aliased = apply_legacy_config_aliases(raw_config, changes)
     normalized = _normalize_schema_value(
-        aliased, {"type": "object", "items": schema}, "", changes
+        dict(raw_config), {"type": "object", "items": schema}, "", changes
     )
     if normalized == raw_config:
         changes.clear()

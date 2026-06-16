@@ -10,7 +10,6 @@ from typing import Any
 
 _EXPORT_MAP = {
     "BasicConfig": ("config", "BasicConfig"),
-    "FFmpegConfig": ("config", "FFmpegConfig"),
     "GlobalConfig": ("config", "GlobalConfig"),
     "RsshubPluginConfig": ("config", "RsshubPluginConfig"),
     "SenderStrategiesConfig": ("config", "SenderStrategiesConfig"),
@@ -28,7 +27,6 @@ _EXPORT_MAP = {
     "ChannelInfo": ("messaging", "ChannelInfo"),
     "DefaultMessageSender": ("messaging", "DefaultMessageSender"),
     "EventBus": ("messaging", "EventBus"),
-    "Extension": ("messaging", "Extension"),
     "InfrastructureMessageSenderAdapter": (
         "messaging",
         "InfrastructureMessageSenderAdapter",
@@ -40,7 +38,6 @@ _EXPORT_MAP = {
     "MessageContext": ("messaging", "MessageContext"),
     "NotificationServiceImpl": ("messaging", "NotificationServiceImpl"),
     "OneBotMessageSender": ("messaging", "OneBotMessageSender"),
-    "PluginManager": ("messaging", "PluginManager"),
     "PreparedMedia": ("messaging", "PreparedMedia"),
     "QQOfficialMessageSender": ("messaging", "QQOfficialMessageSender"),
     "SendResult": ("messaging", "SendResult"),
@@ -48,9 +45,7 @@ _EXPORT_MAP = {
     "get_bot_self_id": ("messaging", "get_bot_self_id"),
     "get_event_bus": ("messaging", "get_event_bus"),
     "get_notification_service": ("messaging", "get_notification_service"),
-    "get_plugin_manager": ("messaging", "get_plugin_manager"),
     "get_sender_for_platform": ("messaging", "get_sender_for_platform"),
-    "on_event": ("messaging", "on_event"),
     "register_sender": ("messaging", "register_sender"),
     "set_bot_self_id_provider": ("messaging", "set_bot_self_id_provider"),
     "DatabaseManager": ("persistence", "DatabaseManager"),

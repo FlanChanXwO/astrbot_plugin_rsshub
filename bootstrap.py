@@ -311,20 +311,36 @@ def _configure_message_senders(app_settings: ApplicationSettings) -> None:
         video_transcode_timeout=app_settings.media.video_transcode_timeout,
         gif_transcode=app_settings.media.gif_transcode,
         gif_transcode_timeout=app_settings.media.gif_transcode_timeout,
-        telegram_photo_max_bytes=app_settings.media_config.telegram_photo_max_bytes,
-        onebot_napcat_stream_mode=(app_settings.media_config.onebot_napcat_stream_mode),
-        qq_official_media_threshold=app_settings.media_config.qq_official_media_threshold,
+        telegram_photo_max_bytes=app_settings.media_platform_limits.telegram_photo_max_bytes,
+        onebot_napcat_stream_mode=(
+            app_settings.media_platform_limits.onebot_napcat_stream_mode
+        ),
+        qq_official_media_threshold=app_settings.media_platform_limits.qq_official_media_threshold,
         qq_official_degrade_strategy=(
-            app_settings.media_config.qq_official_degrade_strategy
+            app_settings.media_platform_limits.qq_official_degrade_strategy
         ),
     )
     MediaDownloader.configure_cache(
-        ttl_seconds=app_settings.media_config.cache_ttl_seconds,
-        gc_interval_seconds=app_settings.media_config.cache_gc_interval_seconds,
-        gc_grace_seconds=app_settings.media_config.cache_gc_grace_seconds,
+        ttl_seconds=app_settings.media_platform_limits.cache_ttl_seconds,
+        gc_interval_seconds=app_settings.media_platform_limits.cache_gc_interval_seconds,
+        gc_grace_seconds=app_settings.media_platform_limits.cache_gc_grace_seconds,
     )
-    configure_media_integrity(min_valid_bytes=app_settings.media_config.min_valid_bytes)
+    configure_media_integrity(
+        min_valid_bytes=app_settings.media_platform_limits.min_valid_bytes
+    )
     EntryTextFormatter.configure_table_to_image(app_settings.media.table_to_image)
+    logger.info(
+        "sender behavior configured: gif_transcode=%s, video_transcode=%s, "
+        "ffmpeg_source=%s, image_relay=%s, media_relay=%s, "
+        "napcat_stream=%s, table_to_image=%s",
+        app_settings.media.gif_transcode,
+        app_settings.media.video_transcode,
+        app_settings.media.ffmpeg_source,
+        app_settings.media.image_relay_base_url or "(none)",
+        app_settings.media.media_relay_base_url or "(none)",
+        app_settings.media_platform_limits.onebot_napcat_stream_mode,
+        app_settings.media.table_to_image,
+    )
 
 
 async def _init_database(config: RsshubPluginConfig) -> None:

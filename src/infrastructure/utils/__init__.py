@@ -49,6 +49,10 @@ __all__ = [
     "get_plugin_export_dir",
 ]
 
+# Eager re-export of names that collide with submodule names. Without these,
+# `from utils import caching` returns the caching submodule, not the function.
+from .caching import caching  # noqa: F401
+
 _EXPORTS: dict[str, tuple[str, str]] = {
     "BaseCache": ("caching", "BaseCache"),
     "CacheProviderType": ("caching", "CacheProviderType"),

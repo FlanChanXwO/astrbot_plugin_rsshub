@@ -1,14 +1,13 @@
 import { getDashboardCharts, getStats } from '../../js/api.js';
-
-const CHART_COLORS = {
-  orange: '#f59e0b',
-  red: '#ef4444',
-  amber: '#eab308',
-  teal: '#0f766e',
-  blue: '#2563eb',
-  slate: '#64748b',
-  green: '#16a34a',
-};
+import {
+  buildPushSuccessDataset,
+  CHART_COLORS,
+  chartGridColor,
+  chartTextColor,
+  createPushSuccessLineChartOptions,
+  formatBucketLabel,
+  percentLabel,
+} from './charts.js';
 
 const FEED_HEALTH_LABELS = {
   healthy: '健康',
@@ -71,28 +70,6 @@ const doughnutLabelPlugin = {
     ctx.restore();
   },
 };
-
-function chartTextColor() {
-  return document.documentElement.dataset.theme === 'dark' ? '#cbd5e1' : '#475569';
-}
-
-function chartGridColor() {
-  return document.documentElement.dataset.theme === 'dark' ? 'rgba(148, 163, 184, 0.22)' : 'rgba(148, 163, 184, 0.24)';
-}
-
-function formatBucketLabel(value, unit) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value || '');
-  if (unit === 'hour') {
-    return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:00`;
-  }
-  return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function percentLabel(value) {
-  if (value === null || value === undefined) return '无终态记录';
-  return `${Math.round(Number(value) * 1000) / 10}%`;
-}
 
 function destroyChart(instance) {
   if (!instance || typeof instance.destroy !== 'function') return;
@@ -158,25 +135,11 @@ export const overviewModule = {
     const data = this.overviewCharts.push_success || { points: [], unit: 'day' };
     const points = data.points || [];
     const labels = points.map((item) => formatBucketLabel(item.bucket, data.unit));
-    const rates = points.map((item) => (item.rate === null || item.rate === undefined ? null : Number(item.rate) * 100));
     chartInstances.pushSuccess = new ChartCtor(canvas, {
       type: 'line',
       data: {
         labels,
-        datasets: [
-          {
-            label: '推送成功率',
-            data: rates,
-            borderColor: CHART_COLORS.teal,
-            backgroundColor: 'rgba(15, 118, 110, 0.12)',
-            borderWidth: 2,
-            tension: 0.32,
-            spanGaps: false,
-            pointRadius: 2,
-            pointHoverRadius: 4,
-            fill: true,
-          },
-        ],
+        datasets: [buildPushSuccessDataset(points)],
       },
       options: this.lineChartOptions(points),
     });
@@ -229,30 +192,7 @@ export const overviewModule = {
   },
 
   lineChartOptions(points) {
-    return {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const point = points[ctx.dataIndex] || {};
-              return [
-                `成功率: ${percentLabel(point.rate)}`,
-                `success ${point.success || 0} / failed ${point.failed || 0} / skipped ${point.skipped || 0}`,
-                `pending ${point.pending || 0} / stopped ${point.stopped || 0}`,
-              ];
-            },
-          },
-        },
-      },
-      scales: {
-        x: { ticks: { color: chartTextColor(), maxRotation: 0, autoSkip: true }, grid: { color: chartGridColor() } },
-        y: { min: 0, max: 100, ticks: { color: chartTextColor(), callback: (value) => `${value}%` }, grid: { color: chartGridColor() } },
-      },
-    };
+    return createPushSuccessLineChartOptions(points);
   },
 
   barChartOptions() {

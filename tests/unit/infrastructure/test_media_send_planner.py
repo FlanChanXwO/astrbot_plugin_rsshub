@@ -13,7 +13,9 @@ from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
     PreparedMedia,
 )
 from astrbot_plugin_rsshub.src.shared.constants import (
+    QQ_OFFICIAL_FILE_MAX_BYTES,
     QQ_OFFICIAL_GIF_MAX_BYTES,
+    QQ_OFFICIAL_IMAGE_MAX_BYTES,
     QQ_OFFICIAL_VIDEO_MAX_BYTES,
     WEIXIN_GIF_MAX_BYTES,
 )
@@ -22,6 +24,111 @@ from astrbot_plugin_rsshub.src.shared.constants import (
 def _touch(path: Path, size: int) -> Path:
     path.write_bytes(b"x" * size)
     return path
+
+
+def _prepared_media(
+    tmp_path: Path,
+    *,
+    media_type: str,
+    filename: str,
+    suffix: str,
+    size_bytes: int,
+) -> PreparedMedia:
+    path = tmp_path / filename
+    item = PreparedMedia(
+        media_type=media_type,
+        original_url=f"https://example.com/{filename}",
+        local_path=path,
+        detected_suffix=suffix,
+    )
+    item.variants = [
+        MediaVariant(
+            "primary",
+            media_type,
+            path,
+            suffix=suffix,
+            size_bytes=size_bytes,
+        )
+    ]
+    return item
+
+
+def test_qq_official_small_image_uses_native_file_then_link(tmp_path: Path):
+    item = _prepared_media(
+        tmp_path,
+        media_type="image",
+        filename="small.jpg",
+        suffix=".jpg",
+        size_bytes=9 * 1024 * 1024,
+    )
+
+    candidates = MediaSendPlanner.candidates_for(item, platform="qq_official")
+
+    assert [candidate.action for candidate in candidates] == [
+        SEND_ACTION_MEDIA,
+        SEND_ACTION_FILE,
+        SEND_ACTION_LINK,
+    ]
+    assert candidates[0].media_type == "image"
+    assert candidates[1].media_type == "file"
+
+
+def test_qq_official_mid_image_skips_native_and_uses_file_then_link(tmp_path: Path):
+    item = _prepared_media(
+        tmp_path,
+        media_type="image",
+        filename="mid.jpg",
+        suffix=".jpg",
+        size_bytes=QQ_OFFICIAL_IMAGE_MAX_BYTES + 1,
+    )
+
+    candidates = MediaSendPlanner.candidates_for(item, platform="qq_official")
+
+    assert [candidate.action for candidate in candidates] == [
+        SEND_ACTION_FILE,
+        SEND_ACTION_LINK,
+    ]
+
+
+def test_qq_official_large_image_uses_link_only(tmp_path: Path):
+    item = _prepared_media(
+        tmp_path,
+        media_type="image",
+        filename="large.jpg",
+        suffix=".jpg",
+        size_bytes=QQ_OFFICIAL_FILE_MAX_BYTES + 1,
+    )
+
+    candidates = MediaSendPlanner.candidates_for(item, platform="qq_official")
+
+    assert [candidate.action for candidate in candidates] == [SEND_ACTION_LINK]
+
+
+def test_qq_official_large_video_uses_link_only(tmp_path: Path):
+    item = _prepared_media(
+        tmp_path,
+        media_type="video",
+        filename="large.mp4",
+        suffix=".mp4",
+        size_bytes=39 * 1024 * 1024,
+    )
+
+    candidates = MediaSendPlanner.candidates_for(item, platform="qq_official")
+
+    assert [candidate.action for candidate in candidates] == [SEND_ACTION_LINK]
+
+
+def test_qq_official_download_failed_still_uses_link_only():
+    item = PreparedMedia(
+        media_type="image",
+        original_url="https://example.com/missing.jpg",
+        download_failed=True,
+    )
+
+    candidates = MediaSendPlanner.candidates_for(item, platform="qq_official")
+
+    assert [candidate.action for candidate in candidates] == [SEND_ACTION_LINK]
+    assert candidates[0].reason == "download_failed"
 
 
 def test_qq_official_gif_uses_compressed_then_original_video(tmp_path: Path):
@@ -65,7 +172,7 @@ def test_qq_official_gif_uses_compressed_then_original_video(tmp_path: Path):
     assert candidates[-1].action == SEND_ACTION_LINK
 
 
-def test_qq_official_oversize_video_skips_native_video(tmp_path: Path):
+def test_qq_official_oversize_video_skips_upload_and_uses_link(tmp_path: Path):
     video = _touch(tmp_path / "huge.mp4", 10)
     item = PreparedMedia(
         media_type="video",
@@ -84,7 +191,7 @@ def test_qq_official_oversize_video_skips_native_video(tmp_path: Path):
 
     candidates = MediaSendPlanner.candidates_for(item, platform="qq_official")
 
-    assert candidates[0].action == SEND_ACTION_FILE
+    assert [candidate.action for candidate in candidates] == [SEND_ACTION_LINK]
     assert not any(
         candidate.action == SEND_ACTION_MEDIA and candidate.media_type == "video"
         for candidate in candidates

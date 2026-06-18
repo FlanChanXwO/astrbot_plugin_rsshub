@@ -312,7 +312,8 @@ class QQOfficialMessageSender(DefaultMessageSender):
                     failures.append(
                         self._result_with_stage(text_result, "degrade_text")
                     )
-                return self._partial_send_result(failures)
+                    return self._partial_send_result(failures)
+                return SendResult(ok=True)
 
         text_result = await self._send_failed_media_links_text(
             request,
@@ -322,7 +323,8 @@ class QQOfficialMessageSender(DefaultMessageSender):
         )
         if not text_result.ok:
             failures.append(self._result_with_stage(text_result, "degrade_text"))
-        return self._partial_send_result(failures)
+            return self._partial_send_result(failures)
+        return SendResult(ok=True)
 
     async def _handle_single_video_failure(
         self,
@@ -362,7 +364,8 @@ class QQOfficialMessageSender(DefaultMessageSender):
                     failures.append(
                         self._result_with_stage(text_result, "degrade_text")
                     )
-                return self._partial_send_result(failures)
+                    return self._partial_send_result(failures)
+                return SendResult(ok=True)
 
         self._record_failed_url(failed_urls, video_component)
         text_result = await self._send_failed_media_links_text(
@@ -373,7 +376,8 @@ class QQOfficialMessageSender(DefaultMessageSender):
         )
         if not text_result.ok:
             failures.append(self._result_with_stage(text_result, "degrade_text"))
-        return self._partial_send_result(failures)
+            return self._partial_send_result(failures)
+        return SendResult(ok=True)
 
     async def _send_link_only_degrade(
         self,
@@ -424,7 +428,8 @@ class QQOfficialMessageSender(DefaultMessageSender):
         )
         if not text_result.ok:
             failures.append(self._result_with_stage(text_result, "degrade_text"))
-        return self._partial_send_result(failures)
+            return self._partial_send_result(failures)
+        return SendResult(ok=True)
 
     @staticmethod
     def _can_degrade_media_as_files(components: list[MessageComponent]) -> bool:

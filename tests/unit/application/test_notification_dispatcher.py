@@ -443,6 +443,59 @@ async def test_dispatch_guard_skips_already_successful_entry_guid():
 
 
 @pytest.mark.asyncio
+async def test_qq_official_degraded_success_is_acked_by_success_guard():
+    sender = FakeSender(SendResult(ok=True))
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="qq_official",
+        target_session="qqofficial:FriendMessage:openid-1",
+    )
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.return_value = [sub]
+    history_repo = AsyncMock()
+    history_repo.exists_success_by_scope_and_guid.side_effect = [False, True]
+    history_repo.save.side_effect = lambda history: history
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    first = await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="content\n媒体原始链接:\nhttps://example.com/huge.jpg",
+        entry_title="title",
+        entry_link="https://example.com/entry",
+        media_urls=["https://example.com/huge.jpg"],
+        entry_guid="guid-qq-degraded",
+    )
+    second = await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="content\n媒体原始链接:\nhttps://example.com/huge.jpg",
+        entry_title="title",
+        entry_link="https://example.com/entry",
+        media_urls=["https://example.com/huge.jpg"],
+        entry_guid="guid-qq-degraded",
+    )
+
+    assert first == {"success": 1, "failed": 0, "pending": 0, "skipped": 0}
+    assert second == {"success": 0, "failed": 0, "pending": 0, "skipped": 1}
+    assert len(sender.requests) == 1
+    success_history = history_repo.save.await_args_list[1].args[0]
+    skipped_history = history_repo.save.await_args_list[2].args[0]
+    assert success_history.status == "success"
+    assert success_history.fail_reason is None
+    assert success_history.entry_guid == "guid-qq-degraded"
+    assert skipped_history.status == "skipped"
+    assert (
+        skipped_history.fail_reason == "dispatch guard: already successful entry_guid"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dispatch_can_limit_to_selected_subscription_ids():
     sender = FakeSender()
     subs = [

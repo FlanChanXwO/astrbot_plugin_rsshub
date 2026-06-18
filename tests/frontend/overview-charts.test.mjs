@@ -30,6 +30,20 @@ test('推送成功率折线图为坐标轴和顶部点保留舒展空间', () =>
   assert.equal(options.elements?.line?.spanGaps, undefined);
 });
 
+test('推送成功率 tooltip 区分计入口径和参考状态', () => {
+  const options = createPushSuccessLineChartOptions([
+    { rate: 0.667, success: 2, failed: 1, skipped: 5, pending: 7, stopped: 3 },
+  ]);
+
+  const label = options.plugins.tooltip.callbacks.label({ dataIndex: 0 });
+
+  assert.deepEqual(label, [
+    '成功率: 66.7%',
+    '计入: success 2 / failed 1',
+    '参考: skipped 5 / pending 7 / stopped 3',
+  ]);
+});
+
 test('时间桶标签按日展示，避免横轴过度拥挤', () => {
   assert.equal(formatBucketLabel('2026-06-16T00:00:00Z', 'day'), '06/16');
 });

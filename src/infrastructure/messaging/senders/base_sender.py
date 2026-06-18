@@ -18,6 +18,7 @@ from ....shared.constants import (
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_OPTIONS,
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
+    QQ_OFFICIAL_PLATFORMS,
     STYLE_ORIGINAL,
     TELEGRAM_PHOTO_MAX_BYTES,
 )
@@ -636,6 +637,7 @@ class DefaultMessageSender:
         from ..media_send_planner import MediaSendPlanner
 
         rewritten: list[MessageComponent] = []
+        link_only_urls: list[str] = []
         for component in components:
             if component.kind != "media" or not component.original_url:
                 rewritten.append(component)
@@ -644,18 +646,18 @@ class DefaultMessageSender:
             if prepared is None:
                 rewritten.append(component)
                 continue
+            candidates = MediaSendPlanner.candidates_for(
+                prepared,
+                platform=platform,
+            )
             first_candidate = next(
-                (
-                    candidate
-                    for candidate in MediaSendPlanner.candidates_for(
-                        prepared,
-                        platform=platform,
-                    )
-                    if candidate.action != "link"
-                ),
+                (candidate for candidate in candidates if candidate.action != "link"),
                 None,
             )
             if first_candidate is None:
+                if any(candidate.action == "link" for candidate in candidates):
+                    link_only_urls.append(component.original_url)
+                    continue
                 rewritten.append(component)
                 continue
             rewritten.append(
@@ -664,7 +666,43 @@ class DefaultMessageSender:
                     fallback_text=component.fallback_text,
                 )
             )
+        if link_only_urls:
+            rewritten = self._append_link_only_urls_to_components(
+                rewritten,
+                link_only_urls,
+                platform=platform,
+            )
         return rewritten
+
+    def _append_link_only_urls_to_components(
+        self,
+        components: list[MessageComponent],
+        urls: list[str],
+        *,
+        platform: str,
+    ) -> list[MessageComponent]:
+        """把预判不可上传的媒体链接合并到正文，避免继续撞平台上传。"""
+        updated: list[MessageComponent] = []
+        appended = False
+        for component in components:
+            if component.kind == "text" and not appended:
+                updated.append(
+                    replace(
+                        component,
+                        text=self._append_failed_links(component.text, urls),
+                    )
+                )
+                appended = True
+                continue
+            updated.append(component)
+        if not appended:
+            updated.append(
+                MessageComponent(
+                    kind="text",
+                    text=self._append_failed_links("", urls),
+                )
+            )
+        return self._formatter._sorter.sort_components(updated, platform=platform)
 
     async def _send_media_candidate(
         self,
@@ -934,6 +972,11 @@ class DefaultMessageSender:
             http_status=first.http_status,
         )
 
+    @staticmethod
+    def _counts_degraded_media_delivery_as_success(platform: str | None) -> bool:
+        """QQ Official 降级已送达时不应触发轮询补推。"""
+        return str(platform or "").strip().lower() in QQ_OFFICIAL_PLATFORMS
+
     async def _send_components_media_first(
         self,
         session_id: str,
@@ -954,6 +997,7 @@ class DefaultMessageSender:
         failed_urls: list[str] = []
         failed_fallbacks: list[str] = []
         failures: list[SendResult] = []
+        degraded_delivery_ok = False
 
         for component in media_components:
             chain = self._component_to_chain(component)
@@ -979,7 +1023,9 @@ class DefaultMessageSender:
                     use_markdown=use_markdown,
                 )
                 failures.extend(fallback.failures)
-                if not fallback.ok:
+                if fallback.ok:
+                    degraded_delivery_ok = True
+                else:
                     self._record_failed_media_fallback(
                         failed_urls,
                         failed_fallbacks,
@@ -1002,10 +1048,18 @@ class DefaultMessageSender:
                 [Plain(text)],
                 use_markdown=use_markdown,
             )
+            if result.ok and (failed_urls or failed_fallbacks):
+                degraded_delivery_ok = True
             self._merge_send_failure(failures, result, stage="send_text")
         elif not media_components:
             return SendResult(ok=False, detail="empty_message")
 
+        if (
+            failures
+            and degraded_delivery_ok
+            and self._counts_degraded_media_delivery_as_success(platform)
+        ):
+            return SendResult(ok=True)
         return self._partial_send_result(failures)
 
     async def _send_components_in_order(

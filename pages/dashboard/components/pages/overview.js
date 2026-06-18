@@ -21,7 +21,7 @@ export const overviewPageTemplate = String.raw`
           <section class="overview-chart-panel overview-chart-panel-wide">
             <div class="overview-chart-head">
               <h3>推送成功率</h3>
-              <span class="overview-chart-meta">success / (success + failed + stopped + skipped)</span>
+              <span class="overview-chart-meta">success / (success + failed)</span>
             </div>
             <div class="overview-chart-canvas">
               <canvas id="overview-push-success-chart"></canvas>

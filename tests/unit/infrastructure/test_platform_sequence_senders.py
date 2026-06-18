@@ -387,9 +387,7 @@ async def test_qq_official_single_video_failure_tries_file_then_link(monkeypatch
         context=MessageContext(platform_name="qq_official"),
     )
 
-    assert result.ok is False
-    assert result.transient is True
-    assert "partial send" in result.detail
+    assert result.ok is True
     assert [type(chain[0]) for chain in calls] == [_Video, _File, _Plain]
     assert calls[1][0].file == "/tmp/2.mp4"
     assert calls[2][0].text == "entry text"
@@ -428,8 +426,7 @@ async def test_qq_official_single_video_failure_can_link_only(monkeypatch):
         context=MessageContext(platform_name="qq_official"),
     )
 
-    assert result.ok is False
-    assert "partial send" in result.detail
+    assert result.ok is True
     assert [type(chain[0]) for chain in calls] == [_Video, _Plain]
     assert "媒体原始链接:" in calls[-1][0].text
     assert "https://example.com/2.mp4" in calls[-1][0].text
@@ -559,8 +556,7 @@ async def test_qq_official_original_style_single_video_uses_video_then_fallback(
         context=MessageContext(platform_name="qq_official", style=2),
     )
 
-    assert result.ok is False
-    assert "partial send" in result.detail
+    assert result.ok is True
     assert [type(chain[0]) for chain in calls] == [_Video, _File, _Plain]
     assert calls[0][0].file == "/tmp/2.mp4"
     assert calls[1][0].file == "/tmp/2.mp4"
@@ -643,9 +639,7 @@ async def test_qq_official_file_degrade_failure_continues_and_appends_url(
         context=MessageContext(platform_name="qq_official"),
     )
 
-    assert result.ok is False
-    assert result.transient is True
-    assert "partial send" in result.detail
+    assert result.ok is True
     assert [type(chain[0]) for chain in calls] == [_File, _File, _Plain]
     assert "媒体原始链接:" in calls[-1][0].text
     assert "https://example.com/1.jpg" in calls[-1][0].text
@@ -684,11 +678,48 @@ async def test_qq_official_single_image_failure_tries_file_then_link(monkeypatch
         context=MessageContext(platform_name="qq_official"),
     )
 
-    assert result.ok is False
-    assert "partial send" in result.detail
+    assert result.ok is True
     assert [type(chain[0]) for chain in calls] == [_Image, _File, _Plain]
     assert calls[1][0].file == "/tmp/1.jpg"
     assert calls[2][0].text == "entry text"
+
+
+@pytest.mark.asyncio
+async def test_qq_official_single_image_failure_can_link_only(monkeypatch):
+    _patch_components(monkeypatch)
+    DefaultMessageSender.configure_behavior(
+        qq_official_degrade_strategy="link_only",
+    )
+    sender = QQOfficialMessageSender()
+    calls: list[list] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **kwargs):
+        calls.append(chain)
+        if isinstance(chain[0], _Image):
+            return SendResult(ok=False, transient=True, detail="image failed")
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+
+    result = await sender.send_to_user(
+        SendRequest(
+            session_id="default:UserMessage:1",
+            message="entry text",
+            prepared_media=[
+                PreparedMedia(
+                    media_type="image",
+                    original_url="https://example.com/1.jpg",
+                    local_path=Path("/tmp/1.jpg"),
+                )
+            ],
+        ),
+        context=MessageContext(platform_name="qq_official"),
+    )
+
+    assert result.ok is True
+    assert [type(chain[0]) for chain in calls] == [_Image, _Plain]
+    assert "媒体原始链接:" in calls[-1][0].text
+    assert "https://example.com/1.jpg" in calls[-1][0].text
 
 
 @pytest.mark.asyncio
@@ -1207,7 +1238,7 @@ async def test_qq_official_gif_failure_tries_compressed_then_original_video(
         context=MessageContext(platform_name="qq_official"),
     )
 
-    assert result.ok is False
+    assert result.ok is True
     assert isinstance(calls[0][0], _Image)
     assert calls[0][0].file == "/tmp/video-small.gif"
     assert isinstance(calls[1][0], _Video)
@@ -1217,7 +1248,7 @@ async def test_qq_official_gif_failure_tries_compressed_then_original_video(
 
 
 @pytest.mark.asyncio
-async def test_qq_official_oversize_video_starts_with_file_candidate(
+async def test_qq_official_oversize_video_uses_link_only_candidate(
     monkeypatch,
     tmp_path,
 ):
@@ -1259,43 +1290,42 @@ async def test_qq_official_oversize_video_starts_with_file_candidate(
     )
 
     assert result.ok is True
-    assert isinstance(calls[0][0], _File)
-    assert calls[0][0].file == str(video_path)
+    assert [type(chain[0]) for chain in calls] == [_Plain]
+    assert "媒体原始链接:" in calls[0][0].text
+    assert "https://example.com/huge.mp4" in calls[0][0].text
     assert not any(isinstance(chain[0], _Video) for chain in calls)
 
 
 @pytest.mark.asyncio
-async def test_qq_official_planned_file_failure_does_not_retry_same_file(
+async def test_qq_official_oversize_image_uses_link_only_candidate(
     monkeypatch,
     tmp_path,
 ):
     _patch_components(monkeypatch)
     sender = QQOfficialMessageSender()
     calls: list[list] = []
-    video_path = tmp_path / "huge.mp4"
-    video_path.write_bytes(b"0")
+    image_path = tmp_path / "huge.jpg"
+    image_path.write_bytes(b"0")
 
     async def fake_send_chain(session_id: str, chain: list, **kwargs):
         calls.append(chain)
-        if isinstance(chain[0], _File):
-            return SendResult(ok=False, transient=False, detail="file rejected")
         return SendResult(ok=True)
 
     monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
 
     prepared = PreparedMedia(
-        media_type="video",
-        original_url="https://example.com/huge.mp4",
-        local_path=video_path,
-        detected_suffix=".mp4",
+        media_type="image",
+        original_url="https://example.com/huge.jpg",
+        local_path=image_path,
+        detected_suffix=".jpg",
     )
     prepared.variants = [
         MediaVariant(
-            "original",
-            "video",
-            video_path,
-            suffix=".mp4",
-            size_bytes=101 * 1024 * 1024,
+            "primary",
+            "image",
+            image_path,
+            suffix=".jpg",
+            size_bytes=13 * 1024 * 1024,
         )
     ]
 
@@ -1308,9 +1338,11 @@ async def test_qq_official_planned_file_failure_does_not_retry_same_file(
         context=MessageContext(platform_name="qq_official"),
     )
 
-    assert result.ok is False
-    assert [type(chain[0]) for chain in calls] == [_File, _Plain]
-    assert "https://example.com/huge.mp4" in calls[-1][0].text
+    assert result.ok is True
+    assert [type(chain[0]) for chain in calls] == [_Plain]
+    assert "媒体原始链接:" in calls[0][0].text
+    assert "https://example.com/huge.jpg" in calls[0][0].text
+    assert not any(isinstance(chain[0], (_Image, _File)) for chain in calls)
 
 
 @pytest.mark.asyncio

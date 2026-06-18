@@ -2679,6 +2679,27 @@ async def test_dashboard_charts_builds_overview_payload_with_default_range():
                 "status": "skipped",
                 "count": 1,
             },
+            {
+                "bucket": now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "status": "failed",
+                "count": 1,
+            },
+            {
+                "bucket": now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "status": "stopped",
+                "count": 1,
+            },
+            {
+                "bucket": now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "status": "pending",
+                "count": 1,
+            },
         ]
     )
     config = SimpleNamespace(default_interval=15)
@@ -2706,6 +2727,7 @@ async def test_dashboard_charts_builds_overview_payload_with_default_range():
     call_kwargs = push_history_repo.get_status_buckets.await_args.kwargs
     assert call_kwargs["bucket"] == "day"
     assert payload["push_success"]["points"][-1]["success"] == 1
+    assert payload["push_success"]["points"][-1]["failed"] == 1
     assert payload["push_success"]["points"][-1]["skipped"] == 1
     assert payload["push_success"]["points"][-1]["denominator"] == 2
     assert payload["push_success"]["points"][-1]["rate"] == 0.5

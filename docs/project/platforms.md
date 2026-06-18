@@ -10,7 +10,7 @@
 | 平台 / sender | 当前状态 | 明确覆盖点 | 备注 |
 | --- | --- | --- | --- |
 | OneBot / aiocqhttp | 专门 sender，明确测试覆盖 | 合并转发、原始顺序、媒体预下载、NapCat 流式上传、失败 fallback | NapCat 支持流式上传大文件，默认 fallback 模式（失败后重试）。 |
-| QQ Official | 专门 sender，明确测试覆盖 | 单图文本合链、多媒体拆发、Markdown 开关边界、媒体失败 partial 语义 | Markdown 必须走 AstrBot `MessageChain.use_markdown_`，不得绕过 core 手写 botpy payload。 |
+| QQ Official | 专门 sender，明确测试覆盖 | 单图文本合链、多媒体拆发、Markdown 开关边界、媒体失败降级送达语义 | Markdown 必须走 AstrBot `MessageChain.use_markdown_`，不得绕过 core 手写 botpy payload。 |
 | Telegram | 专门 sender，明确测试覆盖 | Telegraph 多图路由、大图片转文件、MarkdownV2 文本边界 | 不假设插件能控制媒体 caption Markdown。 |
 | Weixin OC | 专门 sender，明确测试覆盖 | 顺序发送、original style 顺序调整、不做图文合一 | 平台能力不适合强行合链。 |
 | 其他 AstrBot 平台 | 默认 sender，未列入当前专门回归覆盖 | 基础 `Plain` / 媒体组件发送 | 默认发送者不做强平台特化，因此可能可用；新增平台专属行为前需要补对应测试。 |
@@ -29,7 +29,7 @@
 | 平台 / sender | 文本与媒体顺序 | 媒体策略 | Markdown / Telegraph | 关键风险 |
 | --- | --- | --- | --- | --- |
 | OneBot / aiocqhttp | auto/classic 使用合并转发；original 按 layout fragments 发送 | 媒体预下载后使用本地文件；支持 NapCat 流式上传（disabled/fallback/always）；合并转发失败后回退纯文本 Nodes | 不使用 Telegraph；Markdown 不作为承诺面 | 合并转发失败、媒体发送失败、媒体顺序回退。 |
-| QQ Official | 单图 + 文本合成一条 `Image + Plain`；视频和多媒体仍拆发 | 图片/视频先按平台媒体组件发送，失败后按内置策略降级 | `qq_official_strategy.markdown_mode=auto|force|plain` 语义保留；当前主动推送链路暂时显式关闭 Markdown | Markdown 原文暴露、媒体 + markdown payload 畸形、partial send 难排障。 |
+| QQ Official | 单图 + 文本合成一条 `Image + Plain`；视频和多媒体仍拆发 | 图片/视频先按平台媒体组件发送，失败后按内置策略降级；降级成功视为已送达 | `qq_official_strategy.markdown_mode=auto|force|plain` 语义保留；当前主动推送链路暂时显式关闭 Markdown | Markdown 原文暴露、媒体 + markdown payload 畸形、平台 `invalid content` 仍需实测区分体积与内容风控。 |
 | Telegram | 文本和媒体按 Telegram sender 策略发送 | 本地图片超过内置 photo 阈值时按文件发送 | Telegraph 是 Telegram sender 级自动路由，不是 `send_mode`；Plain 文本可走 AstrBot MarkdownV2 | Bot API photo 大小拒绝、caption Markdown 不一致。 |
 | Weixin OC | 始终逐条发送；original 只影响顺序 | 不尝试图文合一 | 无 Telegraph / Markdown 承诺 | 强行图文合链会吞文本或失败。 |
 | 默认 sender | 尽量使用平台通用 MessageChain 组件 | 不做平台专属降级 | 依赖 AstrBot 平台默认能力 | 未明确覆盖的平台行为可能和专门 sender 不一致。 |
@@ -44,12 +44,14 @@
 | --- | ---: | ---: | ---: | ---: | --- | --- |
 | Telegram Bot API | `sendPhoto` 上传最大 10 MiB；HTTP URL photo 约 5 MiB | `sendAnimation` 最大 50 MiB | `sendVideo` 最大 50 MiB | `sendDocument` 最大 50 MiB | GIF 不走 photo，优先 animation；大静态图超 10 MiB 后按文件发送。 | Telegram 官方 Bot API 明确区分 photo、animation、video、document；Local Bot API Server 是例外，不作为默认阈值。 |
 | QQ 客户端 / OneBot 逆向实现参考 | NapCat 图片/GIF 未查到公开硬阈值；普通客户端大图也可能按文件链路发送 | NapCat GIF 未查到公开硬阈值；QQ 自定义表情和普通图片发送限制不是同一条链路 | NapCat 文档写视频 100 MiB，超过建议走群文件 | 离线文件单文件 4 GiB；非会员离线流量 2 GiB/天；在线直传、群文件和 NTQQ 实现会受客户端、账号、群空间和风控影响 | OneBot 可以把 QQ 用户文件能力作为 fallback 参考：媒体消息发不出时优先改走文件链路，而不是直接判失败。 | OneBot 是 QQ 协议逆向/适配层，实际能力接近 QQ 客户端链路，但每个实现接入的上传 API 不同。本文默认以 NapCat 表现评估 OneBot 风险；go-cqhttp 的图片 30 MiB、GIF 300 帧只保留为旧实现资料。 |
-| QQ Official | 官方未公开稳定上限；插件暂定单图 20 MiB | 官方未公开稳定上限；插件暂定 GIF 10 MiB | 官方未公开稳定上限；插件暂定视频 100 MiB | `file_type=4` 历史上有“不开放”口径，当前能力需实测 | 图片按 20 MiB 软上限评估；GIF 按 10 MiB 软上限评估；视频按 100 MiB 软上限评估；遇到 413/业务码保留原始错误并降级。 | QQ Bot OpenAPI 文档未给出图片/GIF/视频统一大小上限；`413 Request Entity Too Large` 更像上传网关限制。 |
+| QQ Official | 官方未公开稳定上限；插件按 native image 10 MiB 软上限分流 | 官方未公开稳定上限；插件暂定 GIF 10 MiB | 官方未公开稳定上限；插件按 12 MiB 软上限分流 | `file_type=4` 当前按 12 MiB 软上限分流 | 图片 `<=10 MiB` 先 native；`>10 MiB && <=12 MiB` 走文件候选；`>12 MiB` 直接链接。视频 `<=12 MiB` 才尝试上传，超出直接链接。 | QQ Bot OpenAPI 文档未给出图片/GIF/视频统一大小上限；`file_data` JSON 会受 base64 放大和网关请求体限制影响。 |
 | Weixin OC / 微信系 | 企业微信临时素材 image 常见 10 MiB；普通会话大图可能转文件 | 普通企业微信会话 GIF 超 5 MiB 常转文件；API 图片素材通常不承诺 GIF | 企业微信临时素材 video 10 MiB | 企业微信临时素材 file 20 MiB | Weixin OC 保持逐条发送，不尝试复杂图文合链；超限由平台错误和降级文本暴露。 | 微信入口差异很大：企业微信应用消息、临时素材、普通会话、公众号素材不是同一套限制。 |
 
 这些数值统一按“软阈值”管理，只用于发送前分流、日志解释和降级判断，不应让正常可发送媒体被静默丢弃。软阈值不能被当作平台硬限制，也不能在数据层截断、丢弃或提前判定推送失败；真实发送失败仍应暴露平台错误，并进入可观测的降级链路。新增硬拒绝前必须有平台文档、稳定实测或用户配置作为依据。
 
-软阈值集中由 `src/shared/constants.py` 归口，发送候选链路由 `MediaSendPlanner` 统一消费，不要散落在具体 sender 或文档表格里复制多份。当前固定口径包括：Telegram photo 默认 10 MiB 后改按文件发送、OneBot 支持 NapCat 流式上传（默认 fallback 模式）、QQ Official 默认不按媒体数量预先降级。QQ Official 表格里的 20 MiB / 10 MiB / 100 MiB 是 2026-05-27 的调查与实测参考，不是平台硬门槛。
+2026-06-17 使用 `scripts/qq_official_media_probe.py` 对生产失败样本实测：QQ Official `/files` 的 `file_data` JSON 上传会被网关请求体限制影响，21.5 MiB 图片按普通文件上传、39 MiB 视频按视频上传均返回 `413 Request Entity Too Large`；11.8 MiB Pixiv 图片按 native image 上传返回“上传文件超过大小限制”，但同一文件按 `file_type=4` 普通文件上传并发送成功。因此 QQ Official 的 `invalid content` / 上传失败不应只按媒体格式解释，体积、base64 放大后的请求体大小、native image 与 file fallback 能力差异都会触发不同错误。当前插件不压缩、不转码、不改变原始媒体内容；预计不可上传的媒体会直接以正文 + 原始链接送达，并按成功 ack。
+
+软阈值集中由 `src/shared/constants.py` 归口，发送候选链路由 `MediaSendPlanner` 统一消费，不要散落在具体 sender 或文档表格里复制多份。当前固定口径包括：Telegram photo 默认 10 MiB 后改按文件发送、OneBot 支持 NapCat 流式上传（默认 fallback 模式）、QQ Official 按 10 MiB native image、10 MiB GIF、12 MiB video/file fallback 的保守软阈值分流。QQ Official 表格里的数值是 2026-06-17 生产失败样本实测后的保守策略，不是平台硬门槛。
 
 ### OneBot / aiocqhttp WebSocket 帧传输上限
 

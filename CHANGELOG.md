@@ -1,6 +1,23 @@
 # Changelog
 
-## [2.1.0] - 2026-06-03
+## [2.1.1] - 2026-06-18
+
+### Added
+
+- 新增 QQ Official 媒体探针脚本 `scripts/qq_official_media_probe.py`，默认 dry-run，可从推送历史抽取失败媒体并显式测试 `/files` 上传与 `/messages` 发送路径。
+
+### Changed
+
+- QQ Official 媒体发送改为由 `MediaSendPlanner` 统一按内置软阈值生成候选链路：图片/GIF 10 MiB，视频和文件降级 12 MiB；预计超限的媒体不再继续撞上传 API，而是直接发送正文和原始媒体链接。
+- Plugin Pages 概览页的推送成功率口径调整为 `success / (success + failed)`；`skipped`、`stopped`、`pending` 和 `retrying` 仅作为参考计数展示，不再进入成功率分母。
+- QQ Official 媒体探针真实 HTTP 请求增加连接、读取和总超时；`--upload-source download` 改为分块读取并默认限制最多 64 MiB，避免诊断慢源或超大媒体时挂起或耗尽内存。
+
+### Fixed
+
+- 修复 QQ Official 下超限媒体上传失败后仍被记录为 failed，导致同一 RSS 条目在 2.1.0 ack 语义下反复补推的问题；文件或原始链接降级成功会按正常 `success` 记录。
+- 修复 QQ Official 媒体探针从 JSON 提取 URL 时对 list / tuple 的 `isinstance` 判断可能在运行时抛出 `TypeError` 的问题。
+
+## [2.1.0] - 2026-06-16
 
 ### Added
 

@@ -93,7 +93,7 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 
 ## Dashboard 图表口径
 
-- `push_success` 按最后活动时间聚合，`24h` 使用小时桶，`7d` / `30d` 使用天桶；成功率分母为 `success + failed + stopped + skipped`，`pending` / `retrying` 只作为积压参考。
+- `push_success` 按最后活动时间聚合，`24h` 使用小时桶，`7d` / `30d` 使用天桶；成功率分母为 `success + failed`，`skipped` / `stopped` / `pending` / `retrying` 只作为参考计数或积压参考，不进入成功率。
 - `feed_health` 使用 `Feed.updated_at` 作为最近成功解析并保存 Feed 的时间，按启用订阅的最小有效 `interval` 分为 healthy / warning / stale / disabled。`304 not_modified` 当前不会推进该时间。
 - `feed_share` 只统计启用订阅，按订阅数降序返回 Top 8，其余合并为「其他」。
 

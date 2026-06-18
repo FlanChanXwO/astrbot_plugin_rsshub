@@ -2091,7 +2091,8 @@ def _build_push_success_chart(
         stopped = int(counts.get("stopped", 0))
         skipped = int(counts.get("skipped", 0))
         pending = int(counts.get("pending", 0)) + int(counts.get("retrying", 0))
-        denominator = success + failed + stopped + skipped
+        # 成功率只衡量明确终态的发送结果，规则性跳过和暂停不进入分母。
+        denominator = success + failed
         points.append(
             {
                 "bucket": key,

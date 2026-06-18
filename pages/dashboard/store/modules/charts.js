@@ -65,8 +65,8 @@ export function createPushSuccessLineChartOptions(points) {
             const point = points[ctx.dataIndex] || {};
             return [
               `成功率: ${percentLabel(point.rate)}`,
-              `success ${point.success || 0} / failed ${point.failed || 0} / skipped ${point.skipped || 0}`,
-              `pending ${point.pending || 0} / stopped ${point.stopped || 0}`,
+              `计入: success ${point.success || 0} / failed ${point.failed || 0}`,
+              `参考: skipped ${point.skipped || 0} / pending ${point.pending || 0} / stopped ${point.stopped || 0}`,
             ];
           },
         },

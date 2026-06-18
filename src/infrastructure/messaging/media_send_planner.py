@@ -17,6 +17,7 @@ from ...shared.constants import (
     PLATFORM_TELEGRAM,
     PLATFORM_WEIXIN_OC,
     QQ_OFFICIAL_GIF_MAX_BYTES,
+    QQ_OFFICIAL_FILE_MAX_BYTES,
     QQ_OFFICIAL_IMAGE_MAX_BYTES,
     QQ_OFFICIAL_PLATFORMS,
     QQ_OFFICIAL_VIDEO_MAX_BYTES,
@@ -95,7 +96,7 @@ PLATFORM_MEDIA_POLICIES: dict[str, PlatformMediaPolicy] = {
         image_max_bytes=QQ_OFFICIAL_IMAGE_MAX_BYTES,
         gif_max_bytes=QQ_OFFICIAL_GIF_MAX_BYTES,
         video_max_bytes=QQ_OFFICIAL_VIDEO_MAX_BYTES,
-        file_max_bytes=None,
+        file_max_bytes=QQ_OFFICIAL_FILE_MAX_BYTES,
     ),
     PLATFORM_WEIXIN_OC: PlatformMediaPolicy(
         platform=PLATFORM_WEIXIN_OC,

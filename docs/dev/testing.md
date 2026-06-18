@@ -38,6 +38,38 @@ uv pip install --python .venv/bin/python -r data/plugins/astrbot_plugin_rsshub/r
 | sender / 媒体 | sender 单测、媒体下载相关测试 | OneBot、QQ Official、Telegram、Weixin OC 关键路径 | 这四个平台是当前明确测试覆盖点。 |
 | handler runtime | handler 相关单测 | `ai_filter`、`ai_transform plaintext/xml`、trace 写入 | handler 失败默认不能阻断 RSS。 |
 
+## QQ Official 媒体探针
+
+`scripts/qq_official_media_probe.py` 用于从生产推送历史抽取失败媒体，并按 QQ 官方 C2C/group 富媒体接口拆分验证 `/files` 上传和 `/messages` 发送。脚本默认 `dry-run`，不会联网调用 QQ API，也不需要凭据。
+
+常用只读抽样：
+
+```bash
+uv run python scripts/qq_official_media_probe.py \
+  --db /path/to/rsshub.db \
+  --mode dry-run \
+  --limit 3 \
+  --target-session '名称:私聊:openid'
+```
+
+真实接口测试必须显式选择 `upload-only` 或 `send`。`--secret-stdin` 会从 stdin 第一行读取 QQ 官方 client secret，避免密钥进入命令行参数。`--upload-source download` 会先由脚本下载媒体再按 `file_data` 上传，更接近 AstrBot 已预下载本地缓存后的真实路径；`--upload-source url` 则让 QQ 服务器自行拉远程 URL，可用于区分“QQ 拉源失败”和“文件内容/大小被拒”。脚本会给真实 HTTP 请求设置连接、读取和总超时；本地下载媒体时默认最多读取 64 MiB，既覆盖当前已知失败样本，又避免把任意超大资源完整读入内存。需要复测更大的样本时，可显式调整 `--connect-timeout`、`--read-timeout`、`--total-timeout` 和 `--download-max-bytes`。
+
+```bash
+stty -echo
+uv run python scripts/qq_official_media_probe.py \
+  --db /path/to/rsshub.db \
+  --mode upload-only \
+  --limit 1 \
+  --media-per-case 1 \
+  --target-session '名称:私聊:openid' \
+  --app-id "$QQ_OFFICIAL_APP_ID" \
+  --secret-stdin \
+  --upload-source download
+stty echo
+```
+
+`send` 模式会向目标会话发送真实测试消息，使用前必须确认目标 `openid` / `group_openid` 和主动消息频控风险。
+
 ## 高风险改动清单
 
 | 改动 | 风险 | 建议 |

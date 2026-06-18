@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import base64
 import json
+import math
 import mimetypes
 import os
 import random
@@ -36,6 +37,15 @@ FILE_TYPE_FILE = 4
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
+# 探针会处理生产历史里的任意媒体 URL，必须给网络 IO 明确边界，避免慢源
+# 或异常大文件让诊断进程挂死。默认下载上限高于已知 39MiB 失败样本，
+# 同时避免把任意大文件读入内存后再 base64 放大。
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
+DEFAULT_READ_TIMEOUT_SECONDS = 60.0
+DEFAULT_TOTAL_TIMEOUT_SECONDS = 120.0
+DEFAULT_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
+DOWNLOAD_CHUNK_BYTES = 256 * 1024
+
 
 @dataclass(frozen=True)
 class MediaProbeCase:
@@ -56,7 +66,7 @@ class MediaProbeCase:
 def _iter_json_urls(value: Any) -> list[str]:
     if isinstance(value, str):
         return _URL_RE.findall(value)
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         urls: list[str] = []
         for item in value:
             urls.extend(_iter_json_urls(item))
@@ -383,7 +393,12 @@ async def run_probe(args: argparse.Namespace) -> dict[str, Any]:
 
     secret = _read_secret(args)
     client = QQOfficialMediaProbeClient(args.app_id, secret)
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(
+        total=args.total_timeout,
+        connect=args.connect_timeout,
+        sock_read=args.read_timeout,
+    )
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         for case in cases:
             for url in case.media_urls[: args.media_per_case]:
                 result = await _probe_one_url(
@@ -395,6 +410,7 @@ async def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                     force_file=args.force_file,
                     upload_source=args.upload_source,
                     message_prefix=args.message_prefix,
+                    download_max_bytes=args.download_max_bytes,
                 )
                 report["results"].append(result)
     return report
@@ -410,10 +426,13 @@ async def _probe_one_url(
     force_file: bool,
     upload_source: str,
     message_prefix: str,
+    download_max_bytes: int,
 ) -> dict[str, Any]:
     file_type = infer_file_type(url, force_file=force_file)
     file_bytes = (
-        await _download_bytes(session, url) if upload_source == "download" else None
+        await _download_bytes(session, url, max_bytes=download_max_bytes)
+        if upload_source == "download"
+        else None
     )
     result: dict[str, Any] = {
         "history_id": case.history_id,
@@ -447,11 +466,35 @@ async def _probe_one_url(
     return result
 
 
-async def _download_bytes(session: aiohttp.ClientSession, url: str) -> bytes:
+async def _download_bytes(
+    session: aiohttp.ClientSession,
+    url: str,
+    *,
+    max_bytes: int = DEFAULT_DOWNLOAD_MAX_BYTES,
+) -> bytes:
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+
     async with session.get(url) as response:
         if response.status != 200:
             raise RuntimeError(f"download failed HTTP {response.status}: {url}")
-        return await response.read()
+        content_length = response.headers.get("Content-Length")
+        if content_length:
+            try:
+                expected_size = int(content_length)
+            except ValueError:
+                expected_size = 0
+            if expected_size > max_bytes:
+                raise RuntimeError(f"download exceeds limit {max_bytes} bytes: {url}")
+
+        data = bytearray()
+        async for chunk in response.content.iter_chunked(DOWNLOAD_CHUNK_BYTES):
+            if not chunk:
+                continue
+            data.extend(chunk)
+            if len(data) > max_bytes:
+                raise RuntimeError(f"download exceeds limit {max_bytes} bytes: {url}")
+        return bytes(data)
 
 
 def _read_secret(args: argparse.Namespace) -> str:
@@ -464,6 +507,26 @@ def _read_secret(args: argparse.Namespace) -> str:
             f"missing client secret; set {args.secret_env} or pass --secret-stdin"
         )
     return secret
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive number") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -512,6 +575,30 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("url", "download"),
         default="url",
         help="url 让 QQ 拉取远程 URL；download 先本地下载再按 file_data 上传",
+    )
+    parser.add_argument(
+        "--connect-timeout",
+        type=_positive_float,
+        default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
+        help="aiohttp 连接超时秒数",
+    )
+    parser.add_argument(
+        "--read-timeout",
+        type=_positive_float,
+        default=DEFAULT_READ_TIMEOUT_SECONDS,
+        help="aiohttp socket 读取超时秒数",
+    )
+    parser.add_argument(
+        "--total-timeout",
+        type=_positive_float,
+        default=DEFAULT_TOTAL_TIMEOUT_SECONDS,
+        help="aiohttp 单请求总超时秒数",
+    )
+    parser.add_argument(
+        "--download-max-bytes",
+        type=_positive_int,
+        default=DEFAULT_DOWNLOAD_MAX_BYTES,
+        help="upload-source=download 时允许读取的最大媒体字节数",
     )
     parser.add_argument(
         "--message-prefix",

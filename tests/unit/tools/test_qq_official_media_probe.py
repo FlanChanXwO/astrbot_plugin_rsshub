@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import sqlite3
@@ -108,6 +109,24 @@ def test_secret_values_are_redacted_from_json_report():
     assert "***" in encoded
 
 
+def test_iter_json_urls_accepts_list_and_tuple_values():
+    module = _load_probe_module()
+
+    urls = module._iter_json_urls(
+        [
+            "https://example.com/from-list.jpg",
+            ("https://example.com/from-tuple.mp4",),
+            {"nested": "https://example.com/from-dict.gif"},
+        ]
+    )
+
+    assert urls == [
+        "https://example.com/from-list.jpg",
+        "https://example.com/from-tuple.mp4",
+        "https://example.com/from-dict.gif",
+    ]
+
+
 def test_cli_dry_run_does_not_require_credentials(tmp_path: Path):
     db_path = tmp_path / "rsshub.db"
     _create_history_db(db_path)
@@ -160,3 +179,79 @@ def test_infer_file_type_uses_nested_proxy_url_extension():
     )
 
     assert file_type == module.FILE_TYPE_IMAGE
+
+
+class _FakeContent:
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+
+    async def iter_chunked(self, _size: int):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeResponse:
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+        chunks: list[bytes] | None = None,
+    ):
+        self.status = status
+        self.headers = headers or {}
+        self.content = _FakeContent(chunks or [])
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+class _FakeSession:
+    def __init__(self, response: _FakeResponse):
+        self._response = response
+
+    def get(self, _url: str):
+        return self._response
+
+
+def test_download_bytes_rejects_content_length_over_limit():
+    module = _load_probe_module()
+    session = _FakeSession(
+        _FakeResponse(headers={"Content-Length": "6"}, chunks=[b"abcdef"])
+    )
+
+    async def run():
+        await module._download_bytes(
+            session,
+            "https://example.com/huge.bin",
+            max_bytes=5,
+        )
+
+    try:
+        asyncio.run(run())
+    except RuntimeError as exc:
+        assert "download exceeds limit" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_download_bytes_rejects_stream_that_exceeds_limit():
+    module = _load_probe_module()
+    session = _FakeSession(_FakeResponse(chunks=[b"abc", b"def"]))
+
+    async def run():
+        await module._download_bytes(
+            session,
+            "https://example.com/huge.bin",
+            max_bytes=5,
+        )
+
+    try:
+        asyncio.run(run())
+    except RuntimeError as exc:
+        assert "download exceeds limit" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")

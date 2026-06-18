@@ -52,7 +52,7 @@ uv run python scripts/qq_official_media_probe.py \
   --target-session '名称:私聊:openid'
 ```
 
-真实接口测试必须显式选择 `upload-only` 或 `send`。`--secret-stdin` 会从 stdin 第一行读取 QQ 官方 client secret，避免密钥进入命令行参数。`--upload-source download` 会先由脚本下载媒体再按 `file_data` 上传，更接近 AstrBot 已预下载本地缓存后的真实路径；`--upload-source url` 则让 QQ 服务器自行拉远程 URL，可用于区分“QQ 拉源失败”和“文件内容/大小被拒”。
+真实接口测试必须显式选择 `upload-only` 或 `send`。`--secret-stdin` 会从 stdin 第一行读取 QQ 官方 client secret，避免密钥进入命令行参数。`--upload-source download` 会先由脚本下载媒体再按 `file_data` 上传，更接近 AstrBot 已预下载本地缓存后的真实路径；`--upload-source url` 则让 QQ 服务器自行拉远程 URL，可用于区分“QQ 拉源失败”和“文件内容/大小被拒”。脚本会给真实 HTTP 请求设置连接、读取和总超时；本地下载媒体时默认最多读取 64 MiB，既覆盖当前已知失败样本，又避免把任意超大资源完整读入内存。需要复测更大的样本时，可显式调整 `--connect-timeout`、`--read-timeout`、`--total-timeout` 和 `--download-max-bytes`。
 
 ```bash
 stty -echo

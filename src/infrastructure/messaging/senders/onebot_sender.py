@@ -14,7 +14,7 @@ from astrbot.api.message_components import Node, Nodes, Plain
 from ...utils import get_logger
 from ..napcat_stream import upload_file_stream
 from .base_sender import DefaultMessageSender
-from .types import MessageContext, SendRequest, SendResult
+from .types import MessageContext, SendRequest, SendResult, get_bot_self_id
 
 if TYPE_CHECKING:
     pass
@@ -82,6 +82,34 @@ class OneBotMessageSender(DefaultMessageSender):
         platform_name = getattr(context, "platform_name", "") if context else ""
         return get_bot_client(platform_name or "")
 
+    @classmethod
+    def _resolve_bot_self_id(
+        cls, context: MessageContext | None, bot_client: Any | None
+    ) -> str:
+        """解析 bot 的 self_id（QQ 号），用于合并转发节点的 user_id。
+
+        解析顺序：
+        1. 命令响应场景：从事件消息对象的 ``self_id`` 读取（最可靠）。
+        2. 主动推送场景：通过全局 provider 按 platform_name 解析（由
+           bootstrap 注册，读取 CQHttp 的 ``_wsr_api_clients``）。
+        3. 兜底：返回非零占位 ``"10000"``，避免新版 NapCat / Lagrange
+           因 user_id 为空或 0 报 retcode=1200。
+        """
+        if context is not None:
+            event = getattr(context, "event", None)
+            if event is not None:
+                msg_obj = getattr(event, "message_obj", None)
+                if msg_obj is not None:
+                    self_id = getattr(msg_obj, "self_id", None)
+                    if self_id and str(self_id) != "0":
+                        return str(self_id)
+            platform_name = getattr(context, "platform_name", "") or ""
+            if platform_name:
+                self_id = get_bot_self_id(platform_name)
+                if self_id and str(self_id) != "0":
+                    return str(self_id)
+        return "10000"
+
     async def send_to_user(
         self,
         request: SendRequest,
@@ -128,6 +156,9 @@ class OneBotMessageSender(DefaultMessageSender):
                     platform="onebot",
                 )
 
+            bot_client = self._resolve_bot_client(context)
+            bot_self_id = self._resolve_bot_self_id(context, bot_client)
+
             nickname = (
                 context.channel.title if context and context.channel.title else "RSSHub"
             )
@@ -171,15 +202,21 @@ class OneBotMessageSender(DefaultMessageSender):
                                 )
                             ]
                 if node_content:
-                    nodes.append(Node(content=node_content, name=nickname))
+                    nodes.append(
+                        Node(content=node_content, name=nickname, uin=bot_self_id)
+                    )
 
             if not nodes and request.message:
-                nodes.append(Node(content=[Plain(request.message)], name=nickname))
+                nodes.append(
+                    Node(
+                        content=[Plain(request.message)],
+                        name=nickname,
+                        uin=bot_self_id,
+                    )
+                )
 
             if not nodes:
                 return SendResult(ok=False, detail="empty_message")
-
-            bot_client = self._resolve_bot_client(context)
 
             # NapCat stream mode: always
             if napcat_mode == "always" and bot_client is not None:
@@ -222,6 +259,7 @@ class OneBotMessageSender(DefaultMessageSender):
                     Node(
                         content=[Plain(fallback_text or "RSS update")],
                         name=nickname,
+                        uin=bot_self_id,
                     )
                 ]
                 return await self._send_chain(session_id, [Nodes(fallback_nodes)])

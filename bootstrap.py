@@ -62,6 +62,7 @@ from .src.infrastructure.messaging import (
     DefaultMessageSender,
     InfrastructureMessageSenderProvider,
     set_bot_client_provider,
+    set_bot_self_id_provider,
 )
 from .src.infrastructure.persistence import (
     get_database,
@@ -239,11 +240,12 @@ def _init_config(
 
 
 def _register_bot_client_provider(context: Context) -> None:
-    """注册 bot client provider，供主动推送场景下的 NapCat stream 使用。
+    """注册 bot client / bot self_id provider，供主动推送场景使用。
 
     主动推送没有消息事件，sender 无法从 event 取 bot 客户端。
     这里通过 AstrBot platform_manager 按平台名解析出底层 bot 客户端
-    （如 aiocqhttp 的 CQHttp 实例），用于调用 NapCat stream action。
+    （如 aiocqhttp 的 CQHttp 实例），用于调用 NapCat stream action，
+    并从中解析出 bot 的 self_id（QQ 号）供合并转发节点使用。
     """
 
     def _resolve_bot_client(platform_name: str) -> object | None:
@@ -266,7 +268,26 @@ def _register_bot_client_provider(context: Context) -> None:
             )
         return None
 
+    def _resolve_bot_self_id(platform_name: str) -> str:
+        """从已连接的反向 WebSocket 客户端中解析 bot 的 self_id（QQ 号）。
+
+        aiocqhttp 的 CQHttp 实例以 self_id 为键保存已连接的 API 客户端
+        （``_wsr_api_clients``），取第一个非零键即可。新版 NapCat / Lagrange
+        会拒绝 user_id 为 0 或空的合并转发节点（retcode=1200），因此这里为
+        合并转发节点提供真实的 bot QQ 号；解析失败时返回空串，由调用方兜底。
+        """
+        client = _resolve_bot_client(platform_name)
+        if client is None:
+            return ""
+        api_clients = getattr(client, "_wsr_api_clients", None)
+        if isinstance(api_clients, dict):
+            for self_id in api_clients.keys():
+                if self_id and str(self_id) != "0":
+                    return str(self_id)
+        return ""
+
     set_bot_client_provider(_resolve_bot_client)
+    set_bot_self_id_provider(_resolve_bot_self_id)
 
 
 async def _configure_ffmpeg_bundler(app_settings: ApplicationSettings) -> None:

@@ -42,6 +42,15 @@ class PreparedMedia:
     detection_source: str = ""
     generated: bool = False
     variants: list[MediaVariant] = field(default_factory=list)
+    owned_paths: list[Path] = field(default_factory=list)
+
+    def mark_owned_path(self, path: Path | None) -> None:
+        """标记发送后可清理的本次调用临时文件。"""
+        if path is None:
+            return
+        if path in self.owned_paths:
+            return
+        self.owned_paths.append(path)
 
     def add_variant(self, variant: MediaVariant) -> None:
         """追加未重复的本地媒体变体。"""

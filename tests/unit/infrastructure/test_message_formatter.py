@@ -20,8 +20,92 @@ from astrbot_plugin_rsshub.src.infrastructure.pipeline import (
     MessageComponentSorter,
     MessageFormatter,
 )
+from astrbot_plugin_rsshub.src.infrastructure.rendering import (
+    TableImageRenderer,
+    TableImageRenderResult,
+)
 
 from astrbot.api.message_components import Plain
+
+
+@pytest.mark.asyncio
+async def test_clean_text_cleans_discarded_generated_temp_table_image(
+    monkeypatch,
+    tmp_path: Path,
+):
+    async def fake_font_ready():
+        return tmp_path / "font.ttf"
+
+    digest = "1" * 64
+    source_id = build_generated_media_url("table", digest)
+    temp_png = tmp_path / "rsshub_table_clean_text.png"
+    temp_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager."
+        "ensure_table_font_runtime",
+        fake_font_ready,
+    )
+    monkeypatch.setattr(
+        TableImageRenderer,
+        "render_table",
+        lambda self, table: TableImageRenderResult(
+            source_id=source_id,
+            path=temp_png,
+            digest=digest,
+            reused=False,
+        ),
+    )
+
+    await EntryTextFormatter.clean_text(
+        "<table><tr><td>A</td></tr></table>",
+        render_tables_as_images=True,
+    )
+
+    assert not temp_png.exists()
+
+
+@pytest.mark.asyncio
+async def test_clean_text_keeps_discarded_stable_table_cache_image(
+    monkeypatch,
+    tmp_path: Path,
+):
+    async def fake_font_ready():
+        return tmp_path / "font.ttf"
+
+    digest = "2" * 64
+    source_id = build_generated_media_url("table", digest)
+    stable_png = tmp_path / "table_images" / f"table_{digest}.png"
+    stable_png.parent.mkdir(parents=True)
+    stable_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.rendering."
+        "table_image_renderer.get_plugin_cache_dir",
+        lambda *parts: tmp_path.joinpath(*parts),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager."
+        "ensure_table_font_runtime",
+        fake_font_ready,
+    )
+    monkeypatch.setattr(
+        TableImageRenderer,
+        "render_table",
+        lambda self, table: TableImageRenderResult(
+            source_id=source_id,
+            path=stable_png,
+            digest=digest,
+            reused=True,
+        ),
+    )
+
+    await EntryTextFormatter.clean_text(
+        "<table><tr><td>A</td></tr></table>",
+        render_tables_as_images=True,
+    )
+
+    assert stable_png.exists()
 
 
 def test_default_chain_keeps_failed_media_as_url_component():

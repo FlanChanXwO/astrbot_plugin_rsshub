@@ -121,6 +121,16 @@ async def test_create_runtime_does_not_start_scheduler_when_register_web_api_fai
             ),
         ),
     )
+    monkeypatch.setattr(
+        bootstrap.MediaDownloader,
+        "configure_cache",
+        classmethod(lambda cls, **_kwargs: None),
+    )
+    monkeypatch.setattr(
+        bootstrap.TableImageRenderer,
+        "configure_cache",
+        classmethod(lambda cls, **_kwargs: None),
+    )
     monkeypatch.setattr(bootstrap, "_init_database", AsyncMock())
     monkeypatch.setattr(
         bootstrap,
@@ -171,10 +181,18 @@ async def test_create_runtime_configures_message_senders_with_current_app_settin
             ffmpeg_mirror="auto",
             ffmpeg_mirror_custom_url="",
         ),
-        media_platform_limits=MediaPlatformLimits(cache_ttl_seconds=60),
+        media_platform_limits=MediaPlatformLimits(
+            cache_enabled=False,
+            cache_ttl_seconds=120,
+        ),
     )
     route_knowledge_service = MagicMock()
     route_knowledge_service.close = AsyncMock()
+    cache_config: dict[str, int | bool] = {}
+    table_cache_config: dict[str, int | bool] = {}
+
+    def capture_cache_config(cls, **kwargs):
+        cache_config.update(kwargs)
 
     monkeypatch.setattr(
         bootstrap,
@@ -183,6 +201,16 @@ async def test_create_runtime_configures_message_senders_with_current_app_settin
     )
     monkeypatch.setattr(bootstrap, "_schedule_table_font", lambda _settings: None)
     monkeypatch.setattr(bootstrap, "_configure_ffmpeg_bundler", AsyncMock())
+    monkeypatch.setattr(
+        bootstrap.MediaDownloader,
+        "configure_cache",
+        classmethod(capture_cache_config),
+    )
+    monkeypatch.setattr(
+        bootstrap.TableImageRenderer,
+        "configure_cache",
+        classmethod(lambda cls, **kwargs: table_cache_config.update(kwargs)),
+    )
     monkeypatch.setattr(bootstrap, "_register_bot_client_provider", lambda _ctx: None)
     monkeypatch.setattr(bootstrap, "_init_database", AsyncMock())
     monkeypatch.setattr(
@@ -214,3 +242,6 @@ async def test_create_runtime_configures_message_senders_with_current_app_settin
     assert DefaultMessageSender._get_gif_transcode_timeout() == 33
     assert DefaultMessageSender._get_timeout_seconds() == 44
     assert DefaultMessageSender._get_proxy() == "http://localhost:7890"
+    assert cache_config["enabled"] is False
+    assert cache_config["ttl_seconds"] == 120
+    assert table_cache_config == {"enabled": False, "ttl_seconds": 120}

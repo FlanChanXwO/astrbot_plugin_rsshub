@@ -39,6 +39,8 @@ class QQOfficialMessageSender(DefaultMessageSender):
         context: MessageContext | None = None,
     ) -> SendResult:
         """发送消息到 QQ 官方 Bot"""
+        prepared_media = None
+        cleanup_owned = request.prepared_media is None
         try:
             use_markdown = self._use_markdown_for_context(context)
             prepared_media = await self._prepare_effective_media(request, context)
@@ -144,6 +146,9 @@ class QQOfficialMessageSender(DefaultMessageSender):
                 transient=self._is_transient_network_error(err),
                 detail=self._stage_error_detail("qq_official_send", str(err)),
             )
+        finally:
+            if cleanup_owned:
+                self._cleanup_owned_paths(prepared_media)
 
     @staticmethod
     def _can_send_single_image_with_text(components) -> bool:

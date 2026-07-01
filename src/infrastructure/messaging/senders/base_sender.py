@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -230,21 +232,30 @@ class DefaultMessageSender:
             return QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
         return strategy
 
-    async def _maybe_transcode_video_to_mp4(self, media_path: Path) -> Path:
+    async def _maybe_transcode_video_to_mp4(
+        self, media_path: Path
+    ) -> tuple[Path, bool]:
+        """按当前媒体缓存策略转 MP4，并返回输出是否为本次发送临时文件。"""
         if not self._should_transcode_video():
-            return media_path
+            return media_path, False
         if media_path.suffix.lower() == ".gif":
-            return media_path
+            return media_path, False
         try:
+            from ...media.media_downloader import MediaDownloader
             from ...utils.ffmpeg_helper import FFmpegTool
 
+            cache_enabled = bool(getattr(MediaDownloader, "_CACHE_ENABLED", True))
             transcoded_path = await FFmpegTool.transcode_to_mp4(
                 media_path,
                 timeout_seconds=self._get_video_transcode_timeout(),
                 auto_install_ffmpeg=True,
+                cache_enabled=cache_enabled,
+                cache_ttl_seconds=int(
+                    getattr(MediaDownloader, "_CACHE_TTL_SECONDS", 15 * 60)
+                ),
             )
             if transcoded_path and transcoded_path.exists():
-                return transcoded_path
+                return transcoded_path, not cache_enabled
         except Exception as ex:
             logger.warning(
                 "prepare_transcode_video: Video transcode failed, using original "
@@ -252,7 +263,7 @@ class DefaultMessageSender:
                 media_path,
                 ex,
             )
-        return media_path
+        return media_path, False
 
     @staticmethod
     def _normalize_error_detail(detail: str | None) -> str:
@@ -411,7 +422,10 @@ class DefaultMessageSender:
                     and prepared_item.media_type == "video"
                     and prepared_item.local_path is not None
                 ):
-                    local_path = await self._maybe_transcode_video_to_mp4(
+                    (
+                        local_path,
+                        transcode_owned,
+                    ) = await self._maybe_transcode_video_to_mp4(
                         prepared_item.local_path
                     )
                     if local_path != prepared_item.local_path:
@@ -421,6 +435,8 @@ class DefaultMessageSender:
                         prepared_item.detected_mime = detection.mime
                         prepared_item.detected_suffix = detection.suffix
                         prepared_item.detection_source = detection.source
+                        if transcode_owned:
+                            prepared_item.mark_owned_path(local_path)
                         prepared_item.add_variant(
                             MediaVariant(
                                 variant="transcoded",
@@ -443,8 +459,11 @@ class DefaultMessageSender:
                 gif_transcode_timeout=self._get_gif_transcode_timeout(),
                 **relay_kwargs,
             )
+            transcode_owned = False
             if effective_media_type == "video":
-                local_path = await self._maybe_transcode_video_to_mp4(local_path)
+                local_path, transcode_owned = await self._maybe_transcode_video_to_mp4(
+                    local_path
+                )
             detection = detect_media_file(local_path)
             effective_media_type = (
                 detection.media_type
@@ -459,6 +478,8 @@ class DefaultMessageSender:
                 detected_suffix=detection.suffix,
                 detection_source=detection.source,
             )
+            if effective_media_type == "video" and transcode_owned:
+                prepared_item.mark_owned_path(local_path)
             prepared_item.ensure_primary_variant()
             return prepared_item
         except Exception as ex:
@@ -482,11 +503,17 @@ class DefaultMessageSender:
         }
 
     @staticmethod
-    def _prepare_generated_media(media_type: str, media_url: str) -> PreparedMedia:
+    def _prepare_generated_media(
+        media_type: str,
+        media_url: str,
+        local_path: Path | None = None,
+        *,
+        owned: bool = False,
+    ) -> PreparedMedia:
         """把插件本地生成媒体转成 PreparedMedia，不经过 HTTP 下载。"""
         from ...rendering import resolve_table_image_path
 
-        local_path = resolve_table_image_path(media_url)
+        local_path = local_path or resolve_table_image_path(media_url)
         if local_path is None or not local_path.exists():
             return PreparedMedia(
                 media_type=media_type,
@@ -511,7 +538,132 @@ class DefaultMessageSender:
             generated=True,
         )
         prepared.ensure_primary_variant()
+        if owned:
+            prepared.mark_owned_path(local_path)
         return prepared
+
+    @staticmethod
+    def _generated_layout_local_paths(request: SendRequest) -> dict[str, Path]:
+        """从 layout 收集 generated media 的本地路径，优先于稳定 cache 标识解析。"""
+        paths: dict[str, Path] = {}
+        for fragment in request.layout or []:
+            url = str(getattr(fragment, "url", "") or "").strip()
+            local_path = str(getattr(fragment, "local_path", "") or "").strip()
+            if not url or not local_path or not is_generated_media_url(url):
+                continue
+            paths.setdefault(url, Path(local_path))
+        return paths
+
+    @staticmethod
+    def _should_own_generated_local_path(media_url: str, local_path: Path) -> bool:
+        """禁用表格图缓存时 layout 会携带一次性临时图，发送后应清理。"""
+        from ...rendering import is_ephemeral_generated_media_path
+
+        return is_ephemeral_generated_media_path(media_url, local_path)
+
+    @staticmethod
+    def _copy_generated_local_path_for_send(
+        media_url: str,
+        local_path: Path,
+    ) -> Path | None:
+        suffix = local_path.suffix or ".png"
+        tmp_file = tempfile.NamedTemporaryFile(
+            prefix="rsshub_generated_send_",
+            suffix=suffix,
+            delete=False,
+        )
+        copy_path = Path(tmp_file.name)
+        tmp_file.close()
+        try:
+            shutil.copy2(local_path, copy_path)
+            return copy_path
+        except Exception as ex:
+            try:
+                copy_path.unlink(missing_ok=True)
+            except OSError as cleanup_ex:
+                logger.debug(
+                    "Generated media copy cleanup failed: path=%s, err=%s",
+                    copy_path,
+                    cleanup_ex,
+                )
+            logger.warning(
+                "generated_media_temp_copy_failed: url=%s, source=%s, dest=%s, "
+                "err_type=%s, err=%s",
+                media_url,
+                local_path,
+                copy_path,
+                type(ex).__name__,
+                ex,
+            )
+            return None
+
+    def _apply_generated_layout_local_paths(
+        self,
+        request: SendRequest,
+        prepared_media: list[PreparedMedia] | None,
+        *,
+        mark_owned: bool,
+    ) -> list[PreparedMedia] | None:
+        local_paths = self._generated_layout_local_paths(request)
+        if not local_paths or not prepared_media:
+            return prepared_media
+
+        updated: list[PreparedMedia] = []
+        for item in prepared_media:
+            local_path = local_paths.get(str(item.original_url or ""))
+            if local_path is None or not local_path.exists():
+                updated.append(item)
+                continue
+            owned = mark_owned and self._should_own_generated_local_path(
+                item.original_url,
+                local_path,
+            )
+            if owned:
+                copied_path = self._copy_generated_local_path_for_send(
+                    item.original_url,
+                    local_path,
+                )
+                if copied_path is None:
+                    updated.append(
+                        PreparedMedia(
+                            media_type=item.media_type,
+                            original_url=item.original_url,
+                            download_failed=True,
+                            generated=True,
+                        )
+                    )
+                    continue
+                local_path = copied_path
+            updated.append(
+                self._prepare_generated_media(
+                    item.media_type,
+                    item.original_url,
+                    local_path=local_path,
+                    owned=owned,
+                )
+            )
+        return updated
+
+    @staticmethod
+    def _cleanup_owned_paths(prepared_media: list[PreparedMedia] | None) -> None:
+        """仅清理 PreparedMedia 显式标记的本次调用临时文件。"""
+        if not prepared_media:
+            return
+        seen: set[Path] = set()
+        for item in prepared_media:
+            for raw_path in item.owned_paths:
+                path = Path(raw_path)
+                if path in seen:
+                    continue
+                seen.add(path)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as ex:
+                    logger.debug(
+                        "Prepared media temp cleanup failed: path=%s, err=%s",
+                        path,
+                        ex,
+                    )
 
     @staticmethod
     def _safe_file_size(path: Path) -> int:
@@ -557,6 +709,11 @@ class DefaultMessageSender:
             effective_prepared = await self.prepare_media(
                 request.media, timeout=timeout, proxy=proxy
             )
+        effective_prepared = self._apply_generated_layout_local_paths(
+            request,
+            effective_prepared,
+            mark_owned=request.prepared_media is None,
+        )
         return effective_prepared
 
     def _build_components(
@@ -1246,6 +1403,8 @@ class DefaultMessageSender:
 
         组件排序由 MessageFormatter 统一处理。
         """
+        effective_prepared: list[PreparedMedia] | None = None
+        cleanup_owned = request.prepared_media is None
         try:
             session_id = request.session_id
             platform = context.platform_name if context else ""
@@ -1283,6 +1442,9 @@ class DefaultMessageSender:
                 transient=self._is_transient_network_error(err),
                 detail=self._stage_error_detail("send_to_user", str(err)),
             )
+        finally:
+            if cleanup_owned:
+                self._cleanup_owned_paths(effective_prepared)
 
     async def send_to_group(
         self,

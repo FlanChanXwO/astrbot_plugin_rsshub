@@ -222,6 +222,25 @@ def _build_content_handler_settings(value: Any) -> ContentHandlerSettings:
     )
 
 
+def _media_cache_ttl_seconds(media_cfg: Any) -> int:
+    # 与 schema slider 下界保持一致；防止绕过 AstrBot schema 直接构造出 0/负数 TTL。
+    raw_value = _get_value(media_cfg, "cache_ttl_seconds")
+    if raw_value is None or isinstance(raw_value, bool):
+        return 15 * 60
+    try:
+        ttl_seconds = int(raw_value)
+    except (TypeError, ValueError):
+        return 15 * 60
+    return max(60, ttl_seconds)
+
+
+def _media_cache_enabled(media_cfg: Any) -> bool:
+    raw_value = _get_value(media_cfg, "cache_enabled")
+    if isinstance(raw_value, bool):
+        return raw_value
+    return True
+
+
 def build_application_settings(config: Any) -> ApplicationSettings:
     basic_cfg = _get_value(config, "basic_config")
     http_cfg = _get_value(config, "http_config")
@@ -318,6 +337,8 @@ def build_application_settings(config: Any) -> ApplicationSettings:
     )
     media_platform_limits = MediaPlatformLimits(
         download_media_timeout=http.media_timeout,
+        cache_enabled=_media_cache_enabled(media_cfg),
+        cache_ttl_seconds=_media_cache_ttl_seconds(media_cfg),
         telegram_photo_max_bytes=TELEGRAM_PHOTO_MAX_BYTES,
         onebot_napcat_stream_mode=ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
         qq_official_media_threshold=QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,

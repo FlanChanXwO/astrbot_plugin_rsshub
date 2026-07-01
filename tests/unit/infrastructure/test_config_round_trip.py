@@ -91,6 +91,12 @@ def test_real_config_round_trip_media_settings_match_json():
     assert config.media.media_download_concurrency == int(
         media_json.get("media_download_concurrency", 1) or 1
     )
+    assert settings.media_platform_limits.cache_enabled == bool(
+        media_json.get("cache_enabled", True)
+    )
+    assert settings.media_platform_limits.cache_ttl_seconds == max(
+        60, int(media_json.get("cache_ttl_seconds", 900) or 900)
+    )
 
 
 # ── schema default propagation ─────────────────────────────────────────
@@ -116,6 +122,8 @@ def test_schema_healer_fills_media_defaults():
     assert media.get("gif_transcode_timeout") == 60
     assert media.get("ffmpeg_source") == "auto"
     assert media.get("media_download_concurrency") == 1
+    assert media.get("cache_enabled") is True
+    assert media.get("cache_ttl_seconds") == 900
 
     # settings_builder must also receive these defaults
     from astrbot_plugin_rsshub.src.infrastructure.config.models.plugin_config_models import (
@@ -127,3 +135,5 @@ def test_schema_healer_fills_media_defaults():
     assert settings.media.gif_transcode is False
     assert settings.media.video_transcode is False
     assert settings.media.ffmpeg_source == "auto"
+    assert settings.media_platform_limits.cache_enabled is True
+    assert settings.media_platform_limits.cache_ttl_seconds == 900

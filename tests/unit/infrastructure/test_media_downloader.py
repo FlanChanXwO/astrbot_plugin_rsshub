@@ -33,6 +33,35 @@ _VALID_JPEG = (
 )
 
 
+class _FakeProcess:
+    def __init__(self, *, returncode: int = 0) -> None:
+        self.returncode = returncode
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return b"", b""
+
+    def kill(self) -> None:
+        return None
+
+    async def wait(self) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def restore_media_downloader_cache_config():
+    original_values = {
+        "_CACHE_ENABLED": MediaDownloader._CACHE_ENABLED,
+        "_CACHE_TTL_SECONDS": MediaDownloader._CACHE_TTL_SECONDS,
+        "_CACHE_GC_INTERVAL_SECONDS": MediaDownloader._CACHE_GC_INTERVAL_SECONDS,
+        "_CACHE_GC_GRACE_SECONDS": MediaDownloader._CACHE_GC_GRACE_SECONDS,
+    }
+    try:
+        yield
+    finally:
+        for name, value in original_values.items():
+            setattr(MediaDownloader, name, value)
+
+
 def test_media_downloader_guesses_suffix_from_wrapped_format_query():
     url = (
         "https://proxy.atri.rodeo?url="
@@ -47,6 +76,28 @@ def test_media_downloader_guesses_suffix_from_content_type():
         MediaDownloader._suffix_from_content_type("image/jpeg; charset=binary")
         == ".jpg"
     )
+
+
+def test_media_downloader_configure_cache_sets_enabled_flag():
+    original_values = {
+        "_CACHE_ENABLED": MediaDownloader._CACHE_ENABLED,
+        "_CACHE_TTL_SECONDS": MediaDownloader._CACHE_TTL_SECONDS,
+        "_CACHE_GC_INTERVAL_SECONDS": MediaDownloader._CACHE_GC_INTERVAL_SECONDS,
+        "_CACHE_GC_GRACE_SECONDS": MediaDownloader._CACHE_GC_GRACE_SECONDS,
+    }
+    try:
+        MediaDownloader.configure_cache(
+            enabled=False,
+            ttl_seconds=120,
+            gc_interval_seconds=60,
+            gc_grace_seconds=30,
+        )
+
+        assert MediaDownloader._CACHE_ENABLED is False
+        assert MediaDownloader._CACHE_TTL_SECONDS == 120
+    finally:
+        for name, value in original_values.items():
+            setattr(MediaDownloader, name, value)
 
 
 @pytest.mark.asyncio
@@ -231,6 +282,133 @@ async def test_media_downloader_keeps_success_cache(
 
 
 @pytest.mark.asyncio
+async def test_media_downloader_renews_meta_on_success_cache_hit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    url = "https://example.com/a.gif"
+    source = tmp_path / "source.gif"
+    source.write_bytes(_VALID_GIF)
+    downloader = MediaDownloader(cache_dir=tmp_path)
+
+    now_values = [1000.0, 1010.0]
+
+    def fake_time() -> float:
+        if now_values:
+            return now_values.pop(0)
+        return 1010.0
+
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.media.media_downloader.time.time",
+        fake_time,
+    )
+    cached = downloader._write_cache(url, source)
+    first_expire = float(downloader._cache_meta_path(url).read_text(encoding="utf-8"))
+
+    async def fail_download(self, **_kwargs):
+        raise AssertionError("cache hit should not download")
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fail_download)
+
+    path = await downloader.get_or_download(url=url)
+    second_expire = float(downloader._cache_meta_path(url).read_text(encoding="utf-8"))
+
+    assert path == cached
+    assert second_expire > first_expire
+
+
+@pytest.mark.asyncio
+async def test_media_downloader_returns_cache_hit_when_renew_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    url = "https://example.com/a.gif"
+    source = tmp_path / "source.gif"
+    source.write_bytes(_VALID_GIF)
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    cached = downloader._write_cache(url, source)
+
+    def fail_renew(self, renew_url: str) -> float:
+        assert renew_url == url
+        raise OSError("meta is read-only")
+
+    async def fail_download(self, **_kwargs):
+        raise AssertionError("cache hit should not download")
+
+    monkeypatch.setattr(MediaDownloader, "_renew_cache_expiry", fail_renew)
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fail_download)
+
+    path = await downloader.get_or_download(url=url)
+
+    assert path == cached
+
+
+@pytest.mark.asyncio
+async def test_media_downloader_cache_disabled_downloads_every_time_without_cache_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    calls = 0
+
+    async def fake_download(self, **_kwargs):
+        nonlocal calls
+        calls += 1
+        path = tmp_path / f"source-{calls}.gif"
+        path.write_bytes(_VALID_GIF + str(calls).encode("ascii"))
+        return path
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    first_path = await downloader.get_or_download(url="https://example.com/a.gif")
+    second_path = await downloader.get_or_download(url="https://example.com/a.gif")
+
+    assert calls == 2
+    assert first_path != second_path
+    assert first_path.read_bytes() != second_path.read_bytes()
+    assert not list(tmp_path.glob("*.meta"))
+    assert not list(tmp_path.glob("*.fail"))
+
+
+@pytest.mark.asyncio
+async def test_media_downloader_cache_disabled_ignores_existing_success_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    url = "https://example.com/a.gif"
+    cached_source = tmp_path / "cached-source.gif"
+    cached_source.write_bytes(_VALID_GIF)
+    downloader = MediaDownloader(cache_dir=tmp_path)
+    cached = downloader._write_cache(url, cached_source)
+
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+
+    async def fake_download(self, **_kwargs):
+        path = tmp_path / "fresh-source.gif"
+        path.write_bytes(_VALID_GIF + b"fresh")
+        return path
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+
+    fresh = await downloader.get_or_download(url=url)
+
+    assert fresh != cached
+    assert fresh.read_bytes().endswith(b"fresh")
+    assert cached.exists()
+
+
+@pytest.mark.asyncio
 async def test_media_downloader_validates_cache_hits_outside_io_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -396,10 +574,78 @@ async def test_media_downloader_cleans_normalized_temp_when_gif_replaces_it(
 
 
 @pytest.mark.asyncio
+async def test_media_downloader_cache_disabled_gif_transcode_uses_temp_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    cache_dir_calls: list[str] = []
+
+    async def fake_download(self, **_kwargs):
+        path = tmp_path / "source.mp4"
+        path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+        return path
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    def fail_cache_dir(part: str):
+        cache_dir_calls.append(part)
+        raise AssertionError(f"cache disabled should not use cache/{part}")
+
+    async def fake_exec(*args, **_kwargs):
+        output_path = Path(args[-1])
+        output_path.write_bytes(_VALID_GIF)
+        return _FakeProcess()
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+    monkeypatch.setattr(FFmpegTool, "ensure_ffmpeg_ready", lambda **_kwargs: "ffmpeg")
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.utils.ffmpeg_helper.get_plugin_cache_dir",
+        fail_cache_dir,
+    )
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    path = await MediaDownloader(cache_dir=tmp_path).get_or_download(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    try:
+        assert path.exists()
+        assert path.suffix == ".gif"
+        assert "rsshub_gif_" in path.name
+        assert cache_dir_calls == []
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
 async def test_get_or_download_prepared_builds_valid_gif_variants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    MediaDownloader.configure_cache(
+        enabled=True,
+        ttl_seconds=123,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
     source = tmp_path / "source.mp4"
     source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
     gif_path = tmp_path / "source.gif"
@@ -416,11 +662,13 @@ async def test_get_or_download_prepared_builds_valid_gif_variants(
     async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
         return True
 
-    async def fake_transcode_to_gif(*_args, **_kwargs):
+    async def fake_transcode_to_gif(*_args, **kwargs):
+        assert kwargs["cache_ttl_seconds"] == 123
         return gif_path
 
     async def fake_transcode_to_gif_under_limit(*_args, **kwargs):
         assert kwargs["max_bytes"] == GIF_COMPRESS_TARGET_MAX_BYTES
+        assert kwargs["cache_ttl_seconds"] == 123
         return compressed_path
 
     monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
@@ -450,6 +698,285 @@ async def test_get_or_download_prepared_builds_valid_gif_variants(
         "gif",
         "compressed_gif",
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_disabled_marks_owned_primary_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+
+    async def fake_download(self, **_kwargs):
+        path = tmp_path / "source.gif"
+        path.write_bytes(_VALID_GIF)
+        return path
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/a.gif",
+        media_type="image",
+    )
+
+    assert prepared.local_path in prepared.owned_paths
+    assert prepared.variants[0].path in prepared.owned_paths
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_disabled_marks_owned_variant_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    gif_path = tmp_path / "source.gif"
+    gif_path.write_bytes(_VALID_GIF)
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_transcode_to_gif(*_args, **_kwargs):
+        return gif_path
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "transcode_to_gif", fake_transcode_to_gif)
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert source in prepared.owned_paths
+    assert gif_path in prepared.owned_paths
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_disabled_gif_variants_use_temp_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    cache_dir_calls: list[str] = []
+    exec_outputs: list[Path] = []
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    def fail_cache_dir(part: str):
+        cache_dir_calls.append(part)
+        raise AssertionError(f"cache disabled should not use cache/{part}")
+
+    async def fake_exec(*args, **_kwargs):
+        output_path = Path(args[-1])
+        exec_outputs.append(output_path)
+        if len(exec_outputs) == 1:
+            output_path.write_bytes(_VALID_GIF + (b"0" * GIF_COMPRESS_TARGET_MAX_BYTES))
+        else:
+            output_path.write_bytes(_VALID_GIF)
+        return _FakeProcess()
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "ensure_ffmpeg_ready", lambda **_kwargs: "ffmpeg")
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.utils.ffmpeg_helper.get_plugin_cache_dir",
+        fail_cache_dir,
+    )
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert cache_dir_calls == []
+    assert len(exec_outputs) == 2
+    assert all(path.name.startswith("rsshub_gif") for path in exec_outputs)
+    assert all(path in prepared.owned_paths for path in [source, *exec_outputs])
+    assert [variant.variant for variant in prepared.variants] == [
+        "original",
+        "gif",
+        "compressed_gif",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_disabled_removes_invalid_gif_variant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    exec_outputs: list[Path] = []
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_exec(*args, **_kwargs):
+        output_path = Path(args[-1])
+        exec_outputs.append(output_path)
+        output_path.write_bytes(b"not a gif")
+        return _FakeProcess()
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "ensure_ffmpeg_ready", lambda **_kwargs: "ffmpeg")
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert exec_outputs
+    assert all(not path.exists() for path in exec_outputs)
+    assert all(path not in prepared.owned_paths for path in exec_outputs)
+    assert [variant.variant for variant in prepared.variants] == ["original"]
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_disabled_removes_invalid_compressed_gif(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    exec_outputs: list[Path] = []
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_exec(*args, **_kwargs):
+        output_path = Path(args[-1])
+        exec_outputs.append(output_path)
+        if len(exec_outputs) == 1:
+            output_path.write_bytes(_VALID_GIF + (b"0" * GIF_COMPRESS_TARGET_MAX_BYTES))
+        else:
+            output_path.write_bytes(b"not a gif")
+        return _FakeProcess()
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "ensure_ffmpeg_ready", lambda **_kwargs: "ffmpeg")
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert len(exec_outputs) == 2
+    assert exec_outputs[0].exists()
+    assert not exec_outputs[1].exists()
+    assert exec_outputs[0] in prepared.owned_paths
+    assert exec_outputs[1] not in prepared.owned_paths
+    assert [variant.variant for variant in prepared.variants] == ["original", "gif"]
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_enabled_does_not_mark_cache_owned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_download(self, **_kwargs):
+        path = tmp_path / "source.gif"
+        path.write_bytes(_VALID_GIF)
+        return path
+
+    monkeypatch.setattr(MediaDownloader, "download_to_temp", fake_download)
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/a.gif",
+        media_type="image",
+    )
+
+    assert prepared.local_path is not None
+    assert prepared.local_path.name.startswith(
+        MediaDownloader(cache_dir=tmp_path)._cache_file_prefix(
+            "https://example.com/a.gif"
+        )
+    )
+    assert prepared.owned_paths == []
 
 
 @pytest.mark.asyncio
@@ -695,6 +1222,57 @@ async def test_media_downloader_m3u8_reports_original_url_when_all_candidates_fa
     assert f"m3u8 download failed: {wrapped_url}" in str(exc_info.value)
     assert "ffmpeg returned unsuccessful result" in str(exc_info.value)
     assert not list(tmp_path.glob("*.mp4"))
+
+
+@pytest.mark.asyncio
+async def test_media_downloader_m3u8_cache_disabled_returns_temp_without_meta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=False,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    calls: list[Path] = []
+
+    async def fake_download_m3u8_to_mp4(
+        m3u8_url: str,
+        output_path: Path,
+        **_kwargs,
+    ) -> bool:
+        assert m3u8_url == "https://video.example.com/playlist.m3u8"
+        calls.append(output_path)
+        output_path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+        return True
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        FFmpegTool,
+        "download_m3u8_to_mp4",
+        fake_download_m3u8_to_mp4,
+    )
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+
+    path = await MediaDownloader(cache_dir=tmp_path).get_or_download(
+        url="https://video.example.com/playlist.m3u8"
+    )
+
+    try:
+        assert calls == [path]
+        assert path.exists()
+        assert path.suffix == ".mp4"
+        assert not list(tmp_path.glob("*.meta"))
+        assert not list(tmp_path.glob("*.mp4"))
+    finally:
+        path.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #

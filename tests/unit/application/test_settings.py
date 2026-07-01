@@ -98,6 +98,143 @@ def test_application_settings_normalizes_proxy_url():
     assert settings.fetch.proxy == ""
 
 
+def test_application_settings_maps_media_cache_config():
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        RsshubPluginConfig,
+        build_application_settings,
+    )
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {"media": {"cache_enabled": False, "cache_ttl_seconds": 120}}
+    )
+    settings = build_application_settings(config)
+
+    assert settings.media_platform_limits.cache_enabled is False
+    assert settings.media_platform_limits.cache_ttl_seconds == 120
+
+
+@pytest.mark.parametrize("cache_ttl_seconds", [True, False, "bad", None])
+def test_application_settings_defaults_invalid_direct_media_cache_ttl(
+    cache_ttl_seconds,
+):
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        build_application_settings,
+    )
+
+    settings = build_application_settings(
+        {"media": {"cache_ttl_seconds": cache_ttl_seconds}}
+    )
+
+    assert settings.media_platform_limits.cache_ttl_seconds == 900
+
+
+@pytest.mark.parametrize(
+    ("cache_ttl_seconds", "expected"),
+    [
+        (-1, 60),
+        (0, 60),
+        (1, 60),
+        (59, 60),
+        (120, 120),
+    ],
+)
+def test_application_settings_maps_direct_media_cache_ttl(
+    cache_ttl_seconds,
+    expected,
+):
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        build_application_settings,
+    )
+
+    settings = build_application_settings(
+        {"media": {"cache_ttl_seconds": cache_ttl_seconds}}
+    )
+
+    assert settings.media_platform_limits.cache_ttl_seconds == expected
+
+
+@pytest.mark.parametrize(
+    ("cache_enabled", "expected"),
+    [
+        (None, True),
+        ("false", True),
+        (0, True),
+        (False, False),
+        (True, True),
+    ],
+)
+def test_application_settings_defaults_invalid_direct_media_cache_enabled(
+    cache_enabled,
+    expected,
+):
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        build_application_settings,
+    )
+
+    settings = build_application_settings({"media": {"cache_enabled": cache_enabled}})
+
+    assert settings.media_platform_limits.cache_enabled is expected
+
+
+@pytest.mark.parametrize(
+    ("cache_enabled", "expected"),
+    [
+        (None, True),
+        ("false", True),
+        (0, True),
+        (False, False),
+        (True, True),
+    ],
+)
+def test_plugin_config_normalizes_media_cache_enabled_on_typed_load(
+    cache_enabled,
+    expected,
+):
+    from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {"media": {"cache_enabled": cache_enabled}}
+    )
+
+    assert config.media.cache_enabled is expected
+
+
+@pytest.mark.parametrize("cache_ttl_seconds", [True, False, "bad", None])
+def test_plugin_config_defaults_invalid_media_cache_ttl_on_typed_load(
+    cache_ttl_seconds,
+):
+    from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {"media": {"cache_ttl_seconds": cache_ttl_seconds}}
+    )
+
+    assert config.media.cache_ttl_seconds == 900
+
+
+@pytest.mark.parametrize(
+    ("cache_ttl_seconds", "expected"),
+    [
+        (-1, 60),
+        (0, 60),
+        (1, 60),
+        (59, 60),
+        (120, 120),
+    ],
+)
+def test_plugin_config_clamps_media_cache_ttl_on_typed_load(
+    cache_ttl_seconds,
+    expected,
+):
+    from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
+
+    config = RsshubPluginConfig.from_astrbot_config(
+        {"media": {"cache_ttl_seconds": cache_ttl_seconds}}
+    )
+
+    assert config.media.cache_ttl_seconds == expected
+
+
 def test_config_ignores_removed_translation_template_credentials():
     from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
 
@@ -177,6 +314,8 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
                 "unknown_basic": "x",
             },
             "media": {
+                "cache_enabled": "false",
+                "cache_ttl_seconds": 0,
                 "ffmpeg_source": "bad",
                 "ffmpeg_mirror": "bad",
                 "ffmpeg_mirror_custom_url": 123,
@@ -216,6 +355,8 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert healed["media"]["ffmpeg_source"] == "auto"
     assert healed["media"]["ffmpeg_mirror"] == "auto"
     assert healed["media"]["ffmpeg_mirror_custom_url"] == ""
+    assert healed["media"]["cache_enabled"] is True
+    assert healed["media"]["cache_ttl_seconds"] == 60
     assert healed["route_knowledge"]["source_mode"] == "speed_test"
     assert healed["route_knowledge"]["timeout"] == 300
     assert "ffmpeg" not in healed
@@ -230,6 +371,17 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
         "enabled_platforms": ["telegram", "aiocqhttp", "qq_official"],
         "platform_strategies": [],
     }
+
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        RsshubPluginConfig,
+        build_application_settings,
+    )
+
+    settings = build_application_settings(
+        RsshubPluginConfig.from_astrbot_config(healed)
+    )
+    assert settings.media_platform_limits.cache_enabled is True
+    assert settings.media_platform_limits.cache_ttl_seconds == 60
 
 
 def test_heal_astrbot_plugin_config_returns_no_changes_for_clean_config():

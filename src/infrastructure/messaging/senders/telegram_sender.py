@@ -100,7 +100,9 @@ class TelegramMessageSender(DefaultMessageSender):
                         detected_mime=item.detected_mime,
                         detected_suffix=planned_path.suffix.lower(),
                         detection_source=item.detection_source,
+                        generated=item.generated,
                         variants=list(item.variants),
+                        owned_paths=list(item.owned_paths),
                     )
                     changed = True
                 continue
@@ -114,7 +116,9 @@ class TelegramMessageSender(DefaultMessageSender):
                     detected_mime=item.detected_mime,
                     detected_suffix=Path(first.file).suffix.lower(),
                     detection_source=item.detection_source,
+                    generated=item.generated,
                     variants=list(item.variants),
+                    owned_paths=list(item.owned_paths),
                 )
             )
             changed = True
@@ -240,6 +244,8 @@ class TelegramMessageSender(DefaultMessageSender):
 
         平台标记为 telegram，由 MessageFormatter 选择 Telegram 专属链式顺序。
         """
+        effective_prepared = None
+        cleanup_owned = request.prepared_media is None
         try:
             session_id = request.session_id
             timeout = self._get_timeout_seconds()
@@ -250,6 +256,11 @@ class TelegramMessageSender(DefaultMessageSender):
                 effective_prepared = await self.prepare_media(
                     request.media, timeout=timeout, proxy=proxy
                 )
+            effective_prepared = self._apply_generated_layout_local_paths(
+                request,
+                effective_prepared,
+                mark_owned=cleanup_owned,
+            )
             effective_prepared = self._normalize_planned_media(effective_prepared)
 
             failed_urls: list[str] = []
@@ -309,3 +320,6 @@ class TelegramMessageSender(DefaultMessageSender):
                 transient=self._is_transient_network_error(err),
                 detail=self._normalize_error_detail(str(err)),
             )
+        finally:
+            if cleanup_owned:
+                self._cleanup_owned_paths(effective_prepared)

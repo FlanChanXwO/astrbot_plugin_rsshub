@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 from unittest.mock import MagicMock
 
+import pytest
 from PIL import Image
 
 from astrbot_plugin_rsshub.src.infrastructure.rendering.table_image_renderer import (
     TABLE_FONT_DIR_ENV,
     TABLE_FONT_PATH_ENV,
     TableImageRenderer,
+    cleanup_ephemeral_generated_media_paths,
+)
+from astrbot_plugin_rsshub.src.domain.entities.content_types import (
+    LayoutFragment,
+    build_generated_media_url,
 )
 
 # 需要真实字体的渲染测试使用 macOS / Linux 上可用的 CJK 字体
@@ -31,6 +39,40 @@ def _find_cjk_font() -> str | None:
 
 
 CJK_FONT_PATH = _find_cjk_font()
+
+
+@pytest.fixture(autouse=True)
+def _reset_table_cache_policy():
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=3600)
+    yield
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=3600)
+
+
+class _FakeRenderedImage:
+    """测试用图片对象，只负责把可观察字节写到目标路径。"""
+
+    def __init__(self, payload: bytes):
+        self._payload = payload
+
+    def save(self, path, *, format=None, optimize=None):
+        Path(path).write_bytes(self._payload)
+
+
+def _renderer_without_real_font(monkeypatch, tmp_path: Path) -> TableImageRenderer:
+    # 缓存策略测试只关心落盘语义，不依赖真实字体和 Pillow 绘制。
+    monkeypatch.setattr(
+        TableImageRenderer,
+        "_load_font",
+        staticmethod(lambda size: MagicMock(size=size)),
+    )
+    return TableImageRenderer(cache_dir=tmp_path)
+
+
+def _write_table_meta(meta_path: Path, expire_ts: float) -> None:
+    meta_path.write_text(
+        json.dumps({"expire_ts": expire_ts}, separators=(",", ":")),
+        encoding="utf-8",
+    )
 
 
 def test_table_image_renderer_renders_basic_table(tmp_path: Path, monkeypatch):
@@ -101,6 +143,254 @@ def test_table_image_renderer_reuses_same_cache_for_same_content(
     assert first.path == second.path
     assert first.digest == second.digest
     assert second.reused is True
+
+
+def test_table_image_renderer_refreshes_meta_on_cache_hit(tmp_path: Path, monkeypatch):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=10)
+    now_values = iter([100.0, 105.0])
+    monkeypatch.setattr(
+        TableImageRenderer,
+        "_now_ts",
+        staticmethod(lambda: next(now_values)),
+    )
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"first"),
+    )
+    html = "<table><tr><td>A</td><td>B</td></tr></table>"
+
+    first = renderer.render_table(html)
+    second = renderer.render_table(html)
+
+    assert first is not None
+    assert second is not None
+    assert second.path == first.path
+    assert second.reused is True
+    assert second.path.read_bytes() == b"first"
+    meta = second.path.with_suffix(".meta").read_text(encoding="utf-8")
+    assert '"expire_ts":115.0' in meta
+
+
+def test_table_image_renderer_reuses_legacy_png_and_writes_missing_meta(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=30)
+    monkeypatch.setattr(TableImageRenderer, "_now_ts", staticmethod(lambda: 200.0))
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"legacy"),
+    )
+    html = "<table><tr><td>旧缓存</td></tr></table>"
+    first = renderer.render_table(html)
+    assert first is not None
+    first.path.with_suffix(".meta").unlink()
+
+    second = renderer.render_table(html)
+
+    assert second is not None
+    assert second.reused is True
+    assert second.path.read_bytes() == b"legacy"
+    assert second.path.with_suffix(".meta").exists()
+
+
+def test_table_image_renderer_rerenders_when_meta_expired(tmp_path: Path, monkeypatch):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=10)
+    now_values = iter([100.0, 200.0])
+    monkeypatch.setattr(
+        TableImageRenderer,
+        "_now_ts",
+        staticmethod(lambda: next(now_values)),
+    )
+    payloads = iter([b"first", b"second"])
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(next(payloads)),
+    )
+    html = "<table><tr><td>过期</td></tr></table>"
+
+    first = renderer.render_table(html)
+    second = renderer.render_table(html)
+
+    assert first is not None
+    assert second is not None
+    assert second.path == first.path
+    assert second.reused is False
+    assert second.path.read_bytes() == b"second"
+
+
+def test_table_image_renderer_gc_deletes_expired_unvisited_table(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=10)
+    monkeypatch.setattr(TableImageRenderer, "_now_ts", staticmethod(lambda: 1000.0))
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"new"),
+    )
+    old_png = tmp_path / "table_old.png"
+    old_meta = tmp_path / "table_old.meta"
+    old_png.write_bytes(b"old")
+    _write_table_meta(old_meta, 1.0)
+
+    result = renderer.render_table("<table><tr><td>新表格</td></tr></table>")
+
+    assert result is not None
+    assert result.path.exists()
+    assert not old_png.exists()
+    assert not old_meta.exists()
+
+
+def test_table_image_renderer_gc_keeps_current_legacy_digest(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=10)
+    monkeypatch.setattr(TableImageRenderer, "_now_ts", staticmethod(lambda: 1000.0))
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"legacy"),
+    )
+    html = "<table><tr><td>当前旧缓存</td></tr></table>"
+    first = renderer.render_table(html)
+    assert first is not None
+    first.path.with_suffix(".meta").unlink()
+    os.utime(first.path, (1, 1))
+
+    second = renderer.render_table(html)
+
+    assert second is not None
+    assert second.reused is True
+    assert second.path.read_bytes() == b"legacy"
+    assert second.path.with_suffix(".meta").exists()
+
+
+def test_table_image_renderer_reuses_png_when_meta_refresh_fails(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"cache"),
+    )
+    html = "<table><tr><td>meta refresh</td></tr></table>"
+    first = renderer.render_table(html)
+    assert first is not None
+    first.path.with_suffix(".meta").unlink(missing_ok=True)
+
+    monkeypatch.setattr(
+        renderer,
+        "_write_cache_meta",
+        lambda output_path, *, now_ts=None: (_ for _ in ()).throw(
+            OSError("meta denied")
+        ),
+    )
+
+    second = renderer.render_table(html)
+
+    assert second is not None
+    assert second.reused is True
+    assert second.path == first.path
+    assert second.path.read_bytes() == b"cache"
+
+
+def test_table_image_renderer_returns_png_when_meta_write_after_render_fails(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"rendered"),
+    )
+    monkeypatch.setattr(
+        renderer,
+        "_write_cache_meta",
+        lambda output_path, *, now_ts=None: (_ for _ in ()).throw(
+            OSError("meta denied")
+        ),
+    )
+
+    result = renderer.render_table("<table><tr><td>meta write</td></tr></table>")
+
+    assert result is not None
+    assert result.reused is False
+    assert result.path.exists()
+    assert result.path.read_bytes() == b"rendered"
+
+
+def test_cleanup_generated_table_keeps_external_non_renderer_path(tmp_path: Path):
+    external_png = tmp_path / "external-table.png"
+    external_png.write_bytes(b"external")
+    source_id = build_generated_media_url("table", "8" * 64)
+
+    cleanup_ephemeral_generated_media_paths(
+        [
+            LayoutFragment(
+                kind="image",
+                media_type="image",
+                url=source_id,
+                local_path=str(external_png),
+            )
+        ]
+    )
+
+    assert external_png.exists()
+
+
+def test_table_image_renderer_cleans_meta_tmp_when_replace_fails(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    meta_target = tmp_path / "table_deadbeef.meta"
+    original_replace = Path.replace
+
+    def fail_meta_replace(self, target):
+        if Path(target) == meta_target:
+            raise OSError("replace denied")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_meta_replace)
+
+    with pytest.raises(OSError, match="replace denied"):
+        renderer._write_cache_meta(meta_target.with_suffix(".png"), now_ts=100.0)
+
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_table_image_renderer_disabled_cache_uses_unique_temp_png(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(enabled=False, ttl_seconds=10)
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"temp"),
+    )
+    html = "<table><tr><td>临时</td></tr></table>"
+
+    first = renderer.render_table(html)
+    second = renderer.render_table(html)
+
+    assert first is not None
+    assert second is not None
+    assert first.reused is False
+    assert second.reused is False
+    assert first.path != second.path
+    assert first.path.exists()
+    assert second.path.exists()
+    assert list(tmp_path.glob("table_*.png")) == []
+    assert list(tmp_path.glob("table_*.meta")) == []
 
 
 def test_table_image_renderer_uses_unique_temp_files_for_concurrent_same_digest(

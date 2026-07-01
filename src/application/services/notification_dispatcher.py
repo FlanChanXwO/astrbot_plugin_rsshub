@@ -32,6 +32,7 @@ from ...infrastructure.pipeline import (
     EntryTextFormatter,
     MessageFormatter,
 )
+from ...infrastructure.rendering import cleanup_ephemeral_generated_media_paths
 from ...infrastructure.utils import get_logger
 from ...shared.constants import (
     INHERIT_VALUE,
@@ -582,6 +583,10 @@ class NotificationDispatcher:
             统计信息字典 {success: x, failed: y, pending: y, skipped: z}
         """
         stats: dict[str, Any] = {"success": 0, "failed": 0, "pending": 0, "skipped": 0}
+        prepared_dispatches: list[PreparedSubscriptionDispatch] = []
+        layouts_to_cleanup: list[list[LayoutFragment] | tuple[LayoutFragment, ...]] = []
+        if raw_entry is not None and raw_entry.layout:
+            layouts_to_cleanup.append(raw_entry.layout)
 
         def record_error_detail(error: object) -> None:
             if not include_error_detail:
@@ -590,55 +595,54 @@ class NotificationDispatcher:
             if text and not stats.get("last_error"):
                 stats["last_error"] = text
 
-        # 1. 获取 Feed 的所有启用订阅
-        subscriptions = await self._subscription_repo.get_active_by_feed_id(feed_id)
-        if subscription_ids is not None:
-            wanted = set(subscription_ids)
-            subscriptions = [sub for sub in subscriptions if sub.id in wanted]
-            if include_inactive_subscription_ids:
-                loaded_ids = {sub.id for sub in subscriptions}
-                missing_ids = wanted - loaded_ids
-                for sub_id in missing_ids:
-                    sub = await self._subscription_repo.get_by_id(sub_id)
-                    if sub is None or sub.feed_id != feed_id:
-                        continue
-                    subscriptions.append(sub)
-        if not subscriptions:
-            if subscription_ids is None:
-                logger.debug("Feed %s 没有活跃的订阅", feed_id)
-            else:
-                logger.debug(
-                    "Feed %s 没有匹配的活跃订阅: %s",
-                    feed_id,
-                    subscription_ids,
-                )
-            return stats
+        try:
+            # 1. 获取 Feed 的所有启用订阅
+            subscriptions = await self._subscription_repo.get_active_by_feed_id(feed_id)
+            if subscription_ids is not None:
+                wanted = set(subscription_ids)
+                subscriptions = [sub for sub in subscriptions if sub.id in wanted]
+                if include_inactive_subscription_ids:
+                    loaded_ids = {sub.id for sub in subscriptions}
+                    missing_ids = wanted - loaded_ids
+                    for sub_id in missing_ids:
+                        sub = await self._subscription_repo.get_by_id(sub_id)
+                        if sub is None or sub.feed_id != feed_id:
+                            continue
+                        subscriptions.append(sub)
+            if not subscriptions:
+                if subscription_ids is None:
+                    logger.debug("Feed %s 没有活跃的订阅", feed_id)
+                else:
+                    logger.debug(
+                        "Feed %s 没有匹配的活跃订阅: %s",
+                        feed_id,
+                        subscription_ids,
+                    )
+                return stats
 
-        logger.info(
-            "分发条目到 %s 个订阅者: feed_id=%s, title=%s",
-            len(subscriptions),
-            feed_id,
-            entry_title[:50],
-        )
+            logger.info(
+                "分发条目到 %s 个订阅者: feed_id=%s, title=%s",
+                len(subscriptions),
+                feed_id,
+                entry_title[:50],
+            )
 
-        normalized_media = normalize_media_items(
-            media_urls=media_urls,
-            media_items=media_items,
-        )
-        persisted_media_urls = [url for _media_type, url in normalized_media]
-        prepared_dispatches: list[PreparedSubscriptionDispatch] = []
+            normalized_media = normalize_media_items(
+                media_urls=media_urls,
+                media_items=media_items,
+            )
+            persisted_media_urls = [url for _media_type, url in normalized_media]
 
-        # 2. 为每个订阅解析最终 payload；handler skip 在此阶段直接落审计记录。
-        for sub in subscriptions:
-            try:
-                user = await self._ensure_user(sub.user_id)
-                processed_entry = raw_entry
-                handler_trace: list[dict[str, Any]] | None = None
-                handler_allowed = True
-                handler_reason = ""
-                if raw_entry is not None:
-                    handler_result = (
-                        await self._content_handler_runtime.process_entry_with_trace(
+            # 2. 为每个订阅解析最终 payload；handler skip 在此阶段直接落审计记录。
+            for sub in subscriptions:
+                try:
+                    user = await self._ensure_user(sub.user_id)
+                    processed_entry = raw_entry
+                    handler_trace: list[dict[str, Any]] | None = None
+                    handler_allowed = True
+                    handler_reason = ""
+                    if raw_entry is not None:
+                        handler_result = await self._content_handler_runtime.process_entry_with_trace(
                             subscription=sub,
                             user=user,
                             entry=raw_entry,
@@ -649,117 +653,34 @@ class NotificationDispatcher:
                             platform_name=str(sub.platform_name or "").strip() or None,
                             user_id=str(sub.user_id or "").strip() or None,
                         )
-                    )
-                    processed_entry = handler_result.entry
-                    handler_allowed = handler_result.allow
-                    handler_reason = handler_result.reason
-                    handler_trace = list(handler_result.trace) or None
+                        processed_entry = handler_result.entry
+                        handler_allowed = handler_result.allow
+                        handler_reason = handler_result.reason
+                        handler_trace = list(handler_result.trace) or None
+                    if processed_entry is not None and processed_entry.layout:
+                        layouts_to_cleanup.append(processed_entry.layout)
 
-                effective_title = (
-                    processed_entry.title
-                    if processed_entry is not None
-                    else entry_title
-                )
-                effective_link = (
-                    processed_entry.link if processed_entry is not None else entry_link
-                )
-                effective_options = self._resolve_effective_push_options(sub, user)
-                effective_content = await self._format_effective_entry_content(
-                    fallback_content=content,
-                    raw_entry=processed_entry,
-                    entry_title=effective_title,
-                    entry_link=effective_link,
-                    feed_title=feed_title,
-                    feed_link=feed_link,
-                    options=effective_options,
-                )
-                if not effective_options.notify:
-                    await self._save_skipped_history(
-                        subscription=sub,
-                        feed_id=feed_id,
-                        processed_entry=processed_entry,
-                        persisted_media_urls=(
-                            persisted_media_urls
-                            if effective_options.display_media and persisted_media_urls
-                            else None
-                        ),
-                        handler_trace=handler_trace,
-                        effective_title=effective_title,
-                        effective_link=effective_link,
-                        effective_content=effective_content,
-                        entry_guid=entry_guid,
-                        feed_title=feed_title,
-                        feed_link=feed_link,
-                        reason="notify disabled",
+                    effective_title = (
+                        processed_entry.title
+                        if processed_entry is not None
+                        else entry_title
                     )
-                    logger.debug("订阅 %s 已关闭通知，跳过条目推送", sub.id)
-                    stats["skipped"] += 1
-                    continue
-                if not handler_allowed:
-                    await self._save_skipped_history(
-                        subscription=sub,
-                        feed_id=feed_id,
-                        processed_entry=processed_entry,
-                        persisted_media_urls=(
-                            persisted_media_urls
-                            if effective_options.display_media and persisted_media_urls
-                            else None
-                        ),
-                        handler_trace=handler_trace,
-                        effective_title=effective_title,
-                        effective_link=effective_link,
-                        effective_content=effective_content,
-                        entry_guid=entry_guid,
-                        feed_title=feed_title,
-                        feed_link=feed_link,
-                        reason=handler_reason,
+                    effective_link = (
+                        processed_entry.link
+                        if processed_entry is not None
+                        else entry_link
                     )
-                    logger.info(
-                        "订阅 %s 条目被 handler 跳过: %s",
-                        sub.id,
-                        handler_reason,
-                    )
-                    stats["skipped"] += 1
-                    continue
-                effective_send_mode = self._resolve_send_mode(sub, user)
-                effective_media_urls = media_urls
-                effective_media_items = media_items
-                effective_layout = (
-                    list(processed_entry.layout)
-                    if processed_entry is not None and processed_entry.layout
-                    else None
-                )
-                if not effective_options.display_media:
-                    effective_media_urls = None
-                    effective_media_items = None
-                    effective_layout = None
-                if effective_send_mode == SEND_MODE_LINK_ONLY:
-                    effective_content = self._build_link_only_content(
+                    effective_options = self._resolve_effective_push_options(sub, user)
+                    effective_content = await self._format_effective_entry_content(
+                        fallback_content=content,
+                        raw_entry=processed_entry,
                         entry_title=effective_title,
                         entry_link=effective_link,
+                        feed_title=feed_title,
+                        feed_link=feed_link,
+                        options=effective_options,
                     )
-                    effective_media_urls = None
-                    effective_media_items = None
-                    effective_layout = None
-                effective_layout = self._limit_original_layout_text(
-                    effective_layout,
-                    style=effective_options.style,
-                    length_limit=effective_options.length_limit,
-                )
-
-                # 发送前指纹保护（dispatch_guard）
-                # 检查是否已有相同 entry_guid 的成功推送记录
-                if entry_guid and not bypass_success_dedup:
-                    already_sent = (
-                        await self._push_history_repo.exists_success_by_scope_and_guid(
-                            source_type="feed",
-                            source_key=self._feed_source_key(feed_id, sub.id),
-                            user_id=sub.user_id,
-                            target_session=str(sub.target_session or ""),
-                            entry_guid=entry_guid,
-                        )
-                    )
-                    if already_sent:
+                    if not effective_options.notify:
                         await self._save_skipped_history(
                             subscription=sub,
                             feed_id=feed_id,
@@ -777,188 +698,292 @@ class NotificationDispatcher:
                             entry_guid=entry_guid,
                             feed_title=feed_title,
                             feed_link=feed_link,
-                            reason="dispatch guard: already successful entry_guid",
+                            reason="notify disabled",
                         )
-                        logger.debug(
-                            "订阅 %s 已成功推送过条目 %s，跳过", sub.id, entry_guid
+                        logger.debug("订阅 %s 已关闭通知，跳过条目推送", sub.id)
+                        stats["skipped"] += 1
+                        continue
+                    if not handler_allowed:
+                        await self._save_skipped_history(
+                            subscription=sub,
+                            feed_id=feed_id,
+                            processed_entry=processed_entry,
+                            persisted_media_urls=(
+                                persisted_media_urls
+                                if effective_options.display_media
+                                and persisted_media_urls
+                                else None
+                            ),
+                            handler_trace=handler_trace,
+                            effective_title=effective_title,
+                            effective_link=effective_link,
+                            effective_content=effective_content,
+                            entry_guid=entry_guid,
+                            feed_title=feed_title,
+                            feed_link=feed_link,
+                            reason=handler_reason,
+                        )
+                        logger.info(
+                            "订阅 %s 条目被 handler 跳过: %s",
+                            sub.id,
+                            handler_reason,
                         )
                         stats["skipped"] += 1
                         continue
-
-                prepared_dispatches.append(
-                    PreparedSubscriptionDispatch(
-                        subscription=sub,
-                        processed_entry=processed_entry,
-                        handler_trace=handler_trace,
-                        effective_title=effective_title,
-                        effective_link=effective_link,
-                        effective_content=effective_content,
-                        effective_send_mode=effective_send_mode,
-                        effective_style=effective_options.style,
-                        effective_media_urls=effective_media_urls,
-                        effective_media_items=effective_media_items,
-                        effective_layout=effective_layout,
-                        persisted_media_urls=(
-                            persisted_media_urls
-                            if effective_options.display_media and persisted_media_urls
-                            else None
-                        ),
+                    effective_send_mode = self._resolve_send_mode(sub, user)
+                    effective_media_urls = media_urls
+                    effective_media_items = media_items
+                    effective_layout = (
+                        list(processed_entry.layout)
+                        if processed_entry is not None and processed_entry.layout
+                        else None
                     )
-                )
+                    if not effective_options.display_media:
+                        effective_media_urls = None
+                        effective_media_items = None
+                        effective_layout = None
+                    if effective_send_mode == SEND_MODE_LINK_ONLY:
+                        effective_content = self._build_link_only_content(
+                            entry_title=effective_title,
+                            entry_link=effective_link,
+                        )
+                        effective_media_urls = None
+                        effective_media_items = None
+                        effective_layout = None
+                    effective_layout = self._limit_original_layout_text(
+                        effective_layout,
+                        style=effective_options.style,
+                        length_limit=effective_options.length_limit,
+                    )
+                    if effective_layout:
+                        layouts_to_cleanup.append(effective_layout)
 
-            except Exception as e:
-                logger.error(
-                    "分发到订阅 %s 失败: %s",
-                    sub.id,
-                    e,
-                    exc_info=True,
-                )
-                stats["failed"] += 1
-                record_error_detail(e)
+                    # 发送前指纹保护（dispatch_guard）
+                    # 检查是否已有相同 entry_guid 的成功推送记录
+                    if entry_guid and not bypass_success_dedup:
+                        already_sent = await self._push_history_repo.exists_success_by_scope_and_guid(
+                            source_type="feed",
+                            source_key=self._feed_source_key(feed_id, sub.id),
+                            user_id=sub.user_id,
+                            target_session=str(sub.target_session or ""),
+                            entry_guid=entry_guid,
+                        )
+                        if already_sent:
+                            await self._save_skipped_history(
+                                subscription=sub,
+                                feed_id=feed_id,
+                                processed_entry=processed_entry,
+                                persisted_media_urls=(
+                                    persisted_media_urls
+                                    if effective_options.display_media
+                                    and persisted_media_urls
+                                    else None
+                                ),
+                                handler_trace=handler_trace,
+                                effective_title=effective_title,
+                                effective_link=effective_link,
+                                effective_content=effective_content,
+                                entry_guid=entry_guid,
+                                feed_title=feed_title,
+                                feed_link=feed_link,
+                                reason="dispatch guard: already successful entry_guid",
+                            )
+                            logger.debug(
+                                "订阅 %s 已成功推送过条目 %s，跳过", sub.id, entry_guid
+                            )
+                            stats["skipped"] += 1
+                            continue
 
-        if self._basic_settings.deduplicate_multi_bot and prepared_dispatches:
-            grouped: dict[
-                tuple[str, str, int, str, tuple[tuple[str, str], ...]],
-                list[PreparedSubscriptionDispatch],
-            ] = {}
-            for prepared in prepared_dispatches:
-                grouped.setdefault(self._payload_signature(prepared), []).append(
-                    prepared
-                )
+                    prepared_dispatches.append(
+                        PreparedSubscriptionDispatch(
+                            subscription=sub,
+                            processed_entry=processed_entry,
+                            handler_trace=handler_trace,
+                            effective_title=effective_title,
+                            effective_link=effective_link,
+                            effective_content=effective_content,
+                            effective_send_mode=effective_send_mode,
+                            effective_style=effective_options.style,
+                            effective_media_urls=effective_media_urls,
+                            effective_media_items=effective_media_items,
+                            effective_layout=effective_layout,
+                            persisted_media_urls=(
+                                persisted_media_urls
+                                if effective_options.display_media
+                                and persisted_media_urls
+                                else None
+                            ),
+                        )
+                    )
 
-            suppressed_sub_ids: set[int] = set()
-            for items in grouped.values():
-                if len(items) <= 1:
-                    continue
-                winner = min(items, key=lambda item: int(item.subscription.id or 0))
-                winner_sub_id = int(winner.subscription.id or 0)
-                for prepared in items:
-                    sub_id = int(prepared.subscription.id or 0)
-                    if sub_id == winner_sub_id:
+                except Exception as e:
+                    logger.error(
+                        "分发到订阅 %s 失败: %s",
+                        sub.id,
+                        e,
+                        exc_info=True,
+                    )
+                    stats["failed"] += 1
+                    record_error_detail(e)
+
+            if self._basic_settings.deduplicate_multi_bot and prepared_dispatches:
+                grouped: dict[
+                    tuple[str, str, int, str, tuple[tuple[str, str], ...]],
+                    list[PreparedSubscriptionDispatch],
+                ] = {}
+                for prepared in prepared_dispatches:
+                    grouped.setdefault(self._payload_signature(prepared), []).append(
+                        prepared
+                    )
+
+                suppressed_sub_ids: set[int] = set()
+                for items in grouped.values():
+                    if len(items) <= 1:
                         continue
-                    suppressed_sub_ids.add(sub_id)
-                    reason = f"multi-bot dedup: reused sub_id={winner_sub_id}"
-                    await self._save_skipped_history(
-                        subscription=prepared.subscription,
+                    winner = min(items, key=lambda item: int(item.subscription.id or 0))
+                    winner_sub_id = int(winner.subscription.id or 0)
+                    for prepared in items:
+                        sub_id = int(prepared.subscription.id or 0)
+                        if sub_id == winner_sub_id:
+                            continue
+                        suppressed_sub_ids.add(sub_id)
+                        reason = f"multi-bot dedup: reused sub_id={winner_sub_id}"
+                        await self._save_skipped_history(
+                            subscription=prepared.subscription,
+                            feed_id=feed_id,
+                            processed_entry=prepared.processed_entry,
+                            persisted_media_urls=prepared.persisted_media_urls,
+                            handler_trace=prepared.handler_trace,
+                            effective_title=prepared.effective_title,
+                            effective_link=prepared.effective_link,
+                            effective_content=prepared.effective_content,
+                            entry_guid=entry_guid,
+                            feed_title=feed_title,
+                            feed_link=feed_link,
+                            reason=reason,
+                        )
+                        logger.info(
+                            "订阅 %s 命中多 BOT 去重，复用主订阅 %s",
+                            sub_id,
+                            winner_sub_id,
+                        )
+                        stats["skipped"] += 1
+
+                prepared_dispatches = [
+                    prepared
+                    for prepared in prepared_dispatches
+                    if int(prepared.subscription.id or 0) not in suppressed_sub_ids
+                ]
+
+            # 3. 为候选订阅创建推送历史并发送
+            for prepared in prepared_dispatches:
+                sub = prepared.subscription
+                try:
+                    history = PushHistory(
+                        sub_id=sub.id,
+                        user_id=sub.user_id,
                         feed_id=feed_id,
-                        processed_entry=prepared.processed_entry,
-                        persisted_media_urls=prepared.persisted_media_urls,
+                        source_type="feed",
+                        source_key=self._feed_source_key(feed_id, sub.id),
+                        content=prepared.effective_content,
+                        raw_xml=(
+                            str(prepared.processed_entry.raw_xml or "").strip()
+                            if prepared.processed_entry is not None
+                            else None
+                        )
+                        or None,
+                        media_urls=prepared.persisted_media_urls,
                         handler_trace=prepared.handler_trace,
-                        effective_title=prepared.effective_title,
-                        effective_link=prepared.effective_link,
-                        effective_content=prepared.effective_content,
+                        entry_title=prepared.effective_title,
+                        entry_link=prepared.effective_link,
                         entry_guid=entry_guid,
                         feed_title=feed_title,
                         feed_link=feed_link,
-                        reason=reason,
+                        platform_name=sub.platform_name,
+                        target_session=sub.target_session,
+                        status="pending",
+                        retry_count=0,
+                        max_retries=self._default_failed_queue_max_retries(),
                     )
-                    logger.info(
-                        "订阅 %s 命中多 BOT 去重，复用主订阅 %s",
-                        sub_id,
-                        winner_sub_id,
-                    )
-                    stats["skipped"] += 1
 
-            prepared_dispatches = [
-                prepared
-                for prepared in prepared_dispatches
-                if int(prepared.subscription.id or 0) not in suppressed_sub_ids
-            ]
+                    # 保存到数据库
+                    history = await self._push_history_repo.save(history)
 
-        # 3. 为候选订阅创建推送历史并发送
-        for prepared in prepared_dispatches:
-            sub = prepared.subscription
-            try:
-                history = PushHistory(
-                    sub_id=sub.id,
-                    user_id=sub.user_id,
-                    feed_id=feed_id,
-                    source_type="feed",
-                    source_key=self._feed_source_key(feed_id, sub.id),
-                    content=prepared.effective_content,
-                    raw_xml=(
-                        str(prepared.processed_entry.raw_xml or "").strip()
-                        if prepared.processed_entry is not None
-                        else None
-                    )
-                    or None,
-                    media_urls=prepared.persisted_media_urls,
-                    handler_trace=prepared.handler_trace,
-                    entry_title=prepared.effective_title,
-                    entry_link=prepared.effective_link,
-                    entry_guid=entry_guid,
-                    feed_title=feed_title,
-                    feed_link=feed_link,
-                    platform_name=sub.platform_name,
-                    target_session=sub.target_session,
-                    status="pending",
-                    retry_count=0,
-                    max_retries=self._default_failed_queue_max_retries(),
-                )
-
-                # 保存到数据库
-                history = await self._push_history_repo.save(history)
-
-                # 4. 调用消息发送器发送消息
-                result = await self.send_to_session(
-                    target=self._target_from_subscription(sub),
-                    content=prepared.effective_content,
-                    media_urls=prepared.effective_media_urls,
-                    media_items=prepared.effective_media_items,
-                    layout=prepared.effective_layout,
-                    job_description=f"feed={feed_id}, sub={sub.id}",
-                    channel_title=feed_title,
-                    channel_link=feed_link,
-                    entry_title=prepared.effective_title,
-                    entry_link=prepared.effective_link,
-                    feed_id=feed_id,
-                    sub_id=sub.id,
-                    send_mode=prepared.effective_send_mode,
-                    style=prepared.effective_style,
-                )
-
-                # 5. 更新推送状态
-                if result["ok"]:
-                    history.mark_success()
-                    stats["success"] += 1
-                elif result.get("cancelled"):
-                    history.mark_stopped(
-                        result.get("error", "Stopped by System or Command")
-                    )
-                    history.max_retries = 0
-                    stats["success"] += 1
-                else:
-                    record_error_detail(result.get("error"))
-                    history.max_retries = (
-                        await self._resolve_initial_failure_max_retries()
-                    )
-                    # 首次失败不增加重试计数
-                    history.record_first_failure(result.get("error"))
-                    history.content = append_media_links_to_text(
-                        history.content,
-                        media_urls=prepared.persisted_media_urls,
+                    # 4. 调用消息发送器发送消息
+                    result = await self.send_to_session(
+                        target=self._target_from_subscription(sub),
+                        content=prepared.effective_content,
+                        media_urls=prepared.effective_media_urls,
                         media_items=prepared.effective_media_items,
+                        layout=prepared.effective_layout,
+                        job_description=f"feed={feed_id}, sub={sub.id}",
+                        channel_title=feed_title,
+                        channel_link=feed_link,
+                        entry_title=prepared.effective_title,
+                        entry_link=prepared.effective_link,
+                        feed_id=feed_id,
+                        sub_id=sub.id,
+                        send_mode=prepared.effective_send_mode,
+                        style=prepared.effective_style,
                     )
-                    if history.can_retry():
-                        stats["pending"] += 1
+
+                    # 5. 更新推送状态
+                    if result["ok"]:
+                        history.mark_success()
+                        stats["success"] += 1
+                    elif result.get("cancelled"):
+                        history.mark_stopped(
+                            result.get("error", "Stopped by System or Command")
+                        )
+                        history.max_retries = 0
+                        stats["success"] += 1
                     else:
-                        stats["failed"] += 1
+                        record_error_detail(result.get("error"))
+                        history.max_retries = (
+                            await self._resolve_initial_failure_max_retries()
+                        )
+                        # 首次失败不增加重试计数
+                        history.record_first_failure(result.get("error"))
+                        history.content = append_media_links_to_text(
+                            history.content,
+                            media_urls=prepared.persisted_media_urls,
+                            media_items=prepared.effective_media_items,
+                        )
+                        if history.can_retry():
+                            stats["pending"] += 1
+                        else:
+                            stats["failed"] += 1
 
-                await self._push_history_repo.save(history)
+                    await self._push_history_repo.save(history)
 
-            except Exception as e:
-                logger.error("发送订阅 %s 失败: %s", sub.id, e, exc_info=True)
-                stats["failed"] += 1
-                record_error_detail(e)
+                except Exception as e:
+                    logger.error("发送订阅 %s 失败: %s", sub.id, e, exc_info=True)
+                    stats["failed"] += 1
+                    record_error_detail(e)
 
-        logger.info(
-            "分发完成: success=%s, failed=%s, pending=%s, skipped=%s",
-            stats["success"],
-            stats["failed"],
-            stats["pending"],
-            stats["skipped"],
-        )
-        return stats
+            logger.info(
+                "分发完成: success=%s, failed=%s, pending=%s, skipped=%s",
+                stats["success"],
+                stats["failed"],
+                stats["pending"],
+                stats["skipped"],
+            )
+            return stats
+
+        finally:
+            self._cleanup_dispatch_generated_layout_paths(layouts_to_cleanup)
+
+    @staticmethod
+    def _cleanup_dispatch_generated_layout_paths(
+        layouts: list[list[LayoutFragment] | tuple[LayoutFragment, ...]],
+    ) -> None:
+        seen: set[int] = set()
+        for layout in layouts:
+            marker = id(layout)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            cleanup_ephemeral_generated_media_paths(layout)
 
     async def dispatch_agent_entry(
         self,
@@ -979,93 +1004,104 @@ class NotificationDispatcher:
         style: int = 0,
     ) -> dict[str, Any]:
         """Dispatch one agent-originated push while preserving history and retries."""
-        normalized_media = normalize_media_items(
-            media_urls=media_urls,
-            media_items=media_items,
-        )
-        persisted_media_urls = [url for _media_type, url in normalized_media]
-        target_session = str(target.target_session or "").strip()
-        if not target_session:
-            return {"ok": False, "error": "No target session", "deduplicated": False}
-        await self._ensure_user(target.user_id)
-
-        already_sent = await self._push_history_repo.exists_success_by_scope_and_guid(
-            source_type="agent",
-            source_key=source_key,
-            user_id=target.user_id,
-            target_session=target_session,
-            entry_guid=entry_guid,
-        )
-        if already_sent:
-            return {
-                "ok": True,
-                "deduplicated": True,
-                "stats": {"success": 0, "failed": 0, "pending": 0},
-            }
-
-        history = PushHistory(
-            sub_id=None,
-            user_id=target.user_id,
-            feed_id=None,
-            source_type="agent",
-            source_key=source_key,
-            content=content,
-            raw_xml=str(raw_xml or "").strip() or None,
-            media_urls=persisted_media_urls or None,
-            entry_title=entry_title,
-            entry_link=entry_link,
-            entry_guid=entry_guid,
-            feed_title=feed_title,
-            feed_link=feed_link,
-            platform_name=target.platform_name,
-            target_session=target.target_session,
-            status="pending",
-            retry_count=0,
-            max_retries=self._default_failed_queue_max_retries(),
-        )
-        history = await self._push_history_repo.save(history)
-
-        result = await self.send_to_session(
-            target=target,
-            content=content,
-            media_urls=media_urls,
-            media_items=media_items,
-            layout=layout,
-            job_description=f"agent={source_key}, history={history.id}",
-            channel_title=feed_title,
-            channel_link=feed_link,
-            entry_title=entry_title,
-            entry_link=entry_link,
-            feed_id=None,
-            sub_id=None,
-            send_mode=send_mode,
-            style=style,
-        )
-
-        stats = {"success": 0, "failed": 0, "pending": 0}
-        if result["ok"]:
-            history.mark_success()
-            stats["success"] = 1
-        elif result.get("cancelled"):
-            history.mark_stopped(result.get("error", "Stopped by System or Command"))
-            history.max_retries = 0
-            stats["success"] = 1
-        else:
-            history.max_retries = await self._resolve_initial_failure_max_retries()
-            history.record_first_failure(result.get("error"))
-            history.content = append_media_links_to_text(
-                history.content,
-                media_items=normalized_media,
+        try:
+            normalized_media = normalize_media_items(
+                media_urls=media_urls,
+                media_items=media_items,
             )
-            stats["pending" if history.can_retry() else "failed"] = 1
+            persisted_media_urls = [url for _media_type, url in normalized_media]
+            target_session = str(target.target_session or "").strip()
+            if not target_session:
+                return {
+                    "ok": False,
+                    "error": "No target session",
+                    "deduplicated": False,
+                }
+            await self._ensure_user(target.user_id)
 
-        await self._push_history_repo.save(history)
-        return {
-            "ok": result["ok"],
-            "deduplicated": False,
-            "stats": stats,
-            "history_id": history.id,
-        }
+            already_sent = (
+                await self._push_history_repo.exists_success_by_scope_and_guid(
+                    source_type="agent",
+                    source_key=source_key,
+                    user_id=target.user_id,
+                    target_session=target_session,
+                    entry_guid=entry_guid,
+                )
+            )
+            if already_sent:
+                return {
+                    "ok": True,
+                    "deduplicated": True,
+                    "stats": {"success": 0, "failed": 0, "pending": 0},
+                }
+
+            history = PushHistory(
+                sub_id=None,
+                user_id=target.user_id,
+                feed_id=None,
+                source_type="agent",
+                source_key=source_key,
+                content=content,
+                raw_xml=str(raw_xml or "").strip() or None,
+                media_urls=persisted_media_urls or None,
+                entry_title=entry_title,
+                entry_link=entry_link,
+                entry_guid=entry_guid,
+                feed_title=feed_title,
+                feed_link=feed_link,
+                platform_name=target.platform_name,
+                target_session=target.target_session,
+                status="pending",
+                retry_count=0,
+                max_retries=self._default_failed_queue_max_retries(),
+            )
+            history = await self._push_history_repo.save(history)
+
+            result = await self.send_to_session(
+                target=target,
+                content=content,
+                media_urls=media_urls,
+                media_items=media_items,
+                layout=layout,
+                job_description=f"agent={source_key}, history={history.id}",
+                channel_title=feed_title,
+                channel_link=feed_link,
+                entry_title=entry_title,
+                entry_link=entry_link,
+                feed_id=None,
+                sub_id=None,
+                send_mode=send_mode,
+                style=style,
+            )
+
+            stats = {"success": 0, "failed": 0, "pending": 0}
+            if result["ok"]:
+                history.mark_success()
+                stats["success"] = 1
+            elif result.get("cancelled"):
+                history.mark_stopped(
+                    result.get("error", "Stopped by System or Command")
+                )
+                history.max_retries = 0
+                stats["success"] = 1
+            else:
+                history.max_retries = await self._resolve_initial_failure_max_retries()
+                history.record_first_failure(result.get("error"))
+                history.content = append_media_links_to_text(
+                    history.content,
+                    media_items=normalized_media,
+                )
+                stats["pending" if history.can_retry() else "failed"] = 1
+
+            await self._push_history_repo.save(history)
+            return {
+                "ok": result["ok"],
+                "deduplicated": False,
+                "stats": stats,
+                "history_id": history.id,
+            }
+        finally:
+            cleanup_ephemeral_generated_media_paths(layout)
 
     async def send_to_session(
         self,

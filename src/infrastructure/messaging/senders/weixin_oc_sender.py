@@ -18,6 +18,8 @@ class WeixinOCMessageSender(DefaultMessageSender):
         context: MessageContext | None = None,
     ) -> SendResult:
         """按媒体逐条、文本最后的顺序发送。"""
+        prepared_media = None
+        cleanup_owned = request.prepared_media is None
         try:
             prepared_media = await self._prepare_effective_media(request, context)
             if self._is_original_style(context) and request.layout:
@@ -55,3 +57,6 @@ class WeixinOCMessageSender(DefaultMessageSender):
                 transient=self._is_transient_network_error(err),
                 detail=self._normalize_error_detail(str(err)),
             )
+        finally:
+            if cleanup_owned:
+                self._cleanup_owned_paths(prepared_media)

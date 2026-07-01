@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from astrbot_plugin_rsshub.src.application.services.agent_xml_push_service import (
     AgentXmlPushService,
     AgentXmlValidationError,
+)
+from astrbot_plugin_rsshub.src.domain.entities.content_types import (
+    GeneratedImageContent,
+    HtmlNode,
+    LayoutFragment,
+    ParsedResult,
+    TextContent,
+    build_generated_media_url,
 )
 from astrbot_plugin_rsshub.src.shared.constants import (
     SEND_MODE_LINK_ONLY,
@@ -147,6 +156,117 @@ async def test_agent_xml_push_service_display_media_false_clears_dispatch_media(
     assert call["layout"] == []
     assert call["style"] == STYLE_RSSRT
     assert result["preview"]["media_urls"] == ["https://example.com/a.png"]
+
+
+@pytest.mark.asyncio
+async def test_agent_xml_push_service_cleans_generated_temp_when_media_disabled(
+    monkeypatch,
+    tmp_path: Path,
+):
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_agent_entry.return_value = {
+        "ok": True,
+        "deduplicated": False,
+        "stats": {"success": 1, "failed": 0, "pending": 0},
+        "history_id": 14,
+    }
+    temp_png = tmp_path / "rsshub_table_agent.png"
+    temp_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+    source_id = build_generated_media_url("table", "4" * 64)
+
+    async def fake_parse(self):
+        return ParsedResult(
+            html_tree=HtmlNode(children=[TextContent(text="body")]),
+            media=[
+                GeneratedImageContent(
+                    source_id=source_id,
+                    cache_path=str(temp_png),
+                    fallback_text="table text",
+                )
+            ],
+            layout=[
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url=source_id,
+                    local_path=str(temp_png),
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.application.services.agent_xml_push_service."
+        "HTMLParser.parse",
+        fake_parse,
+    )
+    service = AgentXmlPushService(notification_dispatcher=dispatcher)
+
+    result = await service.push_entry(
+        user_id="user-1",
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        source_key="agent:test",
+        title="Hello",
+        xml="<entry><table><tr><td>A</td></tr></table></entry>",
+        display_media=False,
+    )
+
+    assert result["ok"] is True
+    assert not temp_png.exists()
+    call = dispatcher.dispatch_agent_entry.await_args.kwargs
+    assert call["layout"] == []
+
+
+@pytest.mark.asyncio
+async def test_agent_xml_push_service_cleans_generated_temp_after_dispatch(
+    monkeypatch,
+    tmp_path: Path,
+):
+    dispatcher = AsyncMock()
+    dispatcher.dispatch_agent_entry.return_value = {
+        "ok": True,
+        "deduplicated": False,
+        "stats": {"success": 1, "failed": 0, "pending": 0},
+        "history_id": 15,
+    }
+    temp_png = tmp_path / "rsshub_table_agent_dispatch.png"
+    temp_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+    source_id = build_generated_media_url("table", "5" * 64)
+
+    async def fake_parse(self):
+        return ParsedResult(
+            html_tree=HtmlNode(children=[TextContent(text="body")]),
+            media=[],
+            layout=[
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url=source_id,
+                    local_path=str(temp_png),
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.application.services.agent_xml_push_service."
+        "HTMLParser.parse",
+        fake_parse,
+    )
+    service = AgentXmlPushService(notification_dispatcher=dispatcher)
+
+    result = await service.push_entry(
+        user_id="user-1",
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+        source_key="agent:test",
+        title="Hello",
+        xml="<entry><table><tr><td>A</td></tr></table></entry>",
+    )
+
+    assert result["ok"] is True
+    assert not temp_png.exists()
+    call = dispatcher.dispatch_agent_entry.await_args.kwargs
+    assert call["layout"][0].local_path == str(temp_png)
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ...application.services.html_parser import HTMLParser
+from ..rendering import cleanup_ephemeral_generated_media_paths
 from ..utils import get_logger
 
 logger = get_logger()
@@ -133,9 +134,12 @@ class EntryTextFormatter:
             value or "",
             render_tables_as_images=render_tables_as_images,
         ).parse()
-        text = parsed.html_tree.get_plain()
-        text = remove_media_placeholders(text)
-        return normalize_plain_text(text)
+        try:
+            text = parsed.html_tree.get_plain()
+            text = remove_media_placeholders(text)
+            return normalize_plain_text(text)
+        finally:
+            cleanup_ephemeral_generated_media_paths(parsed.layout)
 
     @staticmethod
     def _remove_repeated_title(body: str, title: str) -> str:

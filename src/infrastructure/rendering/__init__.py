@@ -11,6 +11,8 @@ from .table_image_renderer import (
     TABLE_FONT_PATH_ENV,
     TableImageRenderer,
     TableImageRenderResult,
+    cleanup_ephemeral_generated_media_paths,
+    is_ephemeral_generated_media_path,
     resolve_table_image_path,
 )
 
@@ -20,8 +22,10 @@ __all__ = [
     "TABLE_FONT_PATH_ENV",
     "TableImageRenderer",
     "TableImageRenderResult",
+    "cleanup_ephemeral_generated_media_paths",
     "ensure_table_font",
     "get_runtime_font_dir",
     "get_runtime_font_path",
+    "is_ephemeral_generated_media_path",
     "resolve_table_image_path",
 ]

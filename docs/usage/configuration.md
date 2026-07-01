@@ -36,6 +36,8 @@ AstrBot 配置页只保留启动级基础设施配置、媒体配置、平台发
 | `image_relay_base_url` | 图片预下载反代地址，支持 `https://wsrv.nl/` 或 `https://wsrv.nl/?url=`。 | `""` |
 | `media_relay_base_url` | 非图片媒体或未配置图片反代时使用的通用反代地址。 | `""` |
 | `media_download_concurrency` | 同一条推送内远程媒体预下载并发数，`1` 表示串行。 | `1` |
+| `cache_enabled` | 启用远程媒体、表格图片和 GIF 处理结果缓存；关闭后使用本次临时文件并在发送后清理。 | `true` |
+| `cache_ttl_seconds` | 媒体缓存 TTL，单位秒；配置页面下限为 `60`。 | `900` |
 | `table_to_image` | HTML 表格优先渲染为图片；关闭后使用文本表格 fallback。 | `true` |
 | `video_transcode` | 视频发送前自动转码为兼容 MP4。 | `false` |
 | `video_transcode_timeout` | 视频转码超时时间，单位秒。 | `120` |

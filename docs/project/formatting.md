@@ -89,7 +89,9 @@ HTML `<table>` 解析时会先尝试走轻量转图链路：
 - 成功后正文树里放入 `GeneratedImageContent`，`layout` 中生成带 `local_path` 的 image fragment；original style 不再把 `[表格已转为图片]` 作为可见文本片段发送，表格纯文本只作为图片缺失或发送失败时的内部 fallback。
 - 文本格式化会按 `display_media` 决定是否走表格转图：正常显示媒体时移除短占位以避免重复刷屏；关闭媒体时保留 `A | B | C` 文本 fallback。
 
-表格图片按规范化表格模型计算 sha256，并保存为 `cache/table_images/table_<hash>.png`。同一表格重复推送会复用同一张图，缓存写入使用唯一临时文件避免并发同 hash 互相覆盖。空表格、坏 HTML 或渲染异常会保留原有 `A | B | C` 文本 fallback，不阻断 RSS 推送。
+表格图片按规范化表格模型计算 sha256。启用 `media.cache_enabled` 时保存为 `cache/table_images/table_<hash>.png`，旁置 `.meta` 记录 `expire_ts`；命中会刷新 TTL，旧版无 meta 的 PNG 会先视为可复用并补写 meta，过期后重渲染。每次启用缓存渲染都会顺带清理已过期的其他表格图和明显陈旧的无 meta 孤儿 PNG，但会跳过当前 digest，避免误删刚被访问的旧版 PNG。同一表格重复推送会复用同一张图，缓存写入使用唯一临时文件避免并发同 hash 互相覆盖。
+
+关闭 `media.cache_enabled` 时，表格图渲染为系统临时目录下的 `rsshub_table_*.png`，不写 digest cache 或 meta。sender 发送前会把 layout 上的一次性本地图复制成当次发送专用临时图，并通过 `PreparedMedia.owned_paths` 清理副本；共享 layout 原始临时图由 dispatcher、agent XML 推送或文本清洗调用方清理。外部传入的非 cache `local_path` 不会被自动接管。空表格、坏 HTML 或渲染异常会保留原有 `A | B | C` 文本 fallback，不阻断 RSS 推送。
 
 ## 为什么 OneBot 维持“媒体在前，文本在后”
 

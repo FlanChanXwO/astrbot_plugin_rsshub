@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import shutil
+import tempfile
+import time
 from pathlib import Path
 from typing import Final
 
@@ -315,11 +318,198 @@ class FFmpegTool:
         return valid
 
     @staticmethod
+    def _meta_path(output_path: Path) -> Path:
+        return output_path.with_suffix(".meta")
+
+    @staticmethod
+    def _read_expire_ts(meta_path: Path) -> float | None:
+        try:
+            text = meta_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not text:
+            return None
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return float(payload.get("expire_ts", 0))
+            return float(payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            try:
+                return float(text.split("\n", 1)[0])
+            except ValueError:
+                return None
+
+    @staticmethod
+    def _write_cache_meta(
+        output_path: Path,
+        *,
+        now_ts: float,
+        cache_ttl_seconds: int,
+    ) -> None:
+        meta_path = FFmpegTool._meta_path(output_path)
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "expire_ts": now_ts + max(1, int(cache_ttl_seconds)),
+        }
+        tmp_file = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            delete=False,
+            dir=meta_path.parent,
+            prefix=f".{meta_path.name}.",
+            suffix=".tmp",
+        )
+        tmp_path = Path(tmp_file.name)
+        try:
+            with tmp_file:
+                json.dump(payload, tmp_file, ensure_ascii=False, separators=(",", ":"))
+            tmp_path.replace(meta_path)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError as cleanup_ex:
+                logger.debug(
+                    "FFmpeg cache meta temp cleanup failed: path=%s, err=%s",
+                    tmp_path,
+                    cleanup_ex,
+                )
+            raise
+
+    @staticmethod
+    def _write_cache_meta_best_effort(
+        output_path: Path,
+        *,
+        now_ts: float,
+        cache_ttl_seconds: int,
+        stage: str,
+    ) -> None:
+        try:
+            FFmpegTool._write_cache_meta(
+                output_path,
+                now_ts=now_ts,
+                cache_ttl_seconds=cache_ttl_seconds,
+            )
+        except Exception as ex:
+            logger.warning(
+                "FFmpeg cache meta write failed: stage=%s, path=%s, "
+                "err_type=%s, err=%s",
+                stage,
+                output_path,
+                type(ex).__name__,
+                ex,
+            )
+
+    @staticmethod
+    def _safe_unlink(path: Path) -> None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as ex:
+            logger.debug("FFmpeg cache cleanup failed: path=%s, err=%s", path, ex)
+
+    @staticmethod
+    def _cache_entry_reusable(output_path: Path, *, now_ts: float) -> bool:
+        try:
+            if not output_path.exists() or output_path.stat().st_size <= 0:
+                return False
+        except OSError:
+            return False
+
+        meta_path = FFmpegTool._meta_path(output_path)
+        if not meta_path.exists():
+            return True
+        expire_ts = FFmpegTool._read_expire_ts(meta_path)
+        return expire_ts is not None and expire_ts > now_ts
+
+    @staticmethod
+    def _gc_transcode_cache(
+        cache_root: Path,
+        *,
+        suffixes: tuple[str, ...],
+        now_ts: float,
+        cache_ttl_seconds: int,
+        skip_paths: set[Path] | None = None,
+    ) -> int:
+        """按 TTL 清理专用转码 cache，跳过当前 digest 的 legacy 文件。"""
+        if not cache_root.exists():
+            return 0
+
+        removed = 0
+        skip_resolved: set[Path] = set()
+        for path in skip_paths or set():
+            try:
+                skip_resolved.add(path.resolve())
+            except OSError:
+                skip_resolved.add(path)
+
+        def should_skip(path: Path) -> bool:
+            try:
+                return path.resolve() in skip_resolved
+            except OSError:
+                return path in (skip_paths or set())
+
+        for meta_path in cache_root.glob("*.meta"):
+            output_paths = tuple(
+                cache_root / f"{meta_path.stem}{suffix}" for suffix in suffixes
+            )
+            if any(should_skip(path) for path in output_paths):
+                continue
+            expire_ts = FFmpegTool._read_expire_ts(meta_path)
+            if expire_ts is not None and expire_ts > now_ts:
+                continue
+            FFmpegTool._safe_unlink(meta_path)
+            removed += 1
+            for output_path in output_paths:
+                if output_path.exists():
+                    FFmpegTool._safe_unlink(output_path)
+                    removed += 1
+
+        stale_orphan_age = max(1, int(cache_ttl_seconds))
+        for suffix in suffixes:
+            for output_path in cache_root.glob(f"*{suffix}"):
+                if should_skip(output_path):
+                    continue
+                if FFmpegTool._meta_path(output_path).exists():
+                    continue
+                try:
+                    age = now_ts - output_path.stat().st_mtime
+                except OSError:
+                    continue
+                if age < stale_orphan_age:
+                    continue
+                FFmpegTool._safe_unlink(output_path)
+                removed += 1
+
+        if removed > 0:
+            logger.debug("FFmpeg transcode cache GC removed %s files", removed)
+        return removed
+
+    @staticmethod
+    def _transcode_cache_hit(
+        output_path: Path,
+        *,
+        now_ts: float,
+        cache_ttl_seconds: int,
+        stage: str,
+    ) -> Path | None:
+        if not FFmpegTool._cache_entry_reusable(output_path, now_ts=now_ts):
+            return None
+        FFmpegTool._write_cache_meta_best_effort(
+            output_path,
+            now_ts=now_ts,
+            cache_ttl_seconds=cache_ttl_seconds,
+            stage=stage,
+        )
+        return output_path
+
+    @staticmethod
     async def transcode_to_mp4(
         source_path: Path,
         *,
         timeout_seconds: int = 120,
         auto_install_ffmpeg: bool = True,
+        cache_enabled: bool = True,
+        cache_ttl_seconds: int = 900,
     ) -> Path | None:
         """Transcode source video to QQ-friendly H264/AAC MP4.
 
@@ -327,6 +517,8 @@ class FFmpegTool:
             source_path: Path to the source video file
             timeout_seconds: Maximum time allowed for transcoding
             auto_install_ffmpeg: Whether to auto-install ffmpeg if not found
+            cache_enabled: 是否复用插件 MP4 转码 cache；False 时输出唯一临时文件
+            cache_ttl_seconds: 转码 cache 命中后的续期秒数
 
         Returns:
             Path to the transcoded MP4 file, or None if failed
@@ -343,18 +535,34 @@ class FFmpegTool:
         except OSError:
             return None
 
-        cache_root = get_plugin_cache_dir("qq_video")
-        cache_root.mkdir(parents=True, exist_ok=True)
+        if cache_enabled:
+            cache_root = get_plugin_cache_dir("qq_video")
+            cache_root.mkdir(parents=True, exist_ok=True)
 
-        digest = hashlib.sha256(
-            (f"{source_path.resolve()}::{int(stat.st_mtime)}::{stat.st_size}").encode(
-                "utf-8", errors="ignore"
+            digest = hashlib.sha256(
+                (
+                    f"{source_path.resolve()}::{int(stat.st_mtime)}::{stat.st_size}"
+                ).encode("utf-8", errors="ignore")
+            ).hexdigest()
+            output_path = cache_root / f"{digest}.mp4"
+            now_ts = time.time()
+            FFmpegTool._gc_transcode_cache(
+                cache_root,
+                suffixes=(".mp4",),
+                now_ts=now_ts,
+                cache_ttl_seconds=cache_ttl_seconds,
+                skip_paths={output_path},
             )
-        ).hexdigest()
-        output_path = cache_root / f"{digest}.mp4"
-
-        if output_path.exists() and output_path.stat().st_size > 0:
-            return output_path
+            cached = FFmpegTool._transcode_cache_hit(
+                output_path,
+                now_ts=now_ts,
+                cache_ttl_seconds=cache_ttl_seconds,
+                stage="mp4_cache_hit",
+            )
+            if cached is not None:
+                return cached
+        else:
+            output_path = FFmpegTool._new_temp_mp4_path()
 
         args = [
             ffmpeg_exe,
@@ -389,7 +597,7 @@ class FFmpegTool:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
+            _stdout, stderr = await asyncio.wait_for(
                 process.communicate(),
                 timeout=max(10, int(timeout_seconds)),
             )
@@ -406,6 +614,7 @@ class FFmpegTool:
                 source_path,
                 ex,
             )
+            output_path.unlink(missing_ok=True)
             return None
 
         if process.returncode != 0:
@@ -420,6 +629,13 @@ class FFmpegTool:
             return None
 
         if output_path.exists() and output_path.stat().st_size > 0:
+            if cache_enabled:
+                FFmpegTool._write_cache_meta_best_effort(
+                    output_path,
+                    now_ts=time.time(),
+                    cache_ttl_seconds=cache_ttl_seconds,
+                    stage="mp4_success",
+                )
             logger.debug(
                 "FFmpeg transcode success: src=%s, out=%s, bytes=%s",
                 source_path,
@@ -431,11 +647,30 @@ class FFmpegTool:
         return None
 
     @staticmethod
+    def _new_temp_gif_path(prefix: str) -> Path:
+        """生成调用方拥有的临时 GIF 路径；用于禁用缓存时避开插件 cache。"""
+        fd, tmp_name = tempfile.mkstemp(prefix=prefix, suffix=".gif")
+        os.close(fd)
+        return Path(tmp_name)
+
+    @staticmethod
+    def _new_temp_mp4_path() -> Path:
+        """生成调用方拥有的临时 MP4 路径；用于禁用缓存时避开插件 cache。"""
+        fd, tmp_name = tempfile.mkstemp(
+            prefix="rsshub_video_transcoded_",
+            suffix=".mp4",
+        )
+        os.close(fd)
+        return Path(tmp_name)
+
+    @staticmethod
     async def transcode_to_gif(
         source_path: Path,
         *,
         timeout_seconds: int = 60,
         auto_install_ffmpeg: bool = True,
+        cache_enabled: bool = True,
+        cache_ttl_seconds: int = 900,
     ) -> Path | None:
         """Transcode a silent video to high-quality GIF.
 
@@ -446,6 +681,8 @@ class FFmpegTool:
             source_path: Path to the source video file
             timeout_seconds: Maximum time allowed for transcoding (default 60s)
             auto_install_ffmpeg: Whether to auto-install ffmpeg if not found
+            cache_enabled: 是否复用插件 GIF cache；False 时输出唯一临时文件
+            cache_ttl_seconds: 转码 cache 命中后的续期秒数
 
         Returns:
             Path to the generated GIF file, or None if transcoding failed
@@ -465,28 +702,45 @@ class FFmpegTool:
         except OSError:
             return None
 
-        cache_root = get_plugin_cache_dir("gif")
-        cache_root.mkdir(parents=True, exist_ok=True)
+        if cache_enabled:
+            cache_root = get_plugin_cache_dir("gif")
+            cache_root.mkdir(parents=True, exist_ok=True)
 
-        digest = hashlib.sha256(
-            (
-                f"{source_path.resolve()}::"
-                f"{int(stat.st_mtime)}::"
-                f"{stat.st_size}::"
-                f"{FFmpegTool._GIF_TRANSCODE_PROFILE}"
-            ).encode("utf-8", errors="ignore")
-        ).hexdigest()
-        output_path = cache_root / f"{digest}.gif"
+            digest = hashlib.sha256(
+                (
+                    f"{source_path.resolve()}::"
+                    f"{int(stat.st_mtime)}::"
+                    f"{stat.st_size}::"
+                    f"{FFmpegTool._GIF_TRANSCODE_PROFILE}"
+                ).encode("utf-8", errors="ignore")
+            ).hexdigest()
+            output_path = cache_root / f"{digest}.gif"
 
-        if output_path.exists() and output_path.stat().st_size > 0:
-            logger.debug(
-                "GIF cache hit: src=%s, out=%s, bytes=%s, profile=%s",
-                source_path,
-                output_path,
-                output_path.stat().st_size,
-                FFmpegTool._GIF_TRANSCODE_PROFILE,
+            now_ts = time.time()
+            FFmpegTool._gc_transcode_cache(
+                cache_root,
+                suffixes=(".gif",),
+                now_ts=now_ts,
+                cache_ttl_seconds=cache_ttl_seconds,
+                skip_paths={output_path},
             )
-            return output_path
+            cached = FFmpegTool._transcode_cache_hit(
+                output_path,
+                now_ts=now_ts,
+                cache_ttl_seconds=cache_ttl_seconds,
+                stage="gif_cache_hit",
+            )
+            if cached is not None:
+                logger.debug(
+                    "GIF cache hit: src=%s, out=%s, bytes=%s, profile=%s",
+                    source_path,
+                    cached,
+                    cached.stat().st_size,
+                    FFmpegTool._GIF_TRANSCODE_PROFILE,
+                )
+                return cached
+        else:
+            output_path = FFmpegTool._new_temp_gif_path("rsshub_gif_")
 
         vf_expr = (
             f"fps={FFmpegTool._GIF_TRANSCODE_FPS},"
@@ -532,6 +786,7 @@ class FFmpegTool:
                 source_path,
                 ex,
             )
+            output_path.unlink(missing_ok=True)
             return None
 
         if process.returncode != 0:
@@ -546,6 +801,13 @@ class FFmpegTool:
             return None
 
         if output_path.exists() and output_path.stat().st_size > 0:
+            if cache_enabled:
+                FFmpegTool._write_cache_meta_best_effort(
+                    output_path,
+                    now_ts=time.time(),
+                    cache_ttl_seconds=cache_ttl_seconds,
+                    stage="gif_success",
+                )
             logger.debug(
                 "FFmpeg GIF transcode success: src=%s, out=%s, bytes=%s, profile=%s",
                 source_path,
@@ -555,6 +817,8 @@ class FFmpegTool:
             )
             return output_path
 
+        if not cache_enabled:
+            output_path.unlink(missing_ok=True)
         return None
 
     _GIF_COMPRESS_SCALE_FACTORS: Final = [0.75, 0.5, 0.35, 0.25]
@@ -567,6 +831,8 @@ class FFmpegTool:
         max_bytes: int,
         timeout_seconds: int = 60,
         auto_install_ffmpeg: bool = True,
+        cache_enabled: bool = True,
+        cache_ttl_seconds: int = 900,
     ) -> Path | None:
         """将视频转码为不超过 max_bytes 的 GIF。
 
@@ -577,6 +843,8 @@ class FFmpegTool:
             max_bytes: GIF 最大字节数
             timeout_seconds: 单次转码超时（秒）
             auto_install_ffmpeg: 是否自动安装 ffmpeg
+            cache_enabled: 是否复用插件压缩 GIF cache；False 时输出唯一临时文件
+            cache_ttl_seconds: 转码 cache 命中后的续期秒数
 
         Returns:
             生成的 GIF 路径，或 None（失败时）
@@ -593,9 +861,8 @@ class FFmpegTool:
         except OSError:
             return None
 
-        cache_root = get_plugin_cache_dir("gif_compressed")
-        cache_root.mkdir(parents=True, exist_ok=True)
-
+        cache_root: Path | None = None
+        cache_attempts: list[tuple[int, float, Path | None]] = []
         attempts = [
             (FFmpegTool._GIF_TRANSCODE_FPS, factor)
             for factor in FFmpegTool._GIF_COMPRESS_SCALE_FACTORS
@@ -603,24 +870,48 @@ class FFmpegTool:
             (FFmpegTool._GIF_COMPRESS_MIN_FPS, factor)
             for factor in FFmpegTool._GIF_COMPRESS_SCALE_FACTORS
         ]
-
-        for fps, scale_factor in attempts:
-            cache_key = (
-                f"{source_path.resolve()}::"
-                f"{int(stat.st_mtime)}::{stat.st_size}::"
-                f"compressed:{max_bytes}:{fps}:{scale_factor}"
+        if cache_enabled:
+            cache_root = get_plugin_cache_dir("gif_compressed")
+            cache_root.mkdir(parents=True, exist_ok=True)
+            for fps, scale_factor in attempts:
+                cache_key = (
+                    f"{source_path.resolve()}::"
+                    f"{int(stat.st_mtime)}::{stat.st_size}::"
+                    f"compressed:{max_bytes}:{fps}:{scale_factor}"
+                )
+                digest = hashlib.sha256(
+                    cache_key.encode("utf-8", errors="ignore")
+                ).hexdigest()
+                cache_attempts.append((fps, scale_factor, cache_root / f"{digest}.gif"))
+            now_ts = time.time()
+            FFmpegTool._gc_transcode_cache(
+                cache_root,
+                suffixes=(".gif",),
+                now_ts=now_ts,
+                cache_ttl_seconds=cache_ttl_seconds,
+                skip_paths={path for _fps, _scale, path in cache_attempts if path},
             )
-            digest = hashlib.sha256(
-                cache_key.encode("utf-8", errors="ignore")
-            ).hexdigest()
-            output_path = cache_root / f"{digest}.gif"
+        else:
+            cache_attempts = [
+                (fps, scale_factor, None) for fps, scale_factor in attempts
+            ]
 
-            if output_path.exists():
-                cached_size = output_path.stat().st_size
-                if cached_size > 0:
+        for fps, scale_factor, cached_output_path in cache_attempts:
+            if cache_enabled and cached_output_path is not None:
+                output_path = cached_output_path
+                cached = FFmpegTool._transcode_cache_hit(
+                    output_path,
+                    now_ts=time.time(),
+                    cache_ttl_seconds=cache_ttl_seconds,
+                    stage="gif_compressed_cache_hit",
+                )
+                if cached is not None:
+                    cached_size = cached.stat().st_size
                     if cached_size <= max_bytes:
-                        return output_path
+                        return cached
                     continue
+            else:
+                output_path = FFmpegTool._new_temp_gif_path("rsshub_gif_compressed_")
 
             scale_w = f"iw*{scale_factor}"
             vf_expr = (
@@ -671,6 +962,7 @@ class FFmpegTool:
                     source_path,
                     ex,
                 )
+                output_path.unlink(missing_ok=True)
                 continue
 
             if process.returncode != 0:
@@ -686,6 +978,13 @@ class FFmpegTool:
                 continue
 
             if output_size <= max_bytes:
+                if cache_enabled:
+                    FFmpegTool._write_cache_meta_best_effort(
+                        output_path,
+                        now_ts=time.time(),
+                        cache_ttl_seconds=cache_ttl_seconds,
+                        stage="gif_compressed_success",
+                    )
                 logger.debug(
                     "Compressed GIF success: src=%s, bytes=%s, scale=%s, fps=%s",
                     source_path,
@@ -695,6 +994,8 @@ class FFmpegTool:
                 )
                 return output_path
 
+            if not cache_enabled:
+                output_path.unlink(missing_ok=True)
             logger.debug(
                 "Compressed GIF still too large: src=%s, bytes=%s > %s, scale=%s",
                 source_path,

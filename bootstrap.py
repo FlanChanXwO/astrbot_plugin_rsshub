@@ -71,6 +71,7 @@ from .src.infrastructure.persistence import (
     get_user_repository,
 )
 from .src.infrastructure.pipeline import EntryTextFormatter
+from .src.infrastructure.rendering import TableImageRenderer
 from .src.infrastructure.rendering.font_manager import (
     configure_table_font_download,
     prefetch_table_font,
@@ -321,9 +322,14 @@ def _configure_message_senders(app_settings: ApplicationSettings) -> None:
         ),
     )
     MediaDownloader.configure_cache(
+        enabled=app_settings.media_platform_limits.cache_enabled,
         ttl_seconds=app_settings.media_platform_limits.cache_ttl_seconds,
         gc_interval_seconds=app_settings.media_platform_limits.cache_gc_interval_seconds,
         gc_grace_seconds=app_settings.media_platform_limits.cache_gc_grace_seconds,
+    )
+    TableImageRenderer.configure_cache(
+        enabled=app_settings.media_platform_limits.cache_enabled,
+        ttl_seconds=app_settings.media_platform_limits.cache_ttl_seconds,
     )
     configure_media_integrity(
         min_valid_bytes=app_settings.media_platform_limits.min_valid_bytes

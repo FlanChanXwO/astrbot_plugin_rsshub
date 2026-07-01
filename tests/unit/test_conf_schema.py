@@ -126,6 +126,15 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
         "max": 32,
         "step": 1,
     }
+    assert media_items["cache_enabled"]["type"] == "bool"
+    assert media_items["cache_enabled"]["default"] is True
+    assert media_items["cache_ttl_seconds"]["type"] == "int"
+    assert media_items["cache_ttl_seconds"]["default"] == 900
+    assert media_items["cache_ttl_seconds"]["slider"] == {
+        "min": 60,
+        "max": 604800,
+        "step": 60,
+    }
     assert media_items["table_to_image"]["default"] is True
     assert media_items["video_transcode_timeout"]["slider"] == {
         "min": 10,

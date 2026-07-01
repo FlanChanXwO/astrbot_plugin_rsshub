@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,7 @@ from astrbot_plugin_rsshub.src.application.ports import SendResult
 from astrbot_plugin_rsshub.src.application.services.content_handlers import (
     ContentHandlerRuntime,
     EntryContentContext,
+    HandlerProcessResult,
 )
 from astrbot_plugin_rsshub.src.application.services.notification_dispatcher import (
     NotificationDispatcher,
@@ -21,7 +23,10 @@ from astrbot_plugin_rsshub.src.application.services.session_push_queue import (
     PushJobResult,
     SessionPushQueue,
 )
-from astrbot_plugin_rsshub.src.domain.entities.content_types import LayoutFragment
+from astrbot_plugin_rsshub.src.domain.entities.content_types import (
+    LayoutFragment,
+    build_generated_media_url,
+)
 from astrbot_plugin_rsshub.src.domain.entities.push_history import PushHistory
 from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
 from astrbot_plugin_rsshub.src.domain.entities.user import User
@@ -401,6 +406,192 @@ async def test_dispatch_sends_via_injected_sender_provider():
     assert history_repo.save.await_count == 2
     first_saved = history_repo.save.await_args_list[0].args[0]
     assert first_saved.media_urls is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cleans_raw_generated_layout_temp_after_fanout(tmp_path: Path):
+    sender = FakeSender()
+    subscriptions = [
+        Subscription(
+            id=1,
+            user_id="user-1",
+            feed_id=10,
+            platform_name="telegram",
+            target_session="telegram:Group:1",
+        ),
+        Subscription(
+            id=2,
+            user_id="user-2",
+            feed_id=10,
+            platform_name="telegram",
+            target_session="telegram:Group:2",
+        ),
+    ]
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.return_value = subscriptions
+    history_repo = AsyncMock()
+    history_repo.exists_success_by_scope_and_guid.return_value = False
+    history_repo.save.side_effect = lambda history: history
+    user_repo = AsyncMock()
+    user_repo.get_or_create.side_effect = lambda user_id: User(id=user_id)
+    temp_png = tmp_path / "rsshub_table_shared.png"
+    temp_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+    source_id = build_generated_media_url("table", "3" * 64)
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+        user_repo=user_repo,
+    )
+
+    stats = await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="content",
+        entry_title="title",
+        entry_link="https://example.com/entry",
+        entry_guid="guid-table",
+        raw_entry=EntryContentContext(
+            title="title",
+            summary="content",
+            content="content",
+            link="https://example.com/entry",
+            author="",
+            feed_title="feed",
+            feed_link="https://example.com/feed.xml",
+            layout=(
+                LayoutFragment(
+                    kind="image",
+                    media_type="image",
+                    url=source_id,
+                    local_path=str(temp_png),
+                ),
+            ),
+        ),
+    )
+
+    assert stats == {"success": 2, "failed": 0, "pending": 0, "skipped": 0}
+    assert len(sender.requests) == 2
+    assert not temp_png.exists()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cleans_raw_generated_layout_when_subscription_load_fails(
+    tmp_path: Path,
+):
+    sender = FakeSender()
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.side_effect = RuntimeError("repo unavailable")
+    history_repo = AsyncMock()
+    temp_png = tmp_path / "rsshub_table_failed_repo.png"
+    temp_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+    source_id = build_generated_media_url("table", "7" * 64)
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    with pytest.raises(RuntimeError, match="repo unavailable"):
+        await dispatcher.dispatch_to_feed_subscribers(
+            feed_id=10,
+            content="content",
+            entry_title="title",
+            entry_link="https://example.com/entry",
+            raw_entry=EntryContentContext(
+                title="title",
+                summary="content",
+                content="content",
+                link="https://example.com/entry",
+                author="",
+                feed_title="feed",
+                feed_link="https://example.com/feed.xml",
+                layout=(
+                    LayoutFragment(
+                        kind="image",
+                        media_type="image",
+                        url=source_id,
+                        local_path=str(temp_png),
+                    ),
+                ),
+            ),
+        )
+
+    assert not temp_png.exists()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cleans_processed_generated_layout_when_notify_disabled(
+    tmp_path: Path,
+):
+    sender = FakeSender()
+    sub = Subscription(
+        id=1,
+        user_id="user-1",
+        feed_id=10,
+        platform_name="telegram",
+        target_session="telegram:Group:1",
+    )
+    user = User(id="user-1", notify=0)
+    sub_repo = AsyncMock()
+    sub_repo.get_active_by_feed_id.return_value = [sub]
+    user_repo = AsyncMock()
+    user_repo.get_or_create.return_value = user
+    history_repo = AsyncMock()
+    history_repo.save.side_effect = lambda history: history
+    temp_png = tmp_path / "rsshub_table_processed.png"
+    temp_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+    source_id = build_generated_media_url("table", "6" * 64)
+    processed_entry = EntryContentContext(
+        title="Title",
+        summary="Body",
+        content="Body",
+        link="https://example.com/entry",
+        author="",
+        feed_title="Feed",
+        feed_link="https://example.com/feed.xml",
+        layout=(
+            LayoutFragment(
+                kind="image",
+                media_type="image",
+                url=source_id,
+                local_path=str(temp_png),
+            ),
+        ),
+    )
+
+    class RuntimeWithGeneratedLayout(ContentHandlerRuntime):
+        async def process_entry_with_trace(self, **kwargs):
+            return HandlerProcessResult(entry=processed_entry, allow=True)
+
+    dispatcher = NotificationDispatcher(
+        subscription_repo=sub_repo,
+        user_repo=user_repo,
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+        content_handler_runtime=RuntimeWithGeneratedLayout(),
+    )
+
+    stats = await dispatcher.dispatch_to_feed_subscribers(
+        feed_id=10,
+        content="fallback",
+        entry_title="Title",
+        entry_link="https://example.com/entry",
+        raw_entry=EntryContentContext(
+            title="Title",
+            summary="Raw",
+            content="Raw",
+            link="https://example.com/entry",
+            author="",
+            feed_title="Feed",
+            feed_link="https://example.com/feed.xml",
+        ),
+    )
+
+    assert stats == {"success": 0, "failed": 0, "pending": 0, "skipped": 1}
+    assert sender.requests == []
+    assert not temp_png.exists()
 
 
 @pytest.mark.asyncio

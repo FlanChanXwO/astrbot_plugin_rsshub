@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,57 @@ def resolve_table_image_path(source_id: str) -> Path | None:
     if kind != GENERATED_MEDIA_TABLE_KIND or not _SHA256_RE.match(digest):
         return None
     return get_plugin_cache_dir(TABLE_IMAGE_CACHE_PART) / f"table_{digest}.png"
+
+
+def is_ephemeral_generated_media_path(source_id: str, local_path: str | Path) -> bool:
+    """判断 generated table 路径是否为渲染器创建的一次性临时文件。"""
+    media_path = Path(local_path)
+    cache_path = resolve_table_image_path(source_id)
+    if cache_path is None:
+        return False
+    try:
+        if media_path.resolve() == cache_path.resolve():
+            return False
+    except OSError:
+        if media_path == cache_path:
+            return False
+    if media_path.name.startswith("rsshub_table_") and media_path.suffix == ".png":
+        try:
+            temp_dir = Path(tempfile.gettempdir()).resolve()
+            resolved_media_path = media_path.resolve()
+        except OSError:
+            return False
+        return (
+            resolved_media_path == temp_dir or temp_dir in resolved_media_path.parents
+        )
+    return False
+
+
+def cleanup_ephemeral_generated_media_paths(layout: Any) -> None:
+    """清理 layout 中 generated media 的一次性本地文件；稳定 cache 不清。"""
+    if not layout:
+        return
+    seen: set[Path] = set()
+    for fragment in layout:
+        source_id = str(getattr(fragment, "url", "") or "").strip()
+        local_path = str(getattr(fragment, "local_path", "") or "").strip()
+        if not source_id or not local_path:
+            continue
+        if not is_ephemeral_generated_media_path(source_id, local_path):
+            continue
+        path = Path(local_path)
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as ex:
+            logger.warning(
+                "generated_media_temp_cleanup_failed: path=%s, err_type=%s, err=%s",
+                path,
+                type(ex).__name__,
+                ex,
+            )
 
 
 @dataclass(frozen=True)
@@ -86,12 +139,24 @@ class TableImageRenderer:
     _BORDER = (203, 213, 225)
     _CAPTION = (17, 24, 39)
     _warned_no_font = False
+    _cache_enabled = True
+    _cache_ttl_seconds = 3600
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         self._cache_dir = cache_dir or get_plugin_cache_dir(TABLE_IMAGE_CACHE_PART)
         self._font_regular = self._load_font(size=24)
         self._font_header = self._load_font(size=24)
         self._font_caption = self._load_font(size=30)
+
+    @classmethod
+    def configure_cache(cls, *, enabled: bool, ttl_seconds: int) -> None:
+        """同步媒体缓存策略，表格图与远程媒体共用同一开关和 TTL。"""
+        cls._cache_enabled = bool(enabled)
+        cls._cache_ttl_seconds = int(ttl_seconds)
+
+    @staticmethod
+    def _now_ts() -> float:
+        return time.time()
 
     def render_table(self, table_html: str | Tag) -> TableImageRenderResult | None:
         """Render table HTML and return cache metadata.
@@ -108,8 +173,21 @@ class TableImageRenderer:
 
         digest = self._digest_model(model)
         source_id = build_generated_media_url(GENERATED_MEDIA_TABLE_KIND, digest)
+        if not self._cache_enabled:
+            return self._render_table_to_temp(model, source_id=source_id, digest=digest)
+
         output_path = self._cache_dir / f"table_{digest}.png"
-        if output_path.exists():
+        now_ts = self._now_ts()
+        if output_path.exists() and self._cache_entry_fresh_or_legacy(
+            output_path,
+            now_ts=now_ts,
+        ):
+            self._write_cache_meta_best_effort(
+                output_path,
+                now_ts=now_ts,
+                stage="cache_hit",
+            )
+            self._run_cache_gc(now_ts=now_ts, skip_paths={output_path})
             return TableImageRenderResult(
                 source_id=source_id,
                 path=output_path,
@@ -118,6 +196,7 @@ class TableImageRenderer:
             )
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._run_cache_gc(now_ts=now_ts, skip_paths={output_path})
         tmp_path = output_path.with_name(
             f".{output_path.stem}.{os.getpid()}.{uuid4().hex}.tmp{output_path.suffix}"
         )
@@ -146,12 +225,194 @@ class TableImageRenderer:
                     tmp_path,
                     ex,
                 )
+        self._write_cache_meta_best_effort(
+            output_path,
+            now_ts=now_ts,
+            stage="render_success",
+        )
         return TableImageRenderResult(
             source_id=source_id,
             path=output_path,
             digest=digest,
             reused=False,
         )
+
+    def _render_table_to_temp(
+        self,
+        model: _TableModel,
+        *,
+        source_id: str,
+        digest: str,
+    ) -> TableImageRenderResult:
+        tmp_file = tempfile.NamedTemporaryFile(
+            prefix="rsshub_table_",
+            suffix=".png",
+            delete=False,
+        )
+        tmp_path = Path(tmp_file.name)
+        tmp_file.close()
+        try:
+            image = self._draw_table(model)
+            image.save(tmp_path, format="PNG", optimize=True)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError as ex:
+                logger.debug(
+                    "Table image temp cleanup failed: path=%s, err=%s",
+                    tmp_path,
+                    ex,
+                )
+            raise
+        return TableImageRenderResult(
+            source_id=source_id,
+            path=tmp_path,
+            digest=digest,
+            reused=False,
+        )
+
+    def _cache_entry_fresh_or_legacy(self, output_path: Path, *, now_ts: float) -> bool:
+        meta_path = self._meta_path(output_path)
+        if not meta_path.exists():
+            return True
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            return float(payload.get("expire_ts", 0)) > now_ts
+        except Exception as ex:
+            logger.debug(
+                "Table image cache meta invalid: path=%s, err=%s",
+                meta_path,
+                ex,
+            )
+            return False
+
+    def _write_cache_meta(
+        self, output_path: Path, *, now_ts: float | None = None
+    ) -> None:
+        meta_path = self._meta_path(output_path)
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        effective_now = self._now_ts() if now_ts is None else now_ts
+        payload = {
+            "expire_ts": effective_now + self._cache_ttl_seconds,
+        }
+        tmp_path = meta_path.with_name(
+            f".{meta_path.name}.{os.getpid()}.{uuid4().hex}.tmp"
+        )
+        try:
+            tmp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            tmp_path.replace(meta_path)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError as ex:
+                logger.debug(
+                    "Table image cache meta temp cleanup failed: path=%s, err=%s",
+                    tmp_path,
+                    ex,
+                )
+            raise
+
+    def _write_cache_meta_best_effort(
+        self,
+        output_path: Path,
+        *,
+        now_ts: float,
+        stage: str,
+    ) -> None:
+        try:
+            self._write_cache_meta(output_path, now_ts=now_ts)
+        except Exception as ex:
+            logger.warning(
+                "table_image_cache_meta_write_failed: stage=%s, path=%s, "
+                "err_type=%s, err=%s",
+                stage,
+                output_path,
+                type(ex).__name__,
+                ex,
+            )
+
+    def _run_cache_gc(
+        self,
+        *,
+        now_ts: float,
+        skip_paths: set[Path] | None = None,
+    ) -> int:
+        """清理过期表格图 cache，并跳过当前 digest 的 legacy PNG。"""
+        if not self._cache_dir.exists():
+            return 0
+
+        skip_resolved: set[Path] = set()
+        for path in skip_paths or set():
+            try:
+                skip_resolved.add(path.resolve())
+            except OSError:
+                skip_resolved.add(path)
+
+        def should_skip(path: Path) -> bool:
+            try:
+                return path.resolve() in skip_resolved
+            except OSError:
+                return path in (skip_paths or set())
+
+        removed = 0
+        for meta_path in self._cache_dir.glob("table_*.meta"):
+            output_path = meta_path.with_suffix(".png")
+            if should_skip(output_path):
+                continue
+            expire_ts = self._read_cache_expire_ts(meta_path)
+            if expire_ts is not None and expire_ts > now_ts:
+                continue
+            removed += self._safe_unlink(meta_path)
+            removed += self._safe_unlink(output_path)
+
+        stale_orphan_age = max(1, int(self._cache_ttl_seconds))
+        for output_path in self._cache_dir.glob("table_*.png"):
+            if should_skip(output_path):
+                continue
+            if self._meta_path(output_path).exists():
+                continue
+            try:
+                age = now_ts - output_path.stat().st_mtime
+            except OSError:
+                continue
+            if age < stale_orphan_age:
+                continue
+            removed += self._safe_unlink(output_path)
+
+        if removed > 0:
+            logger.debug("Table image cache GC removed %s files", removed)
+        return removed
+
+    @staticmethod
+    def _read_cache_expire_ts(meta_path: Path) -> float | None:
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            return float(payload.get("expire_ts", 0))
+        except Exception as ex:
+            logger.debug(
+                "Table image cache meta invalid during GC: path=%s, err=%s",
+                meta_path,
+                ex,
+            )
+            return None
+
+    @staticmethod
+    def _safe_unlink(path: Path) -> int:
+        try:
+            if not path.exists():
+                return 0
+            path.unlink()
+            return 1
+        except OSError as ex:
+            logger.debug("Table image cache cleanup failed: path=%s, err=%s", path, ex)
+            return 0
+
+    @staticmethod
+    def _meta_path(output_path: Path) -> Path:
+        return output_path.with_suffix(".meta")
 
     def _parse_table(self, table_html: str | Tag) -> _TableModel | None:
         table = self._coerce_table(table_html)

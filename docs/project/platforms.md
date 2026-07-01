@@ -104,7 +104,8 @@ AstrBot 用 Hypercorn 跑 aiocqhttp 的反向 WebSocket server，启动时 `bot.
 | 图片 / 视频校验 | 缓存前和复用前都校验本地图片、视频 | 坏缓存不能进入发送链。 |
 | m3u8 / HLS | 使用 FFmpeg 下载合并，并用 ffprobe 校验输出 | 拒绝零时长、无视频流或损坏输出。 |
 | 失败语义 | 媒体失败不阻断 RSS 推送 | 失败媒体原始链接会作为降级信息保留。 |
-| 本地生成媒体 | `<table>` 图片使用 `rsshub-generated://table/<hash>` 标识并直接映射 cache PNG | 它不是远程 URL，不经过 HTTP 下载，也不会在失败链接里暴露本地 cache 标识。 |
+| 本地生成媒体 | `<table>` 图片使用 `rsshub-generated://table/<hash>` 标识；启用缓存时映射到 `cache/table_images/table_<hash>.png` 并用 `.meta expire_ts` 管理 TTL，禁用缓存时优先使用 layout 携带的一次性本地 PNG | 它不是远程 URL，不经过 HTTP 下载，也不会在失败链接里暴露本地 cache 标识。 |
+| 缓存开关与 TTL | `media.cache_enabled=true` 默认允许远程媒体、表格图片、GIF / 压缩 GIF 转码和视频 MP4 转码缓存，命中都会续期到 `now + media.cache_ttl_seconds`，启用路径会顺带清理同目录过期项；`false` 时远程媒体跳过 GC、缓存读取和缓存写入，表格图、GIF 转换 / 压缩和视频 MP4 转码都使用系统临时输出，并在 `PreparedMedia.owned_paths` 标记本次发送后可清理的路径 | TTL 配置面 slider 下界为 60 秒，运行态也会按 60 秒兜底，避免绕过 schema 直构配置时生成 0 或负数 TTL。 |
 | 媒体反代 | `media.image_relay_base_url` / `media.media_relay_base_url` 默认关闭，开启后先尝试反代再回源 | 图片优先走图片反代；非图片或未配置图片反代时走通用媒体反代。缓存 key 和失败展示链接保持原始 URL。 |
 | 下载并发 | `media.media_download_concurrency=1` 保持串行，大于 1 时同一条推送内并发预下载远程媒体 | 返回顺序保持输入顺序；重复 URL 仍只下载一次，重复项保留原有占位语义。 |
 
@@ -118,9 +119,11 @@ AstrBot 用 Hypercorn 跑 aiocqhttp 的反向 WebSocket server，启动时 `bot.
   -> 平台 sender 构造 MessageChain
 ```
 
-本地生成媒体的入口不同：`HTMLParser` 生成 `GeneratedImageContent` 后，sender 会通过 `infrastructure.rendering` 的表格图片解析器把 `rsshub-generated://table/<hash>` 映射回 `cache/table_images/table_<hash>.png`，直接构造 `PreparedMedia`。如果 cache 文件缺失，会按媒体失败处理但不会把内部标识追加给用户，也不会在 original layout 中把内部标识当作图片文件发送；layout 会携带不可见的表格纯文本 fallback，供 cache 缺失或平台图片发送失败时补回正文。`media.table_to_image=false` 时表格解析阶段直接使用纯文本表格；渲染失败时也会回退为纯文本表格。
+本地生成媒体的入口不同：`HTMLParser` 生成 `GeneratedImageContent` 后，sender 会优先使用 layout 上的 `local_path`；没有 local path 时再通过 `infrastructure.rendering` 的表格图片解析器把 `rsshub-generated://table/<hash>` 映射回 `cache/table_images/table_<hash>.png`，直接构造 `PreparedMedia`。如果 cache 文件缺失，会按媒体失败处理但不会把内部标识追加给用户，也不会在 original layout 中把内部标识当作图片文件发送；layout 会携带不可见的表格纯文本 fallback，供 cache 缺失或平台图片发送失败时补回正文。禁用缓存时，表格临时图在 fan-out 期间可能被多个订阅复用，因此 sender 会先复制渲染器创建的 `rsshub_table_*.png` 为本次发送专用临时图，再将副本放入 `PreparedMedia.owned_paths` 并在发送结束后清理；共享的 layout 原始临时图由 dispatcher、agent XML 推送或文本清洗调用方清理。启用缓存的表格图不标记为 owned，外部传入的非 cache `local_path` 也不会被自动标记或清理。`media.table_to_image=false` 时表格解析阶段直接使用纯文本表格；渲染失败时也会回退为纯文本表格。
 
-无声视频转 GIF 时会保留原始视频 variant。GIF 转换候选由 sender 侧综合声明类型、URL hint（含 RSSHub / 反代包装 URL 内层地址）和下载后的真实文件探测决定；声明被误标为 `image` / `file` 但下载后探测为视频的媒体，仍会进入无声视频转 GIF 分支。转换决策日志会记录 sender、声明类型、有效类型、`gif_transcode`、`try_convert_gif`、FFmpeg 来源和 URL，便于排查“配置已开但未进入转换”的问题。转换成功后的 `.gif` 通过 `MediaDispatchResolver` 按 `image` 媒体组件发送，不在各平台 sender 里重复特殊判断。若 GIF 超出当前内置的跨平台压缩目标，插件会按固定 FFmpeg 档位尝试压缩 GIF；发送时再按目标平台软阈值选择原 GIF、压缩 GIF、原视频、文件或原始链接。
+无声视频转 GIF 时会保留原始视频 variant。GIF 转换候选由 sender 侧综合声明类型、URL hint（含 RSSHub / 反代包装 URL 内层地址）和下载后的真实文件探测决定；声明被误标为 `image` / `file` 但下载后探测为视频的媒体，仍会进入无声视频转 GIF 分支。转换决策日志会记录 sender、声明类型、有效类型、`gif_transcode`、`try_convert_gif`、FFmpeg 来源和 URL，便于排查“配置已开但未进入转换”的问题。转换成功后的 `.gif` 通过 `MediaDispatchResolver` 按 `image` 媒体组件发送，不在各平台 sender 里重复特殊判断。若 GIF 超出当前内置的跨平台压缩目标，插件会按固定 FFmpeg 档位尝试压缩 GIF；启用缓存时 `cache/gif` 和 `cache/gif_compressed` 都有旁置 `.meta expire_ts`、命中续期和过期清理，禁用缓存时输出 `rsshub_gif_*.gif` / `rsshub_gif_compressed_*.gif` 临时文件并随 `PreparedMedia.owned_paths` 清理。发送时再按目标平台软阈值选择原 GIF、压缩 GIF、原视频、文件或原始链接。
+
+视频 MP4 转码用于 QQ 等平台的视频兼容路径。启用缓存时输出仍落在 `cache/qq_video/*.mp4`，同样使用 `.meta expire_ts` 续期和 GC；禁用缓存时不会创建或读取 `cache/qq_video`，而是生成 `rsshub_video_transcoded_*.mp4` 系统临时文件，并由 sender 在发送完成后清理。
 
 ## 代理与超时
 

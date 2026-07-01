@@ -13,6 +13,7 @@ from ...infrastructure.pipeline import (
     EntryFormatInput,
     EntryTextFormatter,
 )
+from ...infrastructure.rendering import cleanup_ephemeral_generated_media_paths
 from ...infrastructure.utils import get_logger
 from ...shared.constants import (
     DISPLAY_AUTO,
@@ -352,116 +353,122 @@ class AgentXmlPushService:
             display_entry_tags=display_entry_tags,
             length_limit=length_limit,
         )
-        parsed = await HTMLParser(body_xml, feed_link=link or "").parse()
-        plain_body = FeedPollingService._remove_media_placeholders(
-            parsed.html_tree.get_plain().strip()
-        )
-        content = await _entry_text_formatter.format_entry(
-            EntryFormatInput(
+        parsed = None
+        try:
+            parsed = await HTMLParser(body_xml, feed_link=link or "").parse()
+            plain_body = FeedPollingService._remove_media_placeholders(
+                parsed.html_tree.get_plain().strip()
+            )
+            content = await _entry_text_formatter.format_entry(
+                EntryFormatInput(
+                    title=title,
+                    content=plain_body,
+                    summary=plain_body,
+                    link=str(link or "").strip(),
+                    author=str(author or "").strip(),
+                    feed_title=str(feed_title or "").strip(),
+                    feed_link=str(link or "").strip(),
+                    tags=_collect_xml_tags(root),
+                ),
+                options.format_options,
+            )
+            media_items = FeedPollingService._media_items_from_parsed(parsed.media)
+            media_urls = [
+                url
+                for _media_type, url in normalize_media_items(media_items=media_items)
+            ]
+            extra_media = _collect_xml_media(root)
+            media_urls.extend(extra_media)
+            media_urls = list(dict.fromkeys(media_urls))
+            normalized_media_items = normalize_media_items(
+                media_urls=media_urls,
+                media_items=media_items,
+            )
+            dispatch_media_urls = media_urls
+            dispatch_media_items = normalized_media_items
+            dispatch_layout = list(parsed.layout)
+            if not options.format_options.display_media:
+                dispatch_media_urls = []
+                dispatch_media_items = []
+                dispatch_layout = []
+            if options.send_mode == SEND_MODE_LINK_ONLY:
+                content = _build_link_only_content(
+                    title=title, link=str(link or "").strip()
+                )
+                dispatch_media_urls = []
+                dispatch_media_items = []
+                dispatch_layout = []
+            final_guid = (
+                str(entry_guid or "").strip()
+                or str(idempotency_key or "").strip()
+                or build_agent_entry_guid(
+                    source_key=source_key,
+                    user_id=user_id,
+                    target_session=target_session,
+                    title=title,
+                    link=str(link or "").strip(),
+                    xml=valid_xml,
+                    media_items=normalized_media_items,
+                )
+            )
+
+            preview = ParsedAgentXmlEntry(
                 title=title,
-                content=plain_body,
-                summary=plain_body,
-                link=str(link or "").strip(),
-                author=str(author or "").strip(),
+                content=content,
+                entry_link=str(link or "").strip(),
                 feed_title=str(feed_title or "").strip(),
                 feed_link=str(link or "").strip(),
-                tags=_collect_xml_tags(root),
-            ),
-            options.format_options,
-        )
-        media_items = FeedPollingService._media_items_from_parsed(parsed.media)
-        media_urls = [
-            url for _media_type, url in normalize_media_items(media_items=media_items)
-        ]
-        extra_media = _collect_xml_media(root)
-        media_urls.extend(extra_media)
-        media_urls = list(dict.fromkeys(media_urls))
-        normalized_media_items = normalize_media_items(
-            media_urls=media_urls,
-            media_items=media_items,
-        )
-        dispatch_media_urls = media_urls
-        dispatch_media_items = normalized_media_items
-        dispatch_layout = list(parsed.layout)
-        if not options.format_options.display_media:
-            dispatch_media_urls = []
-            dispatch_media_items = []
-            dispatch_layout = []
-        if options.send_mode == SEND_MODE_LINK_ONLY:
-            content = _build_link_only_content(
-                title=title, link=str(link or "").strip()
-            )
-            dispatch_media_urls = []
-            dispatch_media_items = []
-            dispatch_layout = []
-        final_guid = (
-            str(entry_guid or "").strip()
-            or str(idempotency_key or "").strip()
-            or build_agent_entry_guid(
-                source_key=source_key,
-                user_id=user_id,
-                target_session=target_session,
-                title=title,
-                link=str(link or "").strip(),
-                xml=valid_xml,
+                author=str(author or "").strip(),
+                entry_guid=final_guid,
+                media_urls=media_urls,
                 media_items=normalized_media_items,
+                layout=dispatch_layout,
             )
-        )
+            if dry_run:
+                return {
+                    "ok": True,
+                    "dry_run": True,
+                    "preview": {
+                        "title": preview.title,
+                        "content": preview.content,
+                        "entry_link": preview.entry_link,
+                        "feed_title": preview.feed_title,
+                        "author": preview.author,
+                        "entry_guid": preview.entry_guid,
+                        "media_urls": dispatch_media_urls,
+                    },
+                }
 
-        preview = ParsedAgentXmlEntry(
-            title=title,
-            content=content,
-            entry_link=str(link or "").strip(),
-            feed_title=str(feed_title or "").strip(),
-            feed_link=str(link or "").strip(),
-            author=str(author or "").strip(),
-            entry_guid=final_guid,
-            media_urls=media_urls,
-            media_items=normalized_media_items,
-            layout=dispatch_layout,
-        )
-        if dry_run:
-            return {
-                "ok": True,
-                "dry_run": True,
-                "preview": {
-                    "title": preview.title,
-                    "content": preview.content,
-                    "entry_link": preview.entry_link,
-                    "feed_title": preview.feed_title,
-                    "author": preview.author,
-                    "entry_guid": preview.entry_guid,
-                    "media_urls": dispatch_media_urls,
-                },
+            result = await self._notification_dispatcher.dispatch_agent_entry(
+                source_key=source_key,
+                target=SendTarget(
+                    user_id=user_id,
+                    platform_name=platform_name,
+                    target_session=target_session,
+                    sub_id=None,
+                ),
+                content=preview.content,
+                raw_xml=valid_xml,
+                entry_title=preview.title,
+                entry_link=preview.entry_link,
+                feed_title=preview.feed_title,
+                feed_link=preview.feed_link,
+                media_urls=dispatch_media_urls,
+                media_items=dispatch_media_items,
+                layout=dispatch_layout,
+                entry_guid=preview.entry_guid,
+                send_mode=options.send_mode,
+                style=options.style,
+            )
+            result["dry_run"] = False
+            result["preview"] = {
+                "entry_guid": preview.entry_guid,
+                "media_urls": preview.media_urls,
             }
-
-        result = await self._notification_dispatcher.dispatch_agent_entry(
-            source_key=source_key,
-            target=SendTarget(
-                user_id=user_id,
-                platform_name=platform_name,
-                target_session=target_session,
-                sub_id=None,
-            ),
-            content=preview.content,
-            raw_xml=valid_xml,
-            entry_title=preview.title,
-            entry_link=preview.entry_link,
-            feed_title=preview.feed_title,
-            feed_link=preview.feed_link,
-            media_urls=dispatch_media_urls,
-            media_items=dispatch_media_items,
-            layout=dispatch_layout,
-            entry_guid=preview.entry_guid,
-            send_mode=options.send_mode,
-            style=options.style,
-        )
-        result["dry_run"] = False
-        result["preview"] = {
-            "entry_guid": preview.entry_guid,
-            "media_urls": preview.media_urls,
-        }
-        return result
+            return result
+        finally:
+            if parsed is not None:
+                cleanup_ephemeral_generated_media_paths(parsed.layout)
 
     async def push_entry_json(
         self,

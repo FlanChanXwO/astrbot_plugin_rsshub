@@ -91,6 +91,8 @@ class OneBotMessageSender(DefaultMessageSender):
 
         经典策略下每条消息/媒体各自一个 Node；失败后回退为纯文本 Nodes。
         """
+        effective_prepared = None
+        cleanup_owned = request.prepared_media is None
         try:
             session_id = request.session_id
             timeout = self._get_timeout_seconds()
@@ -101,6 +103,11 @@ class OneBotMessageSender(DefaultMessageSender):
                 effective_prepared = await self.prepare_media(
                     request.media, timeout=timeout, proxy=proxy
                 )
+            effective_prepared = self._apply_generated_layout_local_paths(
+                request,
+                effective_prepared,
+                mark_owned=cleanup_owned,
+            )
             prepared_media_by_url = {
                 pm.original_url: pm
                 for pm in (effective_prepared or [])
@@ -232,6 +239,9 @@ class OneBotMessageSender(DefaultMessageSender):
                 transient=self._is_transient_network_error(err),
                 detail=self._normalize_error_detail(str(err)),
             )
+        finally:
+            if cleanup_owned:
+                self._cleanup_owned_paths(effective_prepared)
 
     async def _stream_upload_nodes(
         self, bot_client: Any, nodes: list[Node]

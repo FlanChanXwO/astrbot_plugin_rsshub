@@ -1050,8 +1050,8 @@ class MediaDownloader:
                         )
                     )
                     gif_accepted = True
-                elif not self._CACHE_ENABLED:
-                    self.safe_unlink(gif_path)
+                else:
+                    self._discard_gif_variant_cache(gif_path)
             gif_size = self._safe_size(gif_path) if gif_accepted else 0
             if gif_size > GIF_COMPRESS_TARGET_MAX_BYTES:
                 compressed_path = await FFmpegTool.transcode_to_gif_under_limit(
@@ -1076,8 +1076,8 @@ class MediaDownloader:
                                 size_bytes=self._safe_size(compressed_path),
                             )
                         )
-                    elif not self._CACHE_ENABLED:
-                        self.safe_unlink(compressed_path)
+                    else:
+                        self._discard_gif_variant_cache(compressed_path)
         except Exception as ex:
             logger.warning(
                 "GIF variant generation failed, keeping original video: url=%s, err=%s",
@@ -1100,6 +1100,12 @@ class MediaDownloader:
             validation.detail,
         )
         return False
+
+    @staticmethod
+    def _discard_gif_variant_cache(path: Path) -> None:
+        # FFmpeg cache 命中会先续期 .meta，坏 GIF 必须连同元数据一起驱逐。
+        MediaDownloader.safe_unlink(path)
+        MediaDownloader.safe_unlink(path.with_suffix(".meta"))
 
     @staticmethod
     def _safe_size(path: Path) -> int:

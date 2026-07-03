@@ -1092,6 +1092,124 @@ async def test_get_or_download_prepared_skips_invalid_gif_variant(
 
 
 @pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_enabled_removes_invalid_gif_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=True,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    gif_path = tmp_path / "broken-cache.gif"
+    gif_path.write_bytes(b"not a gif")
+    gif_meta = gif_path.with_suffix(".meta")
+    gif_meta.write_text("1234", encoding="utf-8")
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    async def fake_transcode_to_gif(*_args, **_kwargs):
+        return gif_path
+
+    async def fake_transcode_to_gif_under_limit(*_args, **_kwargs):
+        raise AssertionError("invalid GIF cache should not be compressed")
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "transcode_to_gif", fake_transcode_to_gif)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "transcode_to_gif_under_limit",
+        fake_transcode_to_gif_under_limit,
+    )
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert [variant.variant for variant in prepared.variants] == ["original"]
+    assert not gif_path.exists()
+    assert not gif_meta.exists()
+
+
+@pytest.mark.asyncio
+async def test_get_or_download_prepared_cache_enabled_removes_invalid_compressed_gif_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    MediaDownloader.configure_cache(
+        enabled=True,
+        ttl_seconds=900,
+        gc_interval_seconds=300,
+        gc_grace_seconds=600,
+    )
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"\x00" * 300))
+    gif_path = tmp_path / "source.gif"
+    gif_path.write_bytes(_VALID_GIF + (b"0" * GIF_COMPRESS_TARGET_MAX_BYTES))
+    compressed_path = tmp_path / "broken-compressed-cache.gif"
+    compressed_path.write_bytes(b"not a gif")
+    compressed_meta = compressed_path.with_suffix(".meta")
+    compressed_meta.write_text("1234", encoding="utf-8")
+
+    async def fake_get_or_download(self, **_kwargs):
+        return source
+
+    async def fake_has_audio_stream(*_args, **_kwargs) -> bool:
+        return False
+
+    async def fake_has_valid_video_stream(*_args, **_kwargs) -> bool:
+        return True
+
+    async def fake_transcode_to_gif(*_args, **_kwargs):
+        return gif_path
+
+    async def fake_transcode_to_gif_under_limit(*_args, **_kwargs):
+        return compressed_path
+
+    monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "has_valid_video_stream",
+        fake_has_valid_video_stream,
+    )
+    monkeypatch.setattr(FFmpegTool, "has_audio_stream", fake_has_audio_stream)
+    monkeypatch.setattr(FFmpegTool, "transcode_to_gif", fake_transcode_to_gif)
+    monkeypatch.setattr(
+        FFmpegTool,
+        "transcode_to_gif_under_limit",
+        fake_transcode_to_gif_under_limit,
+    )
+
+    prepared = await MediaDownloader(cache_dir=tmp_path).get_or_download_prepared(
+        url="https://example.com/video.mp4",
+        media_type="video",
+        try_convert_gif=True,
+    )
+
+    assert [variant.variant for variant in prepared.variants] == ["original", "gif"]
+    assert not compressed_path.exists()
+    assert not compressed_meta.exists()
+
+
+@pytest.mark.asyncio
 async def test_media_downloader_discards_invalid_success_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -20,6 +20,7 @@ from astrbot.core.utils.http_ssl import build_tls_connector
 from ...shared.constants import (
     GIF_COMPRESS_TARGET_MAX_BYTES,
     GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+    MEDIA_CACHE_TTL_SECONDS_DEFAULT,
 )
 from ..utils import get_plugin_cache_dir
 from ..utils.ffmpeg_helper import FFmpegTool
@@ -95,7 +96,7 @@ class MediaDownloader:
     """媒体下载器，支持缓存管理和格式转换。"""
 
     _CACHE_ENABLED: bool = True
-    _CACHE_TTL_SECONDS: int = 15 * 60
+    _CACHE_TTL_SECONDS: int = MEDIA_CACHE_TTL_SECONDS_DEFAULT
     _CACHE_GC_INTERVAL_SECONDS: int = 5 * 60
     _CACHE_GC_GRACE_SECONDS: int = 10 * 60
     _CACHE_MEDIA_SUFFIXES: tuple[str, ...] = (

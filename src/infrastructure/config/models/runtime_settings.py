@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ....shared.constants import (
+    MEDIA_CACHE_TTL_SECONDS_DEFAULT,
     ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     QQ_OFFICIAL_MARKDOWN_MODE_DEFAULT,
@@ -128,7 +129,7 @@ class MediaPlatformLimits:
 
     download_media_timeout: int = _DEFAULT_MEDIA_TIMEOUT_SECONDS
     cache_enabled: bool = True
-    cache_ttl_seconds: int = 15 * 60
+    cache_ttl_seconds: int = MEDIA_CACHE_TTL_SECONDS_DEFAULT
     cache_gc_interval_seconds: int = 5 * 60
     cache_gc_grace_seconds: int = 10 * 60
     min_valid_bytes: int = 1

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
@@ -694,6 +695,59 @@ async def test_mp4_transcode_cache_refreshes_and_reruns_expired_entry(
     assert first.read_bytes() == b"mp4-2"
     assert not old_mp4.exists()
     assert not old_meta.exists()
+
+
+@pytest.mark.asyncio
+async def test_mp4_transcode_cache_reruns_stale_entry_without_meta(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.webm"
+    source.write_bytes(b"webm")
+    exec_outputs: list[Path] = []
+
+    monkeypatch.setattr(FFmpegTool, "ensure_ffmpeg_ready", lambda **kwargs: "ffmpeg")
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.utils.ffmpeg_helper.get_plugin_cache_dir",
+        lambda part: tmp_path / part,
+    )
+
+    async def fake_exec(*args, **kwargs):
+        output_path = Path(args[-1])
+        exec_outputs.append(output_path)
+        output_path.write_bytes(f"mp4-{len(exec_outputs)}".encode())
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    first = await FFmpegTool.transcode_to_mp4(source, cache_ttl_seconds=1)
+    assert first is not None
+    first.with_suffix(".meta").unlink()
+    os.utime(first, (1, 1))
+
+    second = await FFmpegTool.transcode_to_mp4(source, cache_ttl_seconds=1)
+
+    assert second == first
+    assert exec_outputs == [first, first]
+    assert second.read_bytes() == b"mp4-2"
+    assert second.with_suffix(".meta").exists()
+
+
+def test_transcode_cache_gc_removes_stale_no_meta_skip_path(tmp_path: Path) -> None:
+    output_path = tmp_path / "current.mp4"
+    output_path.write_bytes(b"old")
+    os.utime(output_path, (1, 1))
+
+    removed = FFmpegTool._gc_transcode_cache(
+        tmp_path,
+        suffixes=(".mp4",),
+        now_ts=100.0,
+        cache_ttl_seconds=10,
+        skip_paths={output_path},
+    )
+
+    assert removed == 1
+    assert not output_path.exists()
 
 
 def test_configure_bundler_clears_bundled_cache_when_switching_to_system() -> None:

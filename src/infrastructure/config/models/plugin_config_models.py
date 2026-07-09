@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field, field_validator
 from ....shared.constants import (
     GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     GIF_TRANSCODE_PROFILE_OPTIONS,
+    MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+    MEDIA_CACHE_TTL_SECONDS_MIN,
 )
 from .sender_strategy_models import SenderStrategiesConfig
 
@@ -185,7 +187,10 @@ class MediaConfig(BaseModel):
     media_relay_base_url: str = Field(default="", description="通用媒体反代基础URL")
     media_download_concurrency: int = Field(default=1, description="媒体预下载并发数")
     cache_enabled: bool = Field(default=True, description="启用媒体缓存")
-    cache_ttl_seconds: int = Field(default=900, description="媒体缓存TTL（秒）")
+    cache_ttl_seconds: int = Field(
+        default=MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+        description="媒体缓存TTL（秒）",
+    )
     table_to_image: bool = Field(default=True, description="HTML表格转图片")
     video_transcode: bool = Field(default=False, description="视频转码为MP4(H264)")
     video_transcode_timeout: int = Field(default=120, description="视频转码超时（秒）")
@@ -217,12 +222,12 @@ class MediaConfig(BaseModel):
     def normalize_cache_ttl_seconds(cls, value: Any) -> int:
         # 与 schema slider 下界保持一致；bool 虽可被 int() 接收，但对 int schema 属坏值。
         if value is None or isinstance(value, bool):
-            return 900
+            return MEDIA_CACHE_TTL_SECONDS_DEFAULT
         try:
             ttl_seconds = int(value)
         except (TypeError, ValueError):
-            return 900
-        return max(60, ttl_seconds)
+            return MEDIA_CACHE_TTL_SECONDS_DEFAULT
+        return max(MEDIA_CACHE_TTL_SECONDS_MIN, ttl_seconds)
 
     @field_validator("gif_transcode_profile", mode="before")
     @classmethod

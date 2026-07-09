@@ -22,6 +22,7 @@ from ...shared.constants import (
     GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     GIF_TRANSCODE_PROFILE_OPTIONS,
     GIF_TRANSCODE_PROFILE_QUALITY,
+    MEDIA_CACHE_TTL_SECONDS_DEFAULT,
 )
 from .logger import get_logger
 from .paths import get_plugin_cache_dir
@@ -632,16 +633,23 @@ class FFmpegTool:
             logger.debug("FFmpeg cache cleanup failed: path=%s, err=%s", path, ex)
 
     @staticmethod
-    def _cache_entry_reusable(output_path: Path, *, now_ts: float) -> bool:
+    def _cache_entry_reusable(
+        output_path: Path,
+        *,
+        now_ts: float,
+        cache_ttl_seconds: int,
+    ) -> bool:
         try:
-            if not output_path.exists() or output_path.stat().st_size <= 0:
+            stat = output_path.stat()
+            if not output_path.exists() or stat.st_size <= 0:
                 return False
         except OSError:
             return False
 
         meta_path = FFmpegTool._meta_path(output_path)
         if not meta_path.exists():
-            return True
+            # 旧版本或 meta 写入失败会留下无 meta 输出；按文件 mtime 兜底执行 TTL。
+            return now_ts - stat.st_mtime < max(1, int(cache_ttl_seconds))
         expire_ts = FFmpegTool._read_expire_ts(meta_path)
         return expire_ts is not None and expire_ts > now_ts
 
@@ -691,9 +699,9 @@ class FFmpegTool:
         stale_orphan_age = max(1, int(cache_ttl_seconds))
         for suffix in suffixes:
             for output_path in cache_root.glob(f"*{suffix}"):
-                if should_skip(output_path):
-                    continue
                 if FFmpegTool._meta_path(output_path).exists():
+                    if should_skip(output_path):
+                        continue
                     continue
                 try:
                     age = now_ts - output_path.stat().st_mtime
@@ -716,7 +724,11 @@ class FFmpegTool:
         cache_ttl_seconds: int,
         stage: str,
     ) -> Path | None:
-        if not FFmpegTool._cache_entry_reusable(output_path, now_ts=now_ts):
+        if not FFmpegTool._cache_entry_reusable(
+            output_path,
+            now_ts=now_ts,
+            cache_ttl_seconds=cache_ttl_seconds,
+        ):
             return None
         FFmpegTool._write_cache_meta_best_effort(
             output_path,
@@ -733,7 +745,7 @@ class FFmpegTool:
         timeout_seconds: int = 120,
         auto_install_ffmpeg: bool = True,
         cache_enabled: bool = True,
-        cache_ttl_seconds: int = 900,
+        cache_ttl_seconds: int = MEDIA_CACHE_TTL_SECONDS_DEFAULT,
     ) -> Path | None:
         """Transcode source video to QQ-friendly H264/AAC MP4.
 
@@ -892,7 +904,7 @@ class FFmpegTool:
         timeout_seconds: int = 60,
         auto_install_ffmpeg: bool = True,
         cache_enabled: bool = True,
-        cache_ttl_seconds: int = 900,
+        cache_ttl_seconds: int = MEDIA_CACHE_TTL_SECONDS_DEFAULT,
         profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     ) -> Path | None:
         """Transcode a silent video to high-quality GIF.
@@ -1079,7 +1091,7 @@ class FFmpegTool:
         timeout_seconds: int = 60,
         auto_install_ffmpeg: bool = True,
         cache_enabled: bool = True,
-        cache_ttl_seconds: int = 900,
+        cache_ttl_seconds: int = MEDIA_CACHE_TTL_SECONDS_DEFAULT,
         profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     ) -> Path | None:
         """将视频转码为不超过 max_bytes 的 GIF。

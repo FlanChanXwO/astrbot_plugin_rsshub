@@ -141,18 +141,27 @@ class TableImageRenderer:
     _warned_no_font = False
     _cache_enabled = True
     _cache_ttl_seconds = 3600
+    _cache_gc_interval_seconds = 5 * 60
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         self._cache_dir = cache_dir or get_plugin_cache_dir(TABLE_IMAGE_CACHE_PART)
         self._font_regular = self._load_font(size=24)
         self._font_header = self._load_font(size=24)
         self._font_caption = self._load_font(size=30)
+        self._cache_gc_last_run = 0.0
 
     @classmethod
-    def configure_cache(cls, *, enabled: bool, ttl_seconds: int) -> None:
+    def configure_cache(
+        cls,
+        *,
+        enabled: bool,
+        ttl_seconds: int,
+        gc_interval_seconds: int = 5 * 60,
+    ) -> None:
         """同步媒体缓存策略，表格图与远程媒体共用同一开关和 TTL。"""
         cls._cache_enabled = bool(enabled)
-        cls._cache_ttl_seconds = int(ttl_seconds)
+        cls._cache_ttl_seconds = max(1, int(ttl_seconds))
+        cls._cache_gc_interval_seconds = max(1, int(gc_interval_seconds))
 
     @staticmethod
     def _now_ts() -> float:
@@ -187,7 +196,7 @@ class TableImageRenderer:
                 now_ts=now_ts,
                 stage="cache_hit",
             )
-            self._run_cache_gc(now_ts=now_ts, skip_paths={output_path})
+            self._run_periodic_cache_gc(now_ts=now_ts, skip_paths={output_path})
             return TableImageRenderResult(
                 source_id=source_id,
                 path=output_path,
@@ -196,7 +205,7 @@ class TableImageRenderer:
             )
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        self._run_cache_gc(now_ts=now_ts, skip_paths={output_path})
+        self._run_periodic_cache_gc(now_ts=now_ts, skip_paths={output_path})
         tmp_path = output_path.with_name(
             f".{output_path.stem}.{os.getpid()}.{uuid4().hex}.tmp{output_path.suffix}"
         )
@@ -384,6 +393,22 @@ class TableImageRenderer:
 
         if removed > 0:
             logger.debug("Table image cache GC removed %s files", removed)
+        return removed
+
+    def _run_periodic_cache_gc(
+        self,
+        *,
+        now_ts: float,
+        skip_paths: set[Path] | None = None,
+    ) -> int:
+        """按配置间隔触发表格图 GC，避免每次渲染都全量扫描 cache。"""
+        if (
+            self._cache_gc_last_run > 0
+            and now_ts - self._cache_gc_last_run < self._cache_gc_interval_seconds
+        ):
+            return 0
+        removed = self._run_cache_gc(now_ts=now_ts, skip_paths=skip_paths)
+        self._cache_gc_last_run = now_ts
         return removed
 
     @staticmethod

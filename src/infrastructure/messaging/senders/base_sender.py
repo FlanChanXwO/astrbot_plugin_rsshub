@@ -17,6 +17,7 @@ from astrbot.core.star.star_tools import StarTools
 
 from ....domain.entities.content_types import is_generated_media_url
 from ....shared.constants import (
+    MEDIA_CACHE_TTL_SECONDS_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_OPTIONS,
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
@@ -251,7 +252,11 @@ class DefaultMessageSender:
                 auto_install_ffmpeg=True,
                 cache_enabled=cache_enabled,
                 cache_ttl_seconds=int(
-                    getattr(MediaDownloader, "_CACHE_TTL_SECONDS", 15 * 60)
+                    getattr(
+                        MediaDownloader,
+                        "_CACHE_TTL_SECONDS",
+                        MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+                    )
                 ),
             )
             if transcoded_path and transcoded_path.exists():

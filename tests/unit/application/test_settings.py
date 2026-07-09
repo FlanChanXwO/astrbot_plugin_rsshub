@@ -113,6 +113,28 @@ def test_application_settings_maps_media_cache_config():
     assert settings.media_platform_limits.cache_ttl_seconds == 120
 
 
+def test_media_cache_ttl_defaults_use_shared_constant():
+    from astrbot_plugin_rsshub.src.infrastructure.config import (
+        RsshubPluginConfig,
+        build_application_settings,
+    )
+    from astrbot_plugin_rsshub.src.infrastructure.config.models import (
+        MediaPlatformLimits,
+    )
+    from astrbot_plugin_rsshub.src.shared.constants import (
+        MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+    )
+
+    config = RsshubPluginConfig.from_astrbot_config({})
+    settings = build_application_settings({})
+
+    assert config.media.cache_ttl_seconds == MEDIA_CACHE_TTL_SECONDS_DEFAULT
+    assert settings.media_platform_limits.cache_ttl_seconds == (
+        MEDIA_CACHE_TTL_SECONDS_DEFAULT
+    )
+    assert MediaPlatformLimits().cache_ttl_seconds == MEDIA_CACHE_TTL_SECONDS_DEFAULT
+
+
 @pytest.mark.parametrize("cache_ttl_seconds", [True, False, "bad", None])
 def test_application_settings_defaults_invalid_direct_media_cache_ttl(
     cache_ttl_seconds,

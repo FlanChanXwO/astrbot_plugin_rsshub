@@ -5,6 +5,8 @@ from __future__ import annotations
 from enum import Enum, IntEnum
 
 INHERIT_VALUE = -100
+MEDIA_CACHE_TTL_SECONDS_DEFAULT = 15 * 60
+MEDIA_CACHE_TTL_SECONDS_MIN = 60
 
 
 class UserState(IntEnum):

@@ -273,6 +273,66 @@ def test_table_image_renderer_gc_keeps_current_legacy_digest(
     assert second.path.with_suffix(".meta").exists()
 
 
+def test_table_image_renderer_clamps_cache_ttl_to_one_second(
+    tmp_path: Path, monkeypatch
+):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(enabled=True, ttl_seconds=0)
+    monkeypatch.setattr(TableImageRenderer, "_now_ts", staticmethod(lambda: 100.0))
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"ttl"),
+    )
+
+    result = renderer.render_table("<table><tr><td>TTL</td></tr></table>")
+
+    assert result is not None
+    meta = json.loads(result.path.with_suffix(".meta").read_text(encoding="utf-8"))
+    assert meta["expire_ts"] == 101.0
+
+
+def test_table_image_renderer_throttles_cache_gc(tmp_path: Path, monkeypatch):
+    renderer = _renderer_without_real_font(monkeypatch, tmp_path)
+    TableImageRenderer.configure_cache(
+        enabled=True,
+        ttl_seconds=10,
+        gc_interval_seconds=300,
+    )
+    now_values = iter([1000.0, 1001.0])
+    monkeypatch.setattr(
+        TableImageRenderer,
+        "_now_ts",
+        staticmethod(lambda: next(now_values)),
+    )
+    monkeypatch.setattr(
+        renderer,
+        "_draw_table",
+        lambda _model: _FakeRenderedImage(b"new"),
+    )
+
+    first_old_png = tmp_path / "table_first_old.png"
+    first_old_meta = tmp_path / "table_first_old.meta"
+    first_old_png.write_bytes(b"old")
+    _write_table_meta(first_old_meta, 1.0)
+
+    first = renderer.render_table("<table><tr><td>首个</td></tr></table>")
+    assert first is not None
+    assert not first_old_png.exists()
+    assert not first_old_meta.exists()
+
+    second_old_png = tmp_path / "table_second_old.png"
+    second_old_meta = tmp_path / "table_second_old.meta"
+    second_old_png.write_bytes(b"old")
+    _write_table_meta(second_old_meta, 1.0)
+
+    second = renderer.render_table("<table><tr><td>第二个</td></tr></table>")
+
+    assert second is not None
+    assert second_old_png.exists()
+    assert second_old_meta.exists()
+
+
 def test_table_image_renderer_reuses_png_when_meta_refresh_fails(
     tmp_path: Path, monkeypatch
 ):
@@ -379,18 +439,26 @@ def test_table_image_renderer_disabled_cache_uses_unique_temp_png(
     )
     html = "<table><tr><td>临时</td></tr></table>"
 
-    first = renderer.render_table(html)
-    second = renderer.render_table(html)
+    first = None
+    second = None
+    try:
+        first = renderer.render_table(html)
+        second = renderer.render_table(html)
 
-    assert first is not None
-    assert second is not None
-    assert first.reused is False
-    assert second.reused is False
-    assert first.path != second.path
-    assert first.path.exists()
-    assert second.path.exists()
-    assert list(tmp_path.glob("table_*.png")) == []
-    assert list(tmp_path.glob("table_*.meta")) == []
+        assert first is not None
+        assert second is not None
+        assert first.reused is False
+        assert second.reused is False
+        assert first.path != second.path
+        assert first.path.exists()
+        assert second.path.exists()
+        assert list(tmp_path.glob("table_*.png")) == []
+        assert list(tmp_path.glob("table_*.meta")) == []
+    finally:
+        if first is not None:
+            first.path.unlink(missing_ok=True)
+        if second is not None:
+            second.path.unlink(missing_ok=True)
 
 
 def test_table_image_renderer_uses_unique_temp_files_for_concurrent_same_digest(

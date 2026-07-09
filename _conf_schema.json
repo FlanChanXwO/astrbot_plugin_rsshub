@@ -186,14 +186,14 @@
       },
       "cache_enabled": {
         "type": "bool",
-        "description": "启用媒体缓存",
-        "hint": "控制远程媒体与表格图片缓存是否启用",
+        "description": "启用媒体与转码缓存",
+        "hint": "控制远程媒体、表格图片、GIF/压缩 GIF 与视频 MP4 转码缓存是否启用",
         "default": true
       },
       "cache_ttl_seconds": {
         "type": "int",
-        "description": "媒体缓存 TTL（秒）",
-        "hint": "远程媒体与表格图片缓存的保留时间，单位：秒",
+        "description": "媒体与转码缓存 TTL（秒）",
+        "hint": "远程媒体、表格图片、GIF/压缩 GIF 与视频 MP4 转码缓存的保留时间，单位：秒",
         "default": 900,
         "slider": {
           "min": 60,

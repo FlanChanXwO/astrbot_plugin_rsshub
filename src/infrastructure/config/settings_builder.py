@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from ...shared.constants import (
+    MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+    MEDIA_CACHE_TTL_SECONDS_MIN,
     ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
     PLATFORM_ONEBOT,
     PLATFORM_QQ_OFFICIAL,
@@ -226,12 +228,12 @@ def _media_cache_ttl_seconds(media_cfg: Any) -> int:
     # 与 schema slider 下界保持一致；防止绕过 AstrBot schema 直接构造出 0/负数 TTL。
     raw_value = _get_value(media_cfg, "cache_ttl_seconds")
     if raw_value is None or isinstance(raw_value, bool):
-        return 15 * 60
+        return MEDIA_CACHE_TTL_SECONDS_DEFAULT
     try:
         ttl_seconds = int(raw_value)
     except (TypeError, ValueError):
-        return 15 * 60
-    return max(60, ttl_seconds)
+        return MEDIA_CACHE_TTL_SECONDS_DEFAULT
+    return max(MEDIA_CACHE_TTL_SECONDS_MIN, ttl_seconds)
 
 
 def _media_cache_enabled(media_cfg: Any) -> bool:

@@ -272,18 +272,29 @@ def _register_bot_client_provider(context: Context) -> None:
         """从已连接的反向 WebSocket 客户端中解析 bot 的 self_id（QQ 号）。
 
         aiocqhttp 的 CQHttp 实例以 self_id 为键保存已连接的 API 客户端
-        （``_wsr_api_clients``），取第一个非零键即可。新版 NapCat / Lagrange
-        会拒绝 user_id 为 0 或空的合并转发节点（retcode=1200），因此这里为
-        合并转发节点提供真实的 bot QQ 号；解析失败时返回空串，由调用方兜底。
+        （``_wsr_api_clients``）。只有连接中恰有一个非零 self_id 时才返回，
+        避免多 bot 平台把其他账号误写入合并转发节点；解析失败时返回空串，
+        由调用方保留 SDK 的默认值。
         """
         client = _resolve_bot_client(platform_name)
         if client is None:
             return ""
         api_clients = getattr(client, "_wsr_api_clients", None)
         if isinstance(api_clients, dict):
-            for self_id in api_clients.keys():
-                if self_id and str(self_id) != "0":
-                    return str(self_id)
+            self_ids = [
+                str(self_id).strip()
+                for self_id in list(api_clients)
+                if str(self_id or "").strip() not in {"", "0"}
+            ]
+            if len(self_ids) == 1:
+                return self_ids[0]
+            if len(self_ids) > 1:
+                logger.warning(
+                    "无法唯一解析 bot self_id，保留合并转发节点默认值: "
+                    "platform=%s, candidates=%s",
+                    platform_name,
+                    self_ids,
+                )
         return ""
 
     set_bot_client_provider(_resolve_bot_client)

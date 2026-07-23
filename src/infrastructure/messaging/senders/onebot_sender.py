@@ -83,17 +83,15 @@ class OneBotMessageSender(DefaultMessageSender):
         return get_bot_client(platform_name or "")
 
     @classmethod
-    def _resolve_bot_self_id(
-        cls, context: MessageContext | None, bot_client: Any | None
-    ) -> str:
+    def _resolve_bot_self_id(cls, context: MessageContext | None) -> str:
         """解析 bot 的 self_id（QQ 号），用于合并转发节点的 user_id。
 
         解析顺序：
         1. 命令响应场景：从事件消息对象的 ``self_id`` 读取（最可靠）。
         2. 主动推送场景：通过全局 provider 按 platform_name 解析（由
            bootstrap 注册，读取 CQHttp 的 ``_wsr_api_clients``）。
-        3. 兜底：返回非零占位 ``"10000"``，避免新版 NapCat / Lagrange
-           因 user_id 为空或 0 报 retcode=1200。
+        3. 无法确认时返回空串。调用方保留 AstrBot SDK 的默认 ``uin="0"``，
+           由兼容该缺省值的 OneBot 实现自行处理，避免伪造其他 QQ 号。
         """
         if context is not None:
             event = getattr(context, "event", None)
@@ -108,7 +106,14 @@ class OneBotMessageSender(DefaultMessageSender):
                 self_id = get_bot_self_id(platform_name)
                 if self_id and str(self_id) != "0":
                     return str(self_id)
-        return "10000"
+        return ""
+
+    @staticmethod
+    def _build_forward_node(content: list, nickname: str, bot_self_id: str) -> Node:
+        """构建合并转发节点，仅在已确认 bot QQ 号时显式设置 uin。"""
+        if bot_self_id:
+            return Node(content=content, name=nickname, uin=bot_self_id)
+        return Node(content=content, name=nickname)
 
     async def send_to_user(
         self,
@@ -157,7 +162,7 @@ class OneBotMessageSender(DefaultMessageSender):
                 )
 
             bot_client = self._resolve_bot_client(context)
-            bot_self_id = self._resolve_bot_self_id(context, bot_client)
+            bot_self_id = self._resolve_bot_self_id(context)
 
             nickname = (
                 context.channel.title if context and context.channel.title else "RSSHub"
@@ -203,15 +208,13 @@ class OneBotMessageSender(DefaultMessageSender):
                             ]
                 if node_content:
                     nodes.append(
-                        Node(content=node_content, name=nickname, uin=bot_self_id)
+                        self._build_forward_node(node_content, nickname, bot_self_id)
                     )
 
             if not nodes and request.message:
                 nodes.append(
-                    Node(
-                        content=[Plain(request.message)],
-                        name=nickname,
-                        uin=bot_self_id,
+                    self._build_forward_node(
+                        [Plain(request.message)], nickname, bot_self_id
                     )
                 )
 
@@ -256,10 +259,10 @@ class OneBotMessageSender(DefaultMessageSender):
                     failed_urls,
                 )
                 fallback_nodes = [
-                    Node(
-                        content=[Plain(fallback_text or "RSS update")],
-                        name=nickname,
-                        uin=bot_self_id,
+                    self._build_forward_node(
+                        [Plain(fallback_text or "RSS update")],
+                        nickname,
+                        bot_self_id,
                     )
                 ]
                 return await self._send_chain(session_id, [Nodes(fallback_nodes)])

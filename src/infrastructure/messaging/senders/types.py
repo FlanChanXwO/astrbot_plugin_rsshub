@@ -199,7 +199,7 @@ def get_bot_self_id(platform_id: str) -> str:
     """获取指定平台的 bot_self_id"""
     if _bot_self_id_provider:
         return _bot_self_id_provider(platform_id)
-    return "10000"
+    return ""
 
 
 # 全局的 bot client 获取函数（用于主动推送场景下访问平台 bot 客户端）

@@ -62,6 +62,7 @@ from .src.infrastructure.messaging import (
     DefaultMessageSender,
     InfrastructureMessageSenderProvider,
     set_bot_client_provider,
+    set_bot_self_id_provider,
 )
 from .src.infrastructure.persistence import (
     get_database,
@@ -239,11 +240,12 @@ def _init_config(
 
 
 def _register_bot_client_provider(context: Context) -> None:
-    """注册 bot client provider，供主动推送场景下的 NapCat stream 使用。
+    """注册 bot client / bot self_id provider，供主动推送场景使用。
 
     主动推送没有消息事件，sender 无法从 event 取 bot 客户端。
     这里通过 AstrBot platform_manager 按平台名解析出底层 bot 客户端
-    （如 aiocqhttp 的 CQHttp 实例），用于调用 NapCat stream action。
+    （如 aiocqhttp 的 CQHttp 实例），用于调用 NapCat stream action，
+    并从中解析出 bot 的 self_id（QQ 号）供合并转发节点使用。
     """
 
     def _resolve_bot_client(platform_name: str) -> object | None:
@@ -266,7 +268,37 @@ def _register_bot_client_provider(context: Context) -> None:
             )
         return None
 
+    def _resolve_bot_self_id(platform_name: str) -> str:
+        """从已连接的反向 WebSocket 客户端中解析 bot 的 self_id（QQ 号）。
+
+        aiocqhttp 的 CQHttp 实例以 self_id 为键保存已连接的 API 客户端
+        （``_wsr_api_clients``）。只有连接中恰有一个非零 self_id 时才返回，
+        避免多 bot 平台把其他账号误写入合并转发节点；解析失败时返回空串，
+        由调用方保留 SDK 的默认值。
+        """
+        client = _resolve_bot_client(platform_name)
+        if client is None:
+            return ""
+        api_clients = getattr(client, "_wsr_api_clients", None)
+        if isinstance(api_clients, dict):
+            self_ids = [
+                str(self_id).strip()
+                for self_id in list(api_clients)
+                if str(self_id or "").strip() not in {"", "0"}
+            ]
+            if len(self_ids) == 1:
+                return self_ids[0]
+            if len(self_ids) > 1:
+                logger.warning(
+                    "无法唯一解析 bot self_id，保留合并转发节点默认值: "
+                    "platform=%s, candidates=%s",
+                    platform_name,
+                    self_ids,
+                )
+        return ""
+
     set_bot_client_provider(_resolve_bot_client)
+    set_bot_self_id_provider(_resolve_bot_self_id)
 
 
 async def _configure_ffmpeg_bundler(app_settings: ApplicationSettings) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from astrbot_plugin_rsshub.src.domain.entities.content_types import LayoutFragment
@@ -23,9 +24,10 @@ class _Plain:
 
 
 class _Node:
-    def __init__(self, content: list, name: str) -> None:
+    def __init__(self, content: list, name: str, uin: str = "0") -> None:
         self.content = content
         self.name = name
+        self.uin = uin
 
 
 class _Nodes:
@@ -328,10 +330,12 @@ async def test_onebot_sender_ignores_telegraph_strategy(monkeypatch):
                 PreparedMedia(
                     media_type="image",
                     original_url="https://example.com/1.jpg",
+                    local_path=Path("/tmp/1.jpg"),
                 ),
                 PreparedMedia(
                     media_type="image",
                     original_url="https://example.com/2.jpg",
+                    local_path=Path("/tmp/2.jpg"),
                 ),
             ],
         ),
@@ -408,6 +412,123 @@ async def test_onebot_original_style_sends_layout_without_merged_forward(monkeyp
     assert isinstance(calls[1][1][0], _Image)
     assert isinstance(calls[1][1][1], _Plain)
     assert calls[1][1][1].text == "caption 2"
+
+
+@pytest.mark.asyncio
+async def test_onebot_sender_uses_event_self_id_for_forward_nodes(monkeypatch):
+    """命令响应场景应把事件中的 bot QQ 号写入转发节点。"""
+    sender = OneBotMessageSender()
+    calls: list[tuple[str, list]] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **_kwargs):
+        calls.append((session_id, chain))
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Node",
+        _Node,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Nodes",
+        _Nodes,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Plain",
+        _Plain,
+    )
+
+    result = await sender.send_to_user(
+        SendRequest(session_id="default:GroupMessage:1", message="entry content"),
+        context=MessageContext(
+            channel=ChannelInfo(title="Feed Title"),
+            platform_name="aiocqhttp",
+            event=SimpleNamespace(message_obj=SimpleNamespace(self_id="123456789")),
+        ),
+    )
+
+    assert result.ok is True
+    assert calls[0][1][0].nodes[0].uin == "123456789"
+
+
+@pytest.mark.asyncio
+async def test_onebot_sender_uses_provider_self_id_for_active_push(monkeypatch):
+    """主动推送应使用 provider 解析到的唯一 bot QQ 号。"""
+    sender = OneBotMessageSender()
+    calls: list[tuple[str, list]] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **_kwargs):
+        calls.append((session_id, chain))
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Node",
+        _Node,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Nodes",
+        _Nodes,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Plain",
+        _Plain,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.get_bot_self_id",
+        lambda _platform_name: "987654321",
+    )
+
+    result = await sender.send_to_user(
+        SendRequest(session_id="default:GroupMessage:1", message="entry content"),
+        context=MessageContext(
+            channel=ChannelInfo(title="Feed Title"),
+            platform_name="aiocqhttp",
+        ),
+    )
+
+    assert result.ok is True
+    assert calls[0][1][0].nodes[0].uin == "987654321"
+
+
+@pytest.mark.asyncio
+async def test_onebot_sender_preserves_default_uin_when_self_id_is_unknown(monkeypatch):
+    """未知 bot QQ 号时不可伪造账号，应保留 SDK 默认 uin。"""
+    sender = OneBotMessageSender()
+    calls: list[tuple[str, list]] = []
+
+    async def fake_send_chain(session_id: str, chain: list, **_kwargs):
+        calls.append((session_id, chain))
+        return SendResult(ok=True)
+
+    monkeypatch.setattr(sender, "_send_chain", fake_send_chain)
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Node",
+        _Node,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Nodes",
+        _Nodes,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.Plain",
+        _Plain,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender.get_bot_self_id",
+        lambda _platform_name: "",
+    )
+
+    result = await sender.send_to_user(
+        SendRequest(session_id="default:GroupMessage:1", message="entry content"),
+        context=MessageContext(
+            channel=ChannelInfo(title="Feed Title"),
+            platform_name="aiocqhttp",
+        ),
+    )
+
+    assert result.ok is True
+    assert calls[0][1][0].nodes[0].uin == "0"
 
 
 # ------------------------------------------------------------------

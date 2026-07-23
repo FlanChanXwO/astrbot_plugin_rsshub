@@ -28,7 +28,7 @@
 
 | 平台 / sender | 文本与媒体顺序 | 媒体策略 | Markdown / Telegraph | 关键风险 |
 | --- | --- | --- | --- | --- |
-| OneBot / aiocqhttp | auto/classic 使用合并转发；original 按 layout fragments 发送 | 媒体预下载后使用本地文件；支持 NapCat 流式上传（disabled/fallback/always）；合并转发失败后回退纯文本 Nodes | 不使用 Telegraph；Markdown 不作为承诺面 | 合并转发失败、媒体发送失败、媒体顺序回退。 |
+| OneBot / aiocqhttp | auto/classic 使用合并转发；original 按 layout fragments 发送 | 媒体预下载后使用本地文件；支持 NapCat 流式上传（disabled/fallback/always）；合并转发失败后回退纯文本 Nodes | 合并转发节点在能确认 bot QQ 号时写入该 `uin`；未知时保留 AstrBot SDK 的默认 `uin="0"`，不伪造账号 | 合并转发失败、媒体发送失败、媒体顺序回退。 |
 | QQ Official | 单图 + 文本合成一条 `Image + Plain`；视频和多媒体仍拆发 | 图片/视频先按平台媒体组件发送，失败后按内置策略降级；降级成功视为已送达 | `qq_official_strategy.markdown_mode=auto|force|plain` 语义保留；当前主动推送链路暂时显式关闭 Markdown | Markdown 原文暴露、媒体 + markdown payload 畸形、平台 `invalid content` 仍需实测区分体积与内容风控。 |
 | Telegram | 文本和媒体按 Telegram sender 策略发送 | 本地图片超过内置 photo 阈值时按文件发送 | Telegraph 是 Telegram sender 级自动路由，不是 `send_mode`；Plain 文本可走 AstrBot MarkdownV2 | Bot API photo 大小拒绝、caption Markdown 不一致。 |
 | Weixin OC | 始终逐条发送；original 只影响顺序 | 不尝试图文合一 | 无 Telegraph / Markdown 承诺 | 强行图文合链会吞文本或失败。 |

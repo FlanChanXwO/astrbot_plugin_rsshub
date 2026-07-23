@@ -5,11 +5,14 @@ from pathlib import Path
 from astrbot_plugin_rsshub.src.infrastructure.utils import paths
 
 
-def test_plugin_data_dir_avoids_plugin_local_astrbot_data(monkeypatch):
-    plugin_root = paths.PLUGIN_ROOT
-    astrbot_root = plugin_root.parents[2]
+def test_plugin_data_dir_avoids_plugin_local_astrbot_data(monkeypatch, tmp_path):
+    """本地插件目录运行时，数据应回落到实际 AstrBot 根目录。"""
+    astrbot_root = tmp_path / "astrbot"
+    plugin_root = astrbot_root / "data" / "plugins" / paths.PLUGIN_NAME
+    plugin_root.mkdir(parents=True)
     plugin_local_data = plugin_root / "data" / "plugin_data"
 
+    monkeypatch.setattr(paths, "PLUGIN_ROOT", plugin_root)
     monkeypatch.setattr(
         paths, "_resolve_explicit_astrbot_data_dir", lambda: plugin_local_data
     )

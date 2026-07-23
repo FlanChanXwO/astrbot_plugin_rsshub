@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,6 +31,51 @@ class _FakeScheduler:
 class _FakeQueue:
     def __init__(self):
         self.stop_all = AsyncMock()
+
+
+def test_bot_self_id_provider_returns_only_a_unique_connected_account(monkeypatch):
+    """多 bot 连接时不应把任意账号误用为合并转发节点 UIN。"""
+    providers: dict[str, object] = {}
+
+    class FakePlatform:
+        def __init__(self, self_ids: list[str]):
+            self._client = SimpleNamespace(
+                _wsr_api_clients={self_id: object() for self_id in self_ids}
+            )
+
+        def meta(self):
+            return SimpleNamespace(name="aiocqhttp")
+
+        def get_client(self):
+            return self._client
+
+    class FakePlatformManager:
+        def __init__(self, self_ids: list[str]):
+            self._platform = FakePlatform(self_ids)
+
+        def get_insts(self):
+            return [self._platform]
+
+    monkeypatch.setattr(
+        bootstrap,
+        "set_bot_client_provider",
+        lambda provider: providers.__setitem__("client", provider),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "set_bot_self_id_provider",
+        lambda provider: providers.__setitem__("self_id", provider),
+    )
+
+    context = SimpleNamespace(platform_manager=FakePlatformManager(["123456789"]))
+    bootstrap._register_bot_client_provider(context)
+
+    self_id_provider = providers["self_id"]
+    assert callable(self_id_provider)
+    assert self_id_provider("aiocqhttp") == "123456789"
+
+    context.platform_manager = FakePlatformManager(["123456789", "987654321"])
+    assert self_id_provider("aiocqhttp") == ""
 
 
 def test_init_config_heals_dirty_astrbot_config_before_parsing(monkeypatch):

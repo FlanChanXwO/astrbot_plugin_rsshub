@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.1.3] - 2026-07-24
+
+### Fixed
+
+- 修复 QQ OneBot（aiocqhttp）发送合并转发时，转发节点未携带机器人 QQ 号的问题。新版 NapCat / Lagrange 因而不再将节点 `user_id/uin` 识别为缺失或 `0`，避免 `retcode=1200` 导致 RSS 推送失败。
+- 主动推送会在已连接账号唯一时解析真实 bot `self_id`；命令响应场景优先使用事件携带的 `self_id`。多 bot 或无法可靠识别账号时保留 AstrBot SDK 的默认值，避免误用其他机器人的账号。
+
+### Notes
+
+- 本版本不新增配置项、聊天命令或 Web API。仅影响 OneBot 的合并转发节点；原始顺序（direct）发送行为保持不变。
+
 ## [2.1.2] - 2026-07-02
 
 ### Added

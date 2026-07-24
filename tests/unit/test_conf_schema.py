@@ -154,7 +154,7 @@ def test_conf_schema_is_scoped_to_startup_credentials_and_sender_strategies():
         "type": "string",
         "description": "GIF 转码质量档位",
         "hint": (
-            "compatibility：长边 960px、15 FPS、128 色，适合 3 GiB 容器；"
+            "compatibility：长边 960px、15 FPS、128 色；"
             "balanced：1280px、20 FPS、256 色；quality：保留原尺寸、30 FPS、"
             "256 色，可能导致高分辨率视频耗尽内存"
         ),

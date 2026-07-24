@@ -66,7 +66,7 @@ subscription option
 | `src/infrastructure/config/models/sender_strategy_models.py` | sender strategy 兼容模型。 |
 | `src/infrastructure/config/datamodels.py` | 兼容 re-export，不放新模型。 |
 
-`MediaConfig` 的 `cache_enabled` / `cache_ttl_seconds` 是启动级媒体缓存配置；`settings_builder` 会把它们收敛到 `MediaPlatformLimits`，供远程媒体下载、表格图片渲染、GIF / 压缩 GIF 转码和视频 MP4 转码共用。TTL 配置面下限为 `60` 秒，运行态也保持同一下界。
+`MediaConfig` 的 `cache_enabled` / `cache_ttl_seconds` 是启动级媒体缓存配置；`settings_builder` 会把它们收敛到 `MediaPlatformLimits`，供远程媒体下载、表格图片渲染、GIF / 压缩 GIF 转码和视频 MP4 转码共用。TTL 配置面下限为 `60` 秒，运行态也保持同一下界。`media.gif_transcode_profile` 是启动级 GIF 输出档位，枚举严格限定为 `compatibility`、`balanced`、`quality`；未知值会在配置加载时明确报错，不能静默回退。具体尺寸、帧率、内存风险和缓存隔离语义见 [`platforms.md`](./platforms.md#媒体下载与缓存)。
 
 ## 常量归属
 

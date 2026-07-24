@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from ....shared.constants import (
+    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+    GIF_TRANSCODE_PROFILE_OPTIONS,
+)
 from .sender_strategy_models import SenderStrategiesConfig
 
 if TYPE_CHECKING:
@@ -187,6 +191,10 @@ class MediaConfig(BaseModel):
     video_transcode_timeout: int = Field(default=120, description="视频转码超时（秒）")
     gif_transcode: bool = Field(default=False, description="无声视频自动转GIF")
     gif_transcode_timeout: int = Field(default=60, description="GIF转码超时（秒）")
+    gif_transcode_profile: Literal["compatibility", "balanced", "quality"] = Field(
+        default=GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+        description="GIF转码质量档位",
+    )
     ffmpeg_source: str = Field(default="auto", description="FFmpeg来源")
     ffmpeg_mirror: str = Field(default="auto", description="FFmpeg下载镜像")
     ffmpeg_mirror_custom_url: str = Field(default="", description="自定义FFmpeg镜像URL")
@@ -215,6 +223,15 @@ class MediaConfig(BaseModel):
         except (TypeError, ValueError):
             return 900
         return max(60, ttl_seconds)
+
+    @field_validator("gif_transcode_profile", mode="before")
+    @classmethod
+    def validate_gif_transcode_profile(cls, value: Any) -> str:
+        profile = str(value or "").strip()
+        if profile not in GIF_TRANSCODE_PROFILE_OPTIONS:
+            options = ", ".join(GIF_TRANSCODE_PROFILE_OPTIONS)
+            raise ValueError(f"gif_transcode_profile 必须是以下值之一: {options}")
+        return profile
 
 
 class HttpConfig(BaseModel):

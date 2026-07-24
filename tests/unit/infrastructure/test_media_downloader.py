@@ -62,6 +62,16 @@ def restore_media_downloader_cache_config():
             setattr(MediaDownloader, name, value)
 
 
+@pytest.fixture(autouse=True)
+def disable_gif_observability_probe(monkeypatch: pytest.MonkeyPatch):
+    """下载器用例关注媒体变体，不重复覆盖 FFprobe 元数据日志。"""
+
+    async def no_stream_info(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(FFmpegTool, "_probe_video_stream_info", no_stream_info)
+
+
 def test_media_downloader_guesses_suffix_from_wrapped_format_query():
     url = (
         "https://proxy.atri.rodeo?url="
@@ -521,7 +531,10 @@ async def test_media_downloader_uses_declared_video_type_for_gif_cache_key(
     )
 
     assert path.suffix == ".mp4"
-    assert downloader._read_cache("https://example.com/media/opaque#gif") == path
+    assert (
+        downloader._read_cache("https://example.com/media/opaque#gif:compatibility")
+        == path
+    )
 
 
 @pytest.mark.asyncio
@@ -664,11 +677,13 @@ async def test_get_or_download_prepared_builds_valid_gif_variants(
 
     async def fake_transcode_to_gif(*_args, **kwargs):
         assert kwargs["cache_ttl_seconds"] == 123
+        assert kwargs["profile"] == "balanced"
         return gif_path
 
     async def fake_transcode_to_gif_under_limit(*_args, **kwargs):
         assert kwargs["max_bytes"] == GIF_COMPRESS_TARGET_MAX_BYTES
         assert kwargs["cache_ttl_seconds"] == 123
+        assert kwargs["profile"] == "balanced"
         return compressed_path
 
     monkeypatch.setattr(MediaDownloader, "get_or_download", fake_get_or_download)
@@ -689,6 +704,7 @@ async def test_get_or_download_prepared_builds_valid_gif_variants(
         url="https://example.com/video.mp4",
         media_type="video",
         try_convert_gif=True,
+        gif_transcode_profile="balanced",
     )
 
     assert prepared.media_type == "image"
@@ -1019,6 +1035,7 @@ async def test_get_or_download_prepared_converts_download_detected_video(
     )
 
     assert calls[0]["media_type"] is None
+    assert calls[0]["gif_transcode_profile"] == "compatibility"
     assert prepared.media_type == "image"
     assert prepared.local_path == gif_path
     assert prepared.detected_suffix == ".gif"

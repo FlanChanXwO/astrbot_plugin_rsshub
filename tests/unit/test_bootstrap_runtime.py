@@ -223,6 +223,7 @@ async def test_create_runtime_configures_message_senders_with_current_app_settin
             video_transcode_timeout=120,
             gif_transcode=True,
             gif_transcode_timeout=33,
+            gif_transcode_profile="balanced",
             ffmpeg_source="auto",
             ffmpeg_mirror="auto",
             ffmpeg_mirror_custom_url="",
@@ -286,6 +287,7 @@ async def test_create_runtime_configures_message_senders_with_current_app_settin
     assert runtime.app_settings is app_settings
     assert DefaultMessageSender._should_transcode_gif() is True
     assert DefaultMessageSender._get_gif_transcode_timeout() == 33
+    assert DefaultMessageSender._get_gif_transcode_profile() == "balanced"
     assert DefaultMessageSender._get_timeout_seconds() == 44
     assert DefaultMessageSender._get_proxy() == "http://localhost:7890"
     assert cache_config["enabled"] is False

@@ -16,6 +16,8 @@ from ...shared.constants import (
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
     SENDER_STRATEGY_ENABLED_PLATFORMS,
     TELEGRAM_PHOTO_MAX_BYTES,
+    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+    GIF_TRANSCODE_PROFILE_OPTIONS,
 )
 from .models import (
     ApplicationSettings,
@@ -71,6 +73,15 @@ def _normalize_route_knowledge_base_url(value: Any) -> str:
     old = "FlanChanXwO/astrbot_plugin_rsshub/rsshub-routes-knowledgebase"
     new = "FlanChanXwO/rsshub-routes-knowledgebase/main"
     return raw.replace(old, new)
+
+
+def _get_gif_transcode_profile(value: Any) -> str:
+    """校验 GIF 转码档位，避免绕过 Pydantic 的直接构造隐藏配置错误。"""
+    profile = str(value or "").strip()
+    if profile not in GIF_TRANSCODE_PROFILE_OPTIONS:
+        options = ", ".join(GIF_TRANSCODE_PROFILE_OPTIONS)
+        raise ValueError(f"gif_transcode_profile 必须是以下值之一: {options}")
+    return profile
 
 
 def _propagate_fields(source: Any, target_cls: type) -> dict[str, Any]:
@@ -422,6 +433,13 @@ def build_application_settings(config: Any) -> ApplicationSettings:
             gif_transcode=bool(_get_value(media_cfg, "gif_transcode", False)),
             gif_transcode_timeout=max(
                 1, int(_get_value(media_cfg, "gif_transcode_timeout", 60) or 60)
+            ),
+            gif_transcode_profile=_get_gif_transcode_profile(
+                _get_value(
+                    media_cfg,
+                    "gif_transcode_profile",
+                    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+                )
             ),
             ffmpeg_source=str(_get_value(media_cfg, "ffmpeg_source", "auto") or "auto"),
             ffmpeg_mirror=str(_get_value(media_cfg, "ffmpeg_mirror", "auto") or "auto"),

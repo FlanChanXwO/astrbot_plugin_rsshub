@@ -344,6 +344,7 @@ def _configure_message_senders(app_settings: ApplicationSettings) -> None:
         video_transcode_timeout=app_settings.media.video_transcode_timeout,
         gif_transcode=app_settings.media.gif_transcode,
         gif_transcode_timeout=app_settings.media.gif_transcode_timeout,
+        gif_transcode_profile=app_settings.media.gif_transcode_profile,
         telegram_photo_max_bytes=app_settings.media_platform_limits.telegram_photo_max_bytes,
         onebot_napcat_stream_mode=(
             app_settings.media_platform_limits.onebot_napcat_stream_mode
@@ -368,10 +369,12 @@ def _configure_message_senders(app_settings: ApplicationSettings) -> None:
     )
     EntryTextFormatter.configure_table_to_image(app_settings.media.table_to_image)
     logger.info(
-        "sender behavior configured: gif_transcode=%s, video_transcode=%s, "
+        "sender behavior configured: gif_transcode=%s, gif_profile=%s, "
+        "video_transcode=%s, "
         "ffmpeg_source=%s, image_relay=%s, media_relay=%s, "
         "napcat_stream=%s, table_to_image=%s",
         app_settings.media.gif_transcode,
+        app_settings.media.gif_transcode_profile,
         app_settings.media.video_transcode,
         app_settings.media.ffmpeg_source,
         app_settings.media.image_relay_base_url or "(none)",

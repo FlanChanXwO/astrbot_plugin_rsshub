@@ -128,6 +128,7 @@ async def test_prepare_media_passes_gif_transcode_config(monkeypatch, fake_detec
     DefaultMessageSender.configure_behavior(
         gif_transcode=True,
         gif_transcode_timeout=77,
+        gif_transcode_profile="balanced",
     )
 
     prepared = await DefaultMessageSender().prepare_media(
@@ -145,6 +146,7 @@ async def test_prepare_media_passes_gif_transcode_config(monkeypatch, fake_detec
             "media_type": "video",
             "try_convert_gif": True,
             "gif_transcode_timeout": 77,
+            "gif_transcode_profile": "balanced",
             "image_relay_base_url": "",
             "media_relay_base_url": "",
         }
@@ -261,6 +263,7 @@ async def test_prepare_media_applies_video_transcode_config(monkeypatch, fake_de
     assert calls == [(Path("/tmp/source.webm"), 222, True, True, 900)]
     assert _FakeDownloader.calls[0]["try_convert_gif"] is True
     assert _FakeDownloader.calls[0]["gif_transcode_timeout"] == 66
+    assert _FakeDownloader.calls[0]["gif_transcode_profile"] == "compatibility"
 
 
 @pytest.mark.asyncio

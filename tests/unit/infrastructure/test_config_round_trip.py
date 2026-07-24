@@ -66,6 +66,9 @@ def test_real_config_round_trip_media_settings_match_json():
     m = settings.media
 
     assert m.gif_transcode == bool(media_json.get("gif_transcode", False))
+    assert m.gif_transcode_profile == str(
+        media_json.get("gif_transcode_profile", "compatibility") or "compatibility"
+    )
     assert m.video_transcode == bool(media_json.get("video_transcode", False))
     assert m.table_to_image == bool(media_json.get("table_to_image", True))
     assert m.image_relay_base_url == str(
@@ -85,6 +88,9 @@ def test_real_config_round_trip_media_settings_match_json():
     # Pydantic model should mirror JSON -> confirms from_astrbot_config reads the
     # right key.
     assert config.media.gif_transcode == bool(media_json.get("gif_transcode", False))
+    assert config.media.gif_transcode_profile == str(
+        media_json.get("gif_transcode_profile", "compatibility") or "compatibility"
+    )
     assert config.media.video_transcode == bool(
         media_json.get("video_transcode", False)
     )
@@ -120,6 +126,7 @@ def test_schema_healer_fills_media_defaults():
     assert media.get("video_transcode") is False
     assert media.get("video_transcode_timeout") == 120
     assert media.get("gif_transcode_timeout") == 60
+    assert media.get("gif_transcode_profile") == "compatibility"
     assert media.get("ffmpeg_source") == "auto"
     assert media.get("media_download_concurrency") == 1
     assert media.get("cache_enabled") is True
@@ -134,6 +141,7 @@ def test_schema_healer_fills_media_defaults():
     settings = build_application_settings(config)
     assert settings.media.gif_transcode is False
     assert settings.media.video_transcode is False
+    assert settings.media.gif_transcode_profile == "compatibility"
     assert settings.media.ffmpeg_source == "auto"
     assert settings.media_platform_limits.cache_enabled is True
     assert settings.media_platform_limits.cache_ttl_seconds == 900

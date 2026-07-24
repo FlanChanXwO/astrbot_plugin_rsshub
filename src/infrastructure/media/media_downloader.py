@@ -19,6 +19,7 @@ from astrbot.core.utils.http_ssl import build_tls_connector
 
 from ...shared.constants import (
     GIF_COMPRESS_TARGET_MAX_BYTES,
+    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     MEDIA_CACHE_TTL_SECONDS_DEFAULT,
 )
 from ..utils import get_plugin_cache_dir
@@ -690,6 +691,7 @@ class MediaDownloader:
         media_type: str | None = None,
         try_convert_gif: bool = False,
         gif_transcode_timeout: int = 60,
+        gif_transcode_profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY,
         m3u8_timeout: int = 120,
         image_relay_base_url: str | None = "",
         media_relay_base_url: str | None = "",
@@ -703,6 +705,7 @@ class MediaDownloader:
             media_type: 调用方已知媒体类型（image/video/audio/file）
             try_convert_gif: 是否尝试将无声视频转为GIF
             gif_transcode_timeout: GIF转码超时
+            gif_transcode_profile: GIF 转码质量档位
             m3u8_timeout: m3u8下载超时
             image_relay_base_url: 图片反代 base URL，配置后图片走该反代抓取
             media_relay_base_url: 通用媒体反代 base URL，配置后非图片媒体走该反代抓取
@@ -725,7 +728,8 @@ class MediaDownloader:
 
         cache_url = url
         if try_convert_gif and is_video:
-            cache_url = f"{url}#gif"
+            # GIF 产物会随档位变化，媒体缓存不能把不同质量档位视为同一资源。
+            cache_url = f"{url}#gif:{gif_transcode_profile}"
 
         if cache_enabled:
             cached = await self._read_valid_cache(cache_url, media_type=media_type)
@@ -798,6 +802,7 @@ class MediaDownloader:
                         auto_install_ffmpeg=True,
                         cache_enabled=cache_enabled,
                         cache_ttl_seconds=self._CACHE_TTL_SECONDS,
+                        profile=gif_transcode_profile,
                     )
                     if gif_path and gif_path.exists():
                         converted_path = gif_path
@@ -885,6 +890,7 @@ class MediaDownloader:
         media_type: str | None = None,
         try_convert_gif: bool = False,
         gif_transcode_timeout: int = 60,
+        gif_transcode_profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY,
         m3u8_timeout: int = 120,
         image_relay_base_url: str | None = "",
         media_relay_base_url: str | None = "",
@@ -905,6 +911,7 @@ class MediaDownloader:
             media_type=download_media_type,
             try_convert_gif=False,
             gif_transcode_timeout=gif_transcode_timeout,
+            gif_transcode_profile=gif_transcode_profile,
             m3u8_timeout=m3u8_timeout,
             image_relay_base_url=image_relay_base_url,
             media_relay_base_url=media_relay_base_url,
@@ -969,6 +976,7 @@ class MediaDownloader:
                 prepared,
                 local_path=local_path,
                 timeout_seconds=gif_transcode_timeout,
+                profile=gif_transcode_profile,
             )
             gif_variant = next(
                 (
@@ -1003,6 +1011,7 @@ class MediaDownloader:
         *,
         local_path: Path,
         timeout_seconds: int,
+        profile: str,
     ) -> None:
         from ..messaging.senders.types import MediaVariant
 
@@ -1025,6 +1034,7 @@ class MediaDownloader:
                 auto_install_ffmpeg=True,
                 cache_enabled=self._CACHE_ENABLED,
                 cache_ttl_seconds=self._CACHE_TTL_SECONDS,
+                profile=profile,
             )
             gif_accepted = False
             if gif_path and gif_path.exists():
@@ -1052,6 +1062,7 @@ class MediaDownloader:
                     auto_install_ffmpeg=True,
                     cache_enabled=self._CACHE_ENABLED,
                     cache_ttl_seconds=self._CACHE_TTL_SECONDS,
+                    profile=profile,
                 )
                 if compressed_path and compressed_path.exists():
                     if await self._is_valid_gif_variant(compressed_path):

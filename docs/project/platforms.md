@@ -121,7 +121,19 @@ AstrBot 用 Hypercorn 跑 aiocqhttp 的反向 WebSocket server，启动时 `bot.
 
 本地生成媒体的入口不同：`HTMLParser` 生成 `GeneratedImageContent` 后，sender 会优先使用 layout 上的 `local_path`；没有 local path 时再通过 `infrastructure.rendering` 的表格图片解析器把 `rsshub-generated://table/<hash>` 映射回 `cache/table_images/table_<hash>.png`，直接构造 `PreparedMedia`。如果 cache 文件缺失，会按媒体失败处理但不会把内部标识追加给用户，也不会在 original layout 中把内部标识当作图片文件发送；layout 会携带不可见的表格纯文本 fallback，供 cache 缺失或平台图片发送失败时补回正文。禁用缓存时，表格临时图在 fan-out 期间可能被多个订阅复用，因此 sender 会先复制渲染器创建的 `rsshub_table_*.png` 为本次发送专用临时图，再将副本放入 `PreparedMedia.owned_paths` 并在发送结束后清理；共享的 layout 原始临时图由 dispatcher、agent XML 推送或文本清洗调用方清理。启用缓存的表格图不标记为 owned，外部传入的非 cache `local_path` 也不会被自动标记或清理。`media.table_to_image=false` 时表格解析阶段直接使用纯文本表格；渲染失败时也会回退为纯文本表格。
 
-无声视频转 GIF 时会保留原始视频 variant。GIF 转换候选由 sender 侧综合声明类型、URL hint（含 RSSHub / 反代包装 URL 内层地址）和下载后的真实文件探测决定；声明被误标为 `image` / `file` 但下载后探测为视频的媒体，仍会进入无声视频转 GIF 分支。转换决策日志会记录 sender、声明类型、有效类型、`gif_transcode`、`try_convert_gif`、FFmpeg 来源和 URL，便于排查“配置已开但未进入转换”的问题。转换成功后的 `.gif` 通过 `MediaDispatchResolver` 按 `image` 媒体组件发送，不在各平台 sender 里重复特殊判断。若 GIF 超出当前内置的跨平台压缩目标，插件会按固定 FFmpeg 档位尝试压缩 GIF；启用缓存时 `cache/gif` 和 `cache/gif_compressed` 都有旁置 `.meta expire_ts`、命中续期和过期清理，禁用缓存时输出 `rsshub_gif_*.gif` / `rsshub_gif_compressed_*.gif` 临时文件并随 `PreparedMedia.owned_paths` 清理。发送时再按目标平台软阈值选择原 GIF、压缩 GIF、原视频、文件或原始链接。
+无声视频转 GIF 时会保留原始视频 variant。GIF 转换候选由 sender 侧综合声明类型、URL hint（含 RSSHub / 反代包装 URL 内层地址）和下载后的真实文件探测决定；声明被误标为 `image` / `file` 但下载后探测为视频的媒体，仍会进入无声视频转 GIF 分支。转换决策日志会记录 sender、声明类型、有效类型、`gif_transcode`、`try_convert_gif`、FFmpeg 来源和 URL，便于排查“配置已开但未进入转换”的问题。转换成功后的 `.gif` 通过 `MediaDispatchResolver` 按 `image` 媒体组件发送，不在各平台 sender 里重复特殊判断。
+
+`media.gif_transcode_profile` 控制单次 GIF 转码的资源上限；默认 `compatibility`，其目标是在 3 GiB 容器中处理高分辨率无声 H.264 视频时避免 palette 滤镜缓冲触发 OOM。缩放和降帧发生在 `palettegen` 之前，始终保持原始宽高比且不会放大小视频。
+
+| 档位 | 长边上限 | 帧率 | 颜色数 | 用途 |
+| --- | ---: | ---: | ---: | --- |
+| `compatibility`（默认） | 960px | 15 FPS | 128 | 内存受限容器的安全兼容档。 |
+| `balanced` | 1280px | 20 FPS | 256 | 更清晰的常规输出，内存占用高于默认档。 |
+| `quality` | 保留原尺寸 | 30 FPS | 256 | 保留历史行为；2160×2880 等高分辨率源在 3 GiB 容器中可能被内核 OOM 杀死。 |
+
+压缩 GIF 的每个候选都以所选档位为上限，不会从 `compatibility` / `balanced` 回升到原视频尺寸或 30 FPS；媒体缓存键和 GIF 转码缓存键均包含档位，切换档位不会复用旧质量产物。启用缓存时 `cache/gif` 和 `cache/gif_compressed` 都有旁置 `.meta expire_ts`、命中续期和过期清理，禁用缓存时输出 `rsshub_gif_*.gif` / `rsshub_gif_compressed_*.gif` 临时文件并随 `PreparedMedia.owned_paths` 清理。发送时再按目标平台软阈值选择原 GIF、压缩 GIF、原视频、文件或原始链接。
+
+GIF、MP4 与 HLS 的 FFmpeg 进程统一启用 `-hide_banner -nostats -loglevel error`，标准输出丢弃，错误输出只落入临时文件并读取诊断尾部；超时或任务取消时会终止并等待子进程，再清理半成品。GIF 开始与结束日志记录档位、源/输出尺寸、帧率、耗时和退出状态，不记录媒体 URL 或内容；`code=-9` 等异常可与容器 OOM 日志按时间对照。此优化不改变 `media_download_concurrency`，也不新增 FFmpeg 并发闸门。
 
 视频 MP4 转码用于 QQ 等平台的视频兼容路径。启用缓存时输出仍落在 `cache/qq_video/*.mp4`，同样使用 `.meta expire_ts` 续期和 GC；禁用缓存时不会创建或读取 `cache/qq_video`，而是生成 `rsshub_video_transcoded_*.mp4` 系统临时文件，并由 sender 在发送完成后清理。
 

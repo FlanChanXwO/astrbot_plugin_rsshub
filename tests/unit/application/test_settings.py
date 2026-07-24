@@ -928,6 +928,7 @@ def test_application_settings_maps_media_config():
                 "video_transcode_timeout": 333,
                 "gif_transcode": True,
                 "gif_transcode_timeout": 44,
+                "gif_transcode_profile": "balanced",
             }
         }
     )
@@ -942,6 +943,17 @@ def test_application_settings_maps_media_config():
     assert settings.media.video_transcode_timeout == 333
     assert settings.media.gif_transcode is True
     assert settings.media.gif_transcode_timeout == 44
+    assert settings.media.gif_transcode_profile == "balanced"
+
+
+def test_application_settings_rejects_unknown_gif_transcode_profile():
+    """未知档位必须显式报错，不能悄悄回退到默认质量。"""
+    from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
+
+    with pytest.raises(ValueError, match="gif_transcode_profile 必须是以下值之一"):
+        RsshubPluginConfig.from_astrbot_config(
+            {"media": {"gif_transcode_profile": "ultra"}}
+        )
 
 
 def test_build_application_settings_normalizes_ffmpeg_media_config():

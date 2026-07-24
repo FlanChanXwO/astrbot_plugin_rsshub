@@ -13,11 +13,44 @@ from unittest.mock import MagicMock
 
 import pytest
 
+PLUGIN_DIR = Path(__file__).parent.parent
+
+# bootstrap.py 会在测试收集阶段导入 AstrBot API。先注册最小 mock，避免单元测试
+# 依赖完整 AstrBot 运行时；测试本身会按需覆盖具体行为。
+sys.modules["astrbot"] = MagicMock()
+sys.modules["astrbot.api"] = MagicMock()
+sys.modules["astrbot.api.event"] = MagicMock()
+sys.modules["astrbot.api.provider"] = MagicMock()
+sys.modules["astrbot.api.star"] = MagicMock()
+message_components = MagicMock()
+for component_name in (
+    "File",
+    "Image",
+    "Node",
+    "Nodes",
+    "Plain",
+    "Record",
+    "Video",
+):
+    setattr(message_components, component_name, MagicMock(name=component_name))
+sys.modules["astrbot.api.message_components"] = message_components
+sys.modules["astrbot.core"] = MagicMock()
+sys.modules["astrbot.core.message"] = MagicMock()
+sys.modules["astrbot.core.message.message_event_result"] = MagicMock()
+sys.modules["astrbot.core.star.star_tools"] = MagicMock()
+sys.modules["astrbot.core.star"] = MagicMock()
+sys.modules["astrbot.core.star.filter"] = MagicMock()
+sys.modules["astrbot.core.utils"] = MagicMock()
+sys.modules["astrbot.core.utils.astrbot_path"] = MagicMock()
+sys.modules["astrbot.core.utils.http_ssl"] = MagicMock()
+sys.modules[
+    "astrbot.core.utils.astrbot_path"
+].get_astrbot_plugin_data_path.return_value = str(PLUGIN_DIR / "data" / "plugin_data")
+
 # 注册当前插件的 src/ 为 astrbot_plugin_rsshub 包
 # 注意：不能把 PLUGINS_DIR 加入 sys.path，否则 Python 会发现
 # 多个同名目录（base + 各 feature 分支），作为 namespace package
 # 合并后可能解析到非当前分支的源码。
-PLUGIN_DIR = Path(__file__).parent.parent
 _src_dir = PLUGIN_DIR / "src"
 
 _pkg_spec = importlib.util.spec_from_file_location(
@@ -67,37 +100,6 @@ except (ImportError, ModuleNotFoundError, AttributeError):
     # 让测试侧 importlib.import_module 按需触发，暴露实际错误。
     pass
 _pkg.main = _main_mod
-
-# 模拟 AstrBot 相关导入
-sys.modules["astrbot"] = MagicMock()
-sys.modules["astrbot.api"] = MagicMock()
-sys.modules["astrbot.api.event"] = MagicMock()
-sys.modules["astrbot.api.provider"] = MagicMock()
-sys.modules["astrbot.api.star"] = MagicMock()
-message_components = MagicMock()
-for component_name in (
-    "File",
-    "Image",
-    "Node",
-    "Nodes",
-    "Plain",
-    "Record",
-    "Video",
-):
-    setattr(message_components, component_name, MagicMock(name=component_name))
-sys.modules["astrbot.api.message_components"] = message_components
-sys.modules["astrbot.core"] = MagicMock()
-sys.modules["astrbot.core.message"] = MagicMock()
-sys.modules["astrbot.core.message.message_event_result"] = MagicMock()
-sys.modules["astrbot.core.star.star_tools"] = MagicMock()
-sys.modules["astrbot.core.star"] = MagicMock()
-sys.modules["astrbot.core.star.filter"] = MagicMock()
-sys.modules["astrbot.core.utils"] = MagicMock()
-sys.modules["astrbot.core.utils.astrbot_path"] = MagicMock()
-sys.modules["astrbot.core.utils.http_ssl"] = MagicMock()
-sys.modules[
-    "astrbot.core.utils.astrbot_path"
-].get_astrbot_plugin_data_path.return_value = str(PLUGIN_DIR / "data" / "plugin_data")
 
 
 @pytest.fixture(scope="session")

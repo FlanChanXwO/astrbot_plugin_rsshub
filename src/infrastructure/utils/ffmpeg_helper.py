@@ -6,20 +6,62 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
 import shutil
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from ...shared.constants import MEDIA_CACHE_TTL_SECONDS_DEFAULT
+from ...shared.constants import (
+    GIF_TRANSCODE_PROFILE_BALANCED,
+    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+    GIF_TRANSCODE_PROFILE_OPTIONS,
+    GIF_TRANSCODE_PROFILE_QUALITY,
+    MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+)
 from .logger import get_logger
 from .paths import get_plugin_cache_dir
 
 logger = get_logger()
+
+
+@dataclass(frozen=True)
+class _GifTranscodeProfile:
+    """GIF 输出档位；None 表示保留输入视频的原始长边。"""
+
+    name: str
+    max_long_edge: int | None
+    fps: int
+    max_colors: int
+
+    @property
+    def cache_key(self) -> str:
+        return (
+            f"{self.name}:edge={self.max_long_edge}:fps={self.fps}:"
+            f"colors={self.max_colors}"
+        )
+
+
+@dataclass(frozen=True)
+class _FFmpegRunResult:
+    """统一 FFmpeg 子进程的可观测结果。"""
+
+    returncode: int
+    stderr_tail: str
+
+
+@dataclass(frozen=True)
+class _VideoStreamInfo:
+    """用于转码可观测日志的视频流元数据。"""
+
+    width: int
+    height: int
+    fps: float | None
 
 
 class FFmpegTool:
@@ -31,16 +73,29 @@ class FFmpegTool:
     _ffprobe_exe_cache_source: str | None = None
     _ffmpeg_source: str = "auto"  # "auto" | "system"
 
-    _GIF_TRANSCODE_FPS: Final = 30
-    _GIF_TRANSCODE_SCALE: Final = "iw:-1"
-    _GIF_TRANSCODE_MAX_COLORS: Final = 256
     _GIF_TRANSCODE_DITHER: Final = "sierra2_4a"
-    _GIF_TRANSCODE_PROFILE: Final = (
-        f"fps={_GIF_TRANSCODE_FPS};"
-        f"scale={_GIF_TRANSCODE_SCALE};"
-        f"colors={_GIF_TRANSCODE_MAX_COLORS};"
-        f"dither={_GIF_TRANSCODE_DITHER}"
-    )
+    _GIF_TRANSCODE_PROFILES: Final = {
+        GIF_TRANSCODE_PROFILE_COMPATIBILITY: _GifTranscodeProfile(
+            name=GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+            max_long_edge=960,
+            fps=15,
+            max_colors=128,
+        ),
+        GIF_TRANSCODE_PROFILE_BALANCED: _GifTranscodeProfile(
+            name=GIF_TRANSCODE_PROFILE_BALANCED,
+            max_long_edge=1280,
+            fps=20,
+            max_colors=256,
+        ),
+        GIF_TRANSCODE_PROFILE_QUALITY: _GifTranscodeProfile(
+            name=GIF_TRANSCODE_PROFILE_QUALITY,
+            max_long_edge=None,
+            fps=30,
+            max_colors=256,
+        ),
+    }
+    _FFMPEG_ERROR_TAIL_READ_BYTES: Final = 4096
+    _FFMPEG_ERROR_TAIL_LOG_CHARS: Final = 500
 
     @staticmethod
     def _normalize_proxy_url(proxy: str | None) -> str:
@@ -50,6 +105,175 @@ class FFmpegTool:
         if "://" not in proxy_url:
             return f"http://{proxy_url}"
         return proxy_url
+
+    @staticmethod
+    def _get_gif_transcode_profile(profile_name: str) -> _GifTranscodeProfile:
+        """将配置值解析为档位，拒绝未知值以避免静默改变媒体质量。"""
+        normalized = str(profile_name or "").strip()
+        profile = FFmpegTool._GIF_TRANSCODE_PROFILES.get(normalized)
+        if profile is None:
+            options = ", ".join(GIF_TRANSCODE_PROFILE_OPTIONS)
+            raise ValueError(f"gif_transcode_profile 必须是以下值之一: {options}")
+        return profile
+
+    @staticmethod
+    def _gif_scale_filter(
+        profile: _GifTranscodeProfile,
+        *,
+        scale_factor: float = 1.0,
+    ) -> str:
+        """生成不拉伸的缩放滤镜；兼容/平衡档不放大较小视频。"""
+        if profile.max_long_edge is None:
+            if scale_factor == 1.0:
+                return "scale=iw:-1:flags=lanczos"
+            return f"scale=iw*{scale_factor}:-1:flags=lanczos"
+
+        edge = max(2, int(profile.max_long_edge * scale_factor))
+        edge -= edge % 2
+        return (
+            "scale="
+            f"'if(gte(iw,ih),min(iw,{edge}),-2)':"
+            f"'if(gte(iw,ih),-2,min(ih,{edge}))':flags=lanczos"
+        )
+
+    @staticmethod
+    def _build_gif_filter(
+        profile: _GifTranscodeProfile,
+        *,
+        fps: int | None = None,
+        scale_factor: float = 1.0,
+    ) -> str:
+        """构造先缩放、再降帧、最后生成 palette 的 GIF 滤镜链。"""
+        output_fps = profile.fps if fps is None else fps
+        scale_filter = FFmpegTool._gif_scale_filter(
+            profile,
+            scale_factor=scale_factor,
+        )
+        if profile.max_long_edge is None:
+            # quality 明确保留历史的 fps → 原尺寸 scale 命令顺序与输出行为。
+            prefix = f"fps={output_fps},{scale_filter}"
+        else:
+            prefix = f"{scale_filter},fps={output_fps}"
+        return (
+            f"{prefix},split[s0][s1];"
+            f"[s0]palettegen=max_colors={profile.max_colors}:stats_mode=full[p];"
+            f"[s1][p]paletteuse=dither={FFmpegTool._GIF_TRANSCODE_DITHER}"
+        )
+
+    @staticmethod
+    def _read_ffmpeg_error_tail(stderr_file) -> str:
+        """仅读取既有 500 字符诊断尾部，避免把 FFmpeg 全量日志放入内存。"""
+        stderr_file.flush()
+        stderr_file.seek(0, os.SEEK_END)
+        start = max(
+            0,
+            stderr_file.tell() - FFmpegTool._FFMPEG_ERROR_TAIL_READ_BYTES,
+        )
+        stderr_file.seek(start)
+        return stderr_file.read().decode("utf-8", errors="ignore")[
+            -FFmpegTool._FFMPEG_ERROR_TAIL_LOG_CHARS :
+        ]
+
+    @staticmethod
+    async def _stop_ffmpeg_process(process: asyncio.subprocess.Process) -> None:
+        """在超时或取消时确保子进程退出，防止遗留 FFmpeg 持续占用内存。"""
+        if process.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        with contextlib.suppress(ProcessLookupError):
+            await asyncio.shield(process.wait())
+
+    @staticmethod
+    async def _run_ffmpeg(
+        args: list[str],
+        *,
+        timeout_seconds: int,
+        env: dict[str, str] | None = None,
+    ) -> _FFmpegRunResult | None:
+        """运行 FFmpeg 且将 stderr 落盘，超时返回 None、取消时清理后继续传播。"""
+        process: asyncio.subprocess.Process | None = None
+        with tempfile.TemporaryFile(mode="w+b") as stderr_file:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *args,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=stderr_file,
+                    env=env,
+                )
+                await asyncio.wait_for(
+                    process.wait(),
+                    timeout=max(10, int(timeout_seconds)),
+                )
+            except asyncio.CancelledError:
+                if process is not None:
+                    await FFmpegTool._stop_ffmpeg_process(process)
+                raise
+            except asyncio.TimeoutError:
+                if process is not None:
+                    await FFmpegTool._stop_ffmpeg_process(process)
+                return None
+
+            if process is None:
+                return None
+            return _FFmpegRunResult(
+                returncode=process.returncode,
+                stderr_tail=FFmpegTool._read_ffmpeg_error_tail(stderr_file),
+            )
+
+    @staticmethod
+    async def _probe_video_stream_info(source_path: Path) -> _VideoStreamInfo | None:
+        """读取单个视频流元数据，仅用于 GIF 任务开始与结束日志。
+
+        查询使用 JSON 的单条 stream 输出，stdout 上限由 FFprobe 查询字段决定；不把
+        任意媒体内容或 FFmpeg 日志读入 Python 内存。探测不可用时返回 None，不影响
+        正常转码路径。
+        """
+        ffprobe_exe = FFmpegTool.ensure_ffprobe_ready(auto_install=False)
+        if not ffprobe_exe:
+            return None
+
+        process: asyncio.subprocess.Process | None = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                ffprobe_exe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,r_frame_rate",
+                "-of",
+                "json",
+                str(source_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _stderr = await process.communicate()
+        except asyncio.CancelledError:
+            if process is not None:
+                await FFmpegTool._stop_ffmpeg_process(process)
+            raise
+        except (OSError, ValueError):
+            return None
+
+        if process.returncode != 0:
+            return None
+        try:
+            stream = json.loads(stdout.decode("utf-8", errors="ignore"))["streams"][0]
+            width = int(stream["width"])
+            height = int(stream["height"])
+            rate_numerator, rate_denominator = str(
+                stream.get("r_frame_rate") or "0/0"
+            ).split("/", maxsplit=1)
+            denominator = float(rate_denominator)
+            fps = float(rate_numerator) / denominator if denominator else None
+        except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+        if width <= 0 or height <= 0:
+            return None
+        return _VideoStreamInfo(width=width, height=height, fps=fps)
 
     @staticmethod
     def ensure_ffmpeg_ready(*, auto_install: bool = True) -> str | None:
@@ -578,6 +802,10 @@ class FFmpegTool:
 
         args = [
             ffmpeg_exe,
+            "-hide_banner",
+            "-nostats",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             str(source_path),
@@ -602,24 +830,14 @@ class FFmpegTool:
             str(output_path),
         ]
 
-        process: asyncio.subprocess.Process | None = None
         try:
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await FFmpegTool._run_ffmpeg(
+                args,
+                timeout_seconds=timeout_seconds,
             )
-            _stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=max(10, int(timeout_seconds)),
-            )
-        except asyncio.TimeoutError:
-            logger.warning("FFmpeg transcode timeout: src=%s", source_path)
-            if process is not None:
-                process.kill()
-                await process.wait()
+        except asyncio.CancelledError:
             output_path.unlink(missing_ok=True)
-            return None
+            raise
         except (OSError, ValueError) as ex:
             logger.warning(
                 "FFmpeg transcode process failed: src=%s, err=%s",
@@ -629,14 +847,18 @@ class FFmpegTool:
             output_path.unlink(missing_ok=True)
             return None
 
-        if process.returncode != 0:
+        if result is None:
+            logger.warning("FFmpeg transcode timeout: src=%s", source_path)
             output_path.unlink(missing_ok=True)
-            err_tail = (stderr or b"").decode("utf-8", errors="ignore")[-500:]
+            return None
+
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
             logger.warning(
                 "FFmpeg transcode failed: src=%s, code=%s, stderr_tail=%s",
                 source_path,
-                process.returncode,
-                err_tail,
+                result.returncode,
+                result.stderr_tail,
             )
             return None
 
@@ -683,6 +905,7 @@ class FFmpegTool:
         auto_install_ffmpeg: bool = True,
         cache_enabled: bool = True,
         cache_ttl_seconds: int = MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+        profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     ) -> Path | None:
         """Transcode a silent video to high-quality GIF.
 
@@ -695,10 +918,12 @@ class FFmpegTool:
             auto_install_ffmpeg: Whether to auto-install ffmpeg if not found
             cache_enabled: 是否复用插件 GIF cache；False 时输出唯一临时文件
             cache_ttl_seconds: 转码 cache 命中后的续期秒数
+            profile: GIF 输出档位；compatibility 为内存受限容器默认值
 
         Returns:
             Path to the generated GIF file, or None if transcoding failed
         """
+        resolved_profile = FFmpegTool._get_gif_transcode_profile(profile)
         ffmpeg_exe = FFmpegTool.ensure_ffmpeg_ready(auto_install=auto_install_ffmpeg)
         if not ffmpeg_exe:
             logger.warning(
@@ -723,7 +948,7 @@ class FFmpegTool:
                     f"{source_path.resolve()}::"
                     f"{int(stat.st_mtime)}::"
                     f"{stat.st_size}::"
-                    f"{FFmpegTool._GIF_TRANSCODE_PROFILE}"
+                    f"{resolved_profile.cache_key}"
                 ).encode("utf-8", errors="ignore")
             ).hexdigest()
             output_path = cache_root / f"{digest}.gif"
@@ -748,22 +973,36 @@ class FFmpegTool:
                     source_path,
                     cached,
                     cached.stat().st_size,
-                    FFmpegTool._GIF_TRANSCODE_PROFILE,
+                    resolved_profile.cache_key,
                 )
                 return cached
         else:
             output_path = FFmpegTool._new_temp_gif_path("rsshub_gif_")
 
-        vf_expr = (
-            f"fps={FFmpegTool._GIF_TRANSCODE_FPS},"
-            f"scale={FFmpegTool._GIF_TRANSCODE_SCALE}:flags=lanczos,"
-            "split[s0][s1];"
-            f"[s0]palettegen=max_colors={FFmpegTool._GIF_TRANSCODE_MAX_COLORS}"
-            ":stats_mode=full[p];"
-            f"[s1][p]paletteuse=dither={FFmpegTool._GIF_TRANSCODE_DITHER}"
+        try:
+            source_info = await FFmpegTool._probe_video_stream_info(source_path)
+        except asyncio.CancelledError:
+            output_path.unlink(missing_ok=True)
+            raise
+        vf_expr = FFmpegTool._build_gif_filter(resolved_profile)
+        started_at = time.monotonic()
+        logger.info(
+            "FFmpeg GIF transcode start: profile=%s, source=%sx%s@%s, "
+            "output_max_long_edge=%s, output_fps=%s, colors=%s",
+            resolved_profile.name,
+            source_info.width if source_info else None,
+            source_info.height if source_info else None,
+            f"{source_info.fps:.3f}" if source_info and source_info.fps else None,
+            resolved_profile.max_long_edge,
+            resolved_profile.fps,
+            resolved_profile.max_colors,
         )
         args = [
             ffmpeg_exe,
+            "-hide_banner",
+            "-nostats",
+            "-loglevel",
+            "error",
             "-y",
             "-i",
             str(source_path),
@@ -774,41 +1013,43 @@ class FFmpegTool:
             str(output_path),
         ]
 
-        process: asyncio.subprocess.Process | None = None
         try:
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await FFmpegTool._run_ffmpeg(
+                args,
+                timeout_seconds=timeout_seconds,
             )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=max(10, int(timeout_seconds)),
-            )
-        except asyncio.TimeoutError:
-            logger.warning("FFmpeg GIF transcode timeout: src=%s", source_path)
-            if process is not None:
-                process.kill()
-                await process.wait()
+        except asyncio.CancelledError:
             output_path.unlink(missing_ok=True)
-            return None
+            raise
         except (OSError, ValueError) as ex:
             logger.warning(
-                "FFmpeg GIF transcode process failed: src=%s, err=%s",
-                source_path,
+                "FFmpeg GIF transcode process failed: profile=%s, elapsed_seconds=%.3f, "
+                "err=%s",
+                resolved_profile.name,
+                time.monotonic() - started_at,
                 ex,
             )
             output_path.unlink(missing_ok=True)
             return None
 
-        if process.returncode != 0:
-            output_path.unlink(missing_ok=True)
-            err_tail = (stderr or b"").decode("utf-8", errors="ignore")[-500:]
+        if result is None:
             logger.warning(
-                "FFmpeg GIF transcode failed: src=%s, code=%s, stderr_tail=%s",
-                source_path,
-                process.returncode,
-                err_tail,
+                "FFmpeg GIF transcode timeout: profile=%s, elapsed_seconds=%.3f",
+                resolved_profile.name,
+                time.monotonic() - started_at,
+            )
+            output_path.unlink(missing_ok=True)
+            return None
+
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            logger.warning(
+                "FFmpeg GIF transcode failed: profile=%s, elapsed_seconds=%.3f, "
+                "code=%s, stderr_tail=%s",
+                resolved_profile.name,
+                time.monotonic() - started_at,
+                result.returncode,
+                result.stderr_tail,
             )
             return None
 
@@ -820,12 +1061,19 @@ class FFmpegTool:
                     cache_ttl_seconds=cache_ttl_seconds,
                     stage="gif_success",
                 )
-            logger.debug(
-                "FFmpeg GIF transcode success: src=%s, out=%s, bytes=%s, profile=%s",
-                source_path,
-                output_path,
+            try:
+                output_info = await FFmpegTool._probe_video_stream_info(output_path)
+            except asyncio.CancelledError:
+                output_path.unlink(missing_ok=True)
+                raise
+            logger.info(
+                "FFmpeg GIF transcode success: profile=%s, output=%sx%s, bytes=%s, "
+                "elapsed_seconds=%.3f",
+                resolved_profile.cache_key,
+                output_info.width if output_info else None,
+                output_info.height if output_info else None,
                 output_path.stat().st_size,
-                FFmpegTool._GIF_TRANSCODE_PROFILE,
+                time.monotonic() - started_at,
             )
             return output_path
 
@@ -834,7 +1082,6 @@ class FFmpegTool:
         return None
 
     _GIF_COMPRESS_SCALE_FACTORS: Final = [0.75, 0.5, 0.35, 0.25]
-    _GIF_COMPRESS_MIN_FPS: Final = 15
 
     @staticmethod
     async def transcode_to_gif_under_limit(
@@ -845,6 +1092,7 @@ class FFmpegTool:
         auto_install_ffmpeg: bool = True,
         cache_enabled: bool = True,
         cache_ttl_seconds: int = MEDIA_CACHE_TTL_SECONDS_DEFAULT,
+        profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     ) -> Path | None:
         """将视频转码为不超过 max_bytes 的 GIF。
 
@@ -857,10 +1105,12 @@ class FFmpegTool:
             auto_install_ffmpeg: 是否自动安装 ffmpeg
             cache_enabled: 是否复用插件压缩 GIF cache；False 时输出唯一临时文件
             cache_ttl_seconds: 转码 cache 命中后的续期秒数
+            profile: GIF 输出档位；压缩候选不会超过该档位的尺寸与帧率
 
         Returns:
             生成的 GIF 路径，或 None（失败时）
         """
+        resolved_profile = FFmpegTool._get_gif_transcode_profile(profile)
         ffmpeg_exe = FFmpegTool.ensure_ffmpeg_ready(auto_install=auto_install_ffmpeg)
         if not ffmpeg_exe:
             return None
@@ -875,11 +1125,12 @@ class FFmpegTool:
 
         cache_root: Path | None = None
         cache_attempts: list[tuple[int, float, Path | None]] = []
+        compressed_fps = max(1, resolved_profile.fps // 2)
         attempts = [
-            (FFmpegTool._GIF_TRANSCODE_FPS, factor)
+            (resolved_profile.fps, factor)
             for factor in FFmpegTool._GIF_COMPRESS_SCALE_FACTORS
         ] + [
-            (FFmpegTool._GIF_COMPRESS_MIN_FPS, factor)
+            (compressed_fps, factor)
             for factor in FFmpegTool._GIF_COMPRESS_SCALE_FACTORS
         ]
         if cache_enabled:
@@ -889,7 +1140,8 @@ class FFmpegTool:
                 cache_key = (
                     f"{source_path.resolve()}::"
                     f"{int(stat.st_mtime)}::{stat.st_size}::"
-                    f"compressed:{max_bytes}:{fps}:{scale_factor}"
+                    f"compressed:{resolved_profile.cache_key}:{max_bytes}:"
+                    f"{fps}:{scale_factor}"
                 )
                 digest = hashlib.sha256(
                     cache_key.encode("utf-8", errors="ignore")
@@ -925,17 +1177,17 @@ class FFmpegTool:
             else:
                 output_path = FFmpegTool._new_temp_gif_path("rsshub_gif_compressed_")
 
-            scale_w = f"iw*{scale_factor}"
-            vf_expr = (
-                f"fps={fps},"
-                f"scale={scale_w}:-1:flags=lanczos,"
-                "split[s0][s1];"
-                f"[s0]palettegen=max_colors={FFmpegTool._GIF_TRANSCODE_MAX_COLORS}"
-                ":stats_mode=full[p];"
-                f"[s1][p]paletteuse=dither={FFmpegTool._GIF_TRANSCODE_DITHER}"
+            vf_expr = FFmpegTool._build_gif_filter(
+                resolved_profile,
+                fps=fps,
+                scale_factor=scale_factor,
             )
             args = [
                 ffmpeg_exe,
+                "-hide_banner",
+                "-nostats",
+                "-loglevel",
+                "error",
                 "-y",
                 "-i",
                 str(source_path),
@@ -946,38 +1198,45 @@ class FFmpegTool:
                 str(output_path),
             ]
 
-            process: asyncio.subprocess.Process | None = None
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *args,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                result = await FFmpegTool._run_ffmpeg(
+                    args,
+                    timeout_seconds=timeout_seconds,
                 )
-                _stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=max(10, int(timeout_seconds)),
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "FFmpeg compressed GIF timeout: src=%s, scale=%s",
-                    source_path,
-                    scale_factor,
-                )
-                if process is not None:
-                    process.kill()
-                    await process.wait()
+            except asyncio.CancelledError:
                 output_path.unlink(missing_ok=True)
-                continue
+                raise
             except (OSError, ValueError) as ex:
                 logger.warning(
-                    "FFmpeg compressed GIF failed: src=%s, err=%s",
+                    "FFmpeg compressed GIF failed: src=%s, profile=%s, scale=%s, "
+                    "err=%s",
                     source_path,
+                    resolved_profile.name,
+                    scale_factor,
                     ex,
                 )
                 output_path.unlink(missing_ok=True)
                 continue
 
-            if process.returncode != 0:
+            if result is None:
+                logger.warning(
+                    "FFmpeg compressed GIF timeout: src=%s, profile=%s, scale=%s",
+                    source_path,
+                    resolved_profile.name,
+                    scale_factor,
+                )
+                output_path.unlink(missing_ok=True)
+                continue
+
+            if result.returncode != 0:
+                logger.warning(
+                    "FFmpeg compressed GIF failed: src=%s, profile=%s, code=%s, "
+                    "stderr_tail=%s",
+                    source_path,
+                    resolved_profile.name,
+                    result.returncode,
+                    result.stderr_tail,
+                )
                 output_path.unlink(missing_ok=True)
                 continue
 
@@ -998,8 +1257,10 @@ class FFmpegTool:
                         stage="gif_compressed_success",
                     )
                 logger.debug(
-                    "Compressed GIF success: src=%s, bytes=%s, scale=%s, fps=%s",
+                    "Compressed GIF success: src=%s, profile=%s, bytes=%s, "
+                    "scale=%s, fps=%s",
                     source_path,
+                    resolved_profile.name,
                     output_size,
                     scale_factor,
                     fps,
@@ -1057,6 +1318,10 @@ class FFmpegTool:
 
         args = [
             ffmpeg_exe,
+            "-hide_banner",
+            "-nostats",
+            "-loglevel",
+            "error",
             "-y",
             "-protocol_whitelist",
             "file,http,https,tcp,tls,crypto,httpproxy",
@@ -1083,46 +1348,35 @@ class FFmpegTool:
             env["http_proxy"] = proxy_url
             env["https_proxy"] = proxy_url
 
-        process: asyncio.subprocess.Process | None = None
         try:
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await FFmpegTool._run_ffmpeg(
+                args,
+                timeout_seconds=timeout_seconds,
                 env=env,
             )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=max(10, int(timeout_seconds)),
-            )
-        except asyncio.TimeoutError:
-            logger.warning("FFmpeg m3u8 download timeout: url=%s", m3u8_url)
-            if process is not None:
-                process.kill()
-                await process.wait()
+        except asyncio.CancelledError:
             output_path.unlink(missing_ok=True)
-            return False
-        except Exception as e:
+            raise
+        except (OSError, ValueError) as ex:
             logger.warning(
                 "FFmpeg m3u8 download process failed: url=%s, err=%s",
                 m3u8_url,
-                e,
+                ex,
             )
-            if process is not None:
-                process.kill()
-                await process.wait()
             output_path.unlink(missing_ok=True)
             return False
 
-        if process.returncode != 0:
-            stderr_tail = (
-                stderr.decode("utf-8", errors="ignore")[-500:] if stderr else ""
-            )
+        if result is None:
+            logger.warning("FFmpeg m3u8 download timeout: url=%s", m3u8_url)
+            output_path.unlink(missing_ok=True)
+            return False
+
+        if result.returncode != 0:
             logger.warning(
                 "FFmpeg m3u8 download failed: url=%s, code=%s, stderr_tail=%s",
                 m3u8_url,
-                process.returncode,
-                stderr_tail,
+                result.returncode,
+                result.stderr_tail,
             )
             output_path.unlink(missing_ok=True)
             return False

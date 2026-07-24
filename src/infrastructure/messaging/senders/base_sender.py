@@ -17,6 +17,7 @@ from astrbot.core.star.star_tools import StarTools
 
 from ....domain.entities.content_types import is_generated_media_url
 from ....shared.constants import (
+    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
     MEDIA_CACHE_TTL_SECONDS_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT,
     QQ_OFFICIAL_DEGRADE_STRATEGY_OPTIONS,
@@ -60,6 +61,7 @@ class DefaultMessageSender:
     _video_transcode_timeout: int = 120
     _gif_transcode: bool = False
     _gif_transcode_timeout: int = 60
+    _gif_transcode_profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY
     _telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES
     _qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT
     _qq_official_degrade_strategy: str = QQ_OFFICIAL_DEGRADE_STRATEGY_DEFAULT
@@ -95,6 +97,7 @@ class DefaultMessageSender:
         video_transcode_timeout: int = 120,
         gif_transcode: bool = False,
         gif_transcode_timeout: int = 60,
+        gif_transcode_profile: str = GIF_TRANSCODE_PROFILE_COMPATIBILITY,
         telegram_photo_max_bytes: int = TELEGRAM_PHOTO_MAX_BYTES,
         onebot_napcat_stream_mode: str = "fallback",
         qq_official_media_threshold: int = QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
@@ -105,6 +108,7 @@ class DefaultMessageSender:
         cls._video_transcode_timeout = max(1, int(video_transcode_timeout))
         cls._gif_transcode = bool(gif_transcode)
         cls._gif_transcode_timeout = max(1, int(gif_transcode_timeout))
+        cls._gif_transcode_profile = str(gif_transcode_profile or "").strip()
         cls._telegram_photo_max_bytes = max(1, int(telegram_photo_max_bytes))
         cls._onebot_napcat_stream_mode_default = str(
             onebot_napcat_stream_mode or "fallback"
@@ -165,6 +169,18 @@ class DefaultMessageSender:
     @classmethod
     def _get_gif_transcode_timeout(cls) -> int:
         return max(1, int(getattr(cls, "_gif_transcode_timeout", 60)))
+
+    @classmethod
+    def _get_gif_transcode_profile(cls) -> str:
+        """返回已由启动配置校验过的 GIF 转码档位。"""
+        return str(
+            getattr(
+                cls,
+                "_gif_transcode_profile",
+                GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+            )
+            or GIF_TRANSCODE_PROFILE_COMPATIBILITY
+        )
 
     @classmethod
     def _resolve_gif_transcode_decision(
@@ -420,6 +436,7 @@ class DefaultMessageSender:
                     media_type=effective_media_type,
                     try_convert_gif=try_convert_gif,
                     gif_transcode_timeout=self._get_gif_transcode_timeout(),
+                    gif_transcode_profile=self._get_gif_transcode_profile(),
                     **relay_kwargs,
                 )
                 if (
@@ -462,6 +479,7 @@ class DefaultMessageSender:
                 media_type=effective_media_type,
                 try_convert_gif=try_convert_gif,
                 gif_transcode_timeout=self._get_gif_transcode_timeout(),
+                gif_transcode_profile=self._get_gif_transcode_profile(),
                 **relay_kwargs,
             )
             transcode_owned = False

@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.4] - 2026-07-25
+
+### Added
+
+- `media.gif_transcode_profile` 新增 `compatibility`（默认）、`balanced`、`quality` 三档 GIF 输出配置；未知值会明确报配置错误。
+
+### Changed
+
+- GIF 转码会在 palette 生成前按档位缩放和降帧；GIF / 压缩 GIF / 媒体缓存键均隔离档位，压缩候选不会回升到原始 30 FPS 或原始尺寸。
+- GIF、MP4、HLS 的 FFmpeg 调用统一收敛为落盘 stderr 的子进程执行器；取消或超时时会结束子进程并清理半成品。
+
+### Fixed
+
+- 修复高分辨率无声视频沿用原尺寸 30 FPS GIF 转码时，FFmpeg palette 滤镜可能在 3 GiB 容器中被 OOM 杀死的问题；默认兼容档为长边 960px、15 FPS、128 色。
+
 ## [2.1.3] - 2026-07-24
 
 ### Fixed

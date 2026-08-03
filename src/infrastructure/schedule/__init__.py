@@ -10,7 +10,7 @@ from .rss_scheduler import (
 )
 
 __all__ = [
+    "NotificationService",
     "RSSScheduler",
     "SchedulerStats",
-    "NotificationService",
 ]

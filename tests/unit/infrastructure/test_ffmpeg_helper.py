@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 from astrbot_plugin_rsshub.src.infrastructure.utils.ffmpeg_helper import FFmpegTool
 
-
 _PROBE_VIDEO_STREAM_INFO = FFmpegTool._probe_video_stream_info
 
 

@@ -100,10 +100,10 @@ class RSSFeedFetcher(HttpFetcher):
 
 
 __all__ = [
-    "RSSFeedFetcher",
-    "RSSParser",
-    "EntryParsed",
     "Enclosure",
+    "EntryParsed",
     "FeedDiscoverer",
     "FeedDiscoveryResult",
+    "RSSFeedFetcher",
+    "RSSParser",
 ]

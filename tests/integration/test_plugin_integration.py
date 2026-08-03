@@ -80,7 +80,7 @@ def main_module(monkeypatch):
 
     monkeypatch.delitem(sys.modules, "astrbot_plugin_rsshub.main", raising=False)
 
-    import astrbot_plugin_rsshub.main as main
+    from astrbot_plugin_rsshub import main
 
     return main
 

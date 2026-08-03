@@ -436,7 +436,6 @@ class TestImportCommand:
 
             async def get_or_create(self, user_id: str):
                 self.calls.append(user_id)
-                return None
 
         user_repo = UserRepo()
         command = ImportSubscriptionsCommand(

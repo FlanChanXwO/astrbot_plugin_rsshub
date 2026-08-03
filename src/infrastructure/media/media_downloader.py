@@ -14,7 +14,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import aiohttp
-
 from astrbot.core.utils.http_ssl import build_tls_connector
 
 from ...shared.constants import (

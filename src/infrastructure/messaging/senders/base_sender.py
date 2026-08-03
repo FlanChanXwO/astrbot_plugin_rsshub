@@ -10,7 +10,6 @@ import shutil
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.star.star_tools import StarTools
@@ -31,9 +30,6 @@ from ...utils import get_logger
 from ...utils.lock import locked
 from ...utils.media_type_detector import detect_media_file, detect_media_hint
 from .types import MediaVariant, MessageContext, PreparedMedia, SendRequest, SendResult
-
-if TYPE_CHECKING:
-    pass
 
 logger = get_logger()
 MAX_SEND_ERROR_DETAIL_LENGTH = 512

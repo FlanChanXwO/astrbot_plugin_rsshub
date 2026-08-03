@@ -14,8 +14,8 @@ __all__ = [
     "EntryFormatInput",
     "EntryOutputFormat",
     "EntryTextFormatter",
+    "MessageChainFormatter",
     "MessageComponent",
     "MessageComponentSorter",
-    "MessageChainFormatter",
     "MessageFormatter",
 ]

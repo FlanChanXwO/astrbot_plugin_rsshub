@@ -112,8 +112,8 @@ def test_schema_healer_fills_media_defaults():
     """Schema healer should add ``media.gif_transcode`` (and siblings) from
     schema defaults when the field is absent in user JSON."""
     from astrbot_plugin_rsshub.src.infrastructure.config import (
-        heal_astrbot_plugin_config,
         build_application_settings,
+        heal_astrbot_plugin_config,
     )
 
     schema = _load_schema()

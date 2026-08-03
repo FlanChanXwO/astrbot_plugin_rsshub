@@ -6,8 +6,8 @@ from .registry import LLM_TOOL_NAMES, build_llm_tools
 from .types import FunctionTool, LLMToolDeps
 
 __all__ = [
+    "LLM_TOOL_NAMES",
     "FunctionTool",
     "LLMToolDeps",
-    "LLM_TOOL_NAMES",
     "build_llm_tools",
 ]

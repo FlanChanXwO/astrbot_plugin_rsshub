@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ....shared.constants import (
     QQ_OFFICIAL_DEGRADE_STRATEGY_FAIL,
@@ -19,9 +18,6 @@ from ....shared.constants import (
 from ...pipeline import MessageComponent
 from .base_sender import DefaultMessageSender
 from .types import MessageContext, SendRequest, SendResult
-
-if TYPE_CHECKING:
-    pass
 
 
 class QQOfficialMessageSender(DefaultMessageSender):

@@ -360,7 +360,7 @@ def test_rsshelp_selects_help_image_by_astrbot_timezone(monkeypatch, tmp_path):
 
             return datetime(2026, 5, 26, 22 if tz else 12, tzinfo=tz)
 
-    import astrbot_plugin_rsshub.src.application.commands.help_image_cmd as help_image_cmd
+    from astrbot_plugin_rsshub.src.application.commands import help_image_cmd
 
     monkeypatch.setattr(help_image_cmd, "datetime", FixedDateTime)
 

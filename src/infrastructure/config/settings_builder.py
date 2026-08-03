@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from ...shared.constants import (
+    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
+    GIF_TRANSCODE_PROFILE_OPTIONS,
     MEDIA_CACHE_TTL_SECONDS_DEFAULT,
     MEDIA_CACHE_TTL_SECONDS_MIN,
     ONEBOT_NAPCAT_STREAM_MODE_DEFAULT,
@@ -18,8 +20,6 @@ from ...shared.constants import (
     QQ_OFFICIAL_MEDIA_THRESHOLD_DEFAULT,
     SENDER_STRATEGY_ENABLED_PLATFORMS,
     TELEGRAM_PHOTO_MAX_BYTES,
-    GIF_TRANSCODE_PROFILE_COMPATIBILITY,
-    GIF_TRANSCODE_PROFILE_OPTIONS,
 )
 from .models import (
     ApplicationSettings,

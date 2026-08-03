@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[3] / "scripts" / "qq_official_media_probe.py"
 )

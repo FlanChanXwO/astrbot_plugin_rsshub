@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from astrbot_plugin_rsshub.src.infrastructure.rendering import font_manager
 from astrbot_plugin_rsshub.src.infrastructure.rendering.font_manager import (
     TABLE_FONT_FILENAME,

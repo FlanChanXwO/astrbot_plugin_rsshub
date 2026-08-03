@@ -51,7 +51,7 @@ __all__ = [
 
 # Eager re-export of names that collide with submodule names. Without these,
 # `from utils import caching` returns the caching submodule, not the function.
-from .caching import caching  # noqa: F401
+from .caching import caching
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     "BaseCache": ("caching", "BaseCache"),

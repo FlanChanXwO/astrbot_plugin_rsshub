@@ -15,10 +15,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from quart import Response, jsonify, request
-
 from astrbot.api import AstrBotConfig
 from astrbot.api.star import Context
+from quart import Response, jsonify, request
 
 from ..application.commands.batch_activate_cmd import BatchActivateCommand
 from ..application.commands.batch_deactivate_cmd import BatchDeactivateCommand
@@ -46,7 +45,6 @@ from ..domain.repositories.feed_repository import FeedRepository
 from ..domain.repositories.push_history_repository import PushHistoryRepository
 from ..domain.repositories.subscription_repository import SubscriptionRepository
 from ..domain.repositories.user_repository import UserRepository
-from ..shared.constants import INHERIT_VALUE
 from ..infrastructure.config import (
     RsshubPluginConfig,
     build_application_settings,
@@ -54,6 +52,7 @@ from ..infrastructure.config import (
     validate_interval_value,
 )
 from ..infrastructure.utils import get_plugin_cache_dir, get_plugin_export_dir
+from ..shared.constants import INHERIT_VALUE
 
 PLUGIN_NAME = "astrbot_plugin_rsshub"
 USER_ID_REQUIRED_ERROR = "user_id 不能为空"

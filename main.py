@@ -182,7 +182,6 @@ class RSSHubPlugin(Star):
     @filter.command_group("sub_profile", alias={"订阅配置"})
     def sub_profile_group(self):
         """订阅/用户配置命令组。"""
-        pass
 
     @sub_profile_group.command("set", alias={"设置"})
     async def sub_profile_set(self, event: AstrMessageEvent, args: str = ""):
@@ -210,7 +209,6 @@ class RSSHubPlugin(Star):
     @filter.command_group("sub_session", alias={"会话设置"})
     def sub_session_group(self):
         """会话默认配置命令组。"""
-        pass
 
     @sub_session_group.command("set", alias={"设置"})
     async def sub_set_session(

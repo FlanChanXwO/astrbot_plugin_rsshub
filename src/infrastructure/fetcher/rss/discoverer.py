@@ -44,8 +44,9 @@ class FeedDiscoverer:
             发现的 Feed 列表
         """
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     page_url,
                     timeout=self.timeout,
                     proxy=self.proxy or None,
@@ -53,11 +54,12 @@ class FeedDiscoverer:
                         "Accept": "text/html,application/xhtml+xml",
                         "User-Agent": "Mozilla/5.0 (compatible; RSSHubBot/1.0)",
                     },
-                ) as resp:
-                    if resp.status != 200:
-                        return []
-                    html = await resp.text()
-                    base_url = str(resp.url)
+                ) as resp,
+            ):
+                if resp.status != 200:
+                    return []
+                html = await resp.text()
+                base_url = str(resp.url)
         except Exception as ex:
             logger.warning("Feed discovery failed for %s: %s", page_url, ex)
             return []

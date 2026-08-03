@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from astrbot.api.message_components import Node, Nodes, Plain
 
@@ -15,9 +15,6 @@ from ...utils import get_logger
 from ..napcat_stream import upload_file_stream
 from .base_sender import DefaultMessageSender
 from .types import MessageContext, SendRequest, SendResult, get_bot_self_id
-
-if TYPE_CHECKING:
-    pass
 
 logger = get_logger()
 

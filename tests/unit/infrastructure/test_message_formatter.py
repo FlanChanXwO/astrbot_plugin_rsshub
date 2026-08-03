@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from astrbot.api.message_components import Plain
 from astrbot_plugin_rsshub.src.application.services.html_parser import HTMLParser
 from astrbot_plugin_rsshub.src.domain.entities.content_types import (
     FileContent,
@@ -24,8 +25,6 @@ from astrbot_plugin_rsshub.src.infrastructure.rendering import (
     TableImageRenderer,
     TableImageRenderResult,
 )
-
-from astrbot.api.message_components import Plain
 
 
 @pytest.mark.asyncio

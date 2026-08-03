@@ -8,18 +8,17 @@ from threading import Barrier
 from unittest.mock import MagicMock
 
 import pytest
-from PIL import Image
-
+from astrbot_plugin_rsshub.src.domain.entities.content_types import (
+    LayoutFragment,
+    build_generated_media_url,
+)
 from astrbot_plugin_rsshub.src.infrastructure.rendering.table_image_renderer import (
     TABLE_FONT_DIR_ENV,
     TABLE_FONT_PATH_ENV,
     TableImageRenderer,
     cleanup_ephemeral_generated_media_paths,
 )
-from astrbot_plugin_rsshub.src.domain.entities.content_types import (
-    LayoutFragment,
-    build_generated_media_url,
-)
+from PIL import Image
 
 # 需要真实字体的渲染测试使用 macOS / Linux 上可用的 CJK 字体
 _CJK_FONT_CANDIDATES = [
@@ -523,7 +522,7 @@ def test_table_image_renderer_warns_when_no_font_available(
     monkeypatch.setattr(
         TableImageRenderer,
         "_iter_font_candidates",
-        staticmethod(lambda: []),
+        staticmethod(list),
     )
 
     font = TableImageRenderer._load_font(size=24)
@@ -540,7 +539,7 @@ def test_table_image_renderer_render_returns_none_when_no_font(
     monkeypatch.setattr(
         TableImageRenderer,
         "_iter_font_candidates",
-        staticmethod(lambda: []),
+        staticmethod(list),
     )
 
     renderer = TableImageRenderer(cache_dir=tmp_path)

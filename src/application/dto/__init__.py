@@ -14,7 +14,7 @@ __all__ = [
     "CommandResult",
     "FeedDTO",
     "ItemDTO",
-    "SubscriptionExportRecord",
     "SubscriptionDTO",
+    "SubscriptionExportRecord",
     "WebFeed",
 ]

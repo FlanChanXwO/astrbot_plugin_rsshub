@@ -39,8 +39,6 @@ _plugin_registry = registry()
 class RSSHubBaseModel(SQLModel, registry=_plugin_registry):
     """插件基础模型，共享注册表。"""
 
-    pass
-
 
 class DatabaseManager:
     """数据库管理器，封装引擎和会话工厂。

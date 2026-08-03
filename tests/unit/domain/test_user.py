@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from astrbot_plugin_rsshub.src.domain.entities.user import User
 from astrbot_plugin_rsshub.src.shared.constants import (
     INHERIT_VALUE,
     USER_STATE_BANNED,
     USER_STATE_USER,
 )
-from astrbot_plugin_rsshub.src.domain.entities.user import User
 
 
 def test_user_status_contract_only_distinguishes_user_and_banned():

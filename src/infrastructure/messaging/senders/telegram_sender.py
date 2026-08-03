@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ...config import get_config_manager
 from ...pipeline import MessageFormatter
@@ -15,9 +14,6 @@ from ...utils import get_logger
 from .base_sender import DefaultMessageSender
 from .telegraph_client import TelegraphClient
 from .types import MessageContext, SendRequest, SendResult
-
-if TYPE_CHECKING:
-    pass
 
 logger = get_logger()
 

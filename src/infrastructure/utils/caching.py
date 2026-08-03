@@ -109,7 +109,7 @@ class BaseCache(abc.ABC):
 class _CacheEntry:
     """缓存条目"""
 
-    __slots__ = ("value", "expires_at")
+    __slots__ = ("expires_at", "value")
 
     def __init__(self, value: Any, ttl: float | None):
         self.value = value
@@ -808,14 +808,14 @@ def cacheevict(
 
 
 __all__ = [
-    "CacheProviderType",
     "BaseCache",
-    "MemoryCache",
+    "CacheProviderType",
     "DiskCache",
     "HybridCache",
+    "MemoryCache",
+    "cacheevict",
+    "cacheput",
+    "caching",
     "get_memory_cache",
     "set_cache_backend",
-    "caching",
-    "cacheput",
-    "cacheevict",
 ]

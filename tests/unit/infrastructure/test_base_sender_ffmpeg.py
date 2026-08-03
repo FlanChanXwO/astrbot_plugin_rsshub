@@ -8,11 +8,11 @@ from astrbot_plugin_rsshub.src.domain.entities.content_types import (
     LayoutFragment,
     build_generated_media_url,
 )
-from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.base_sender import (
-    DefaultMessageSender,
-)
 from astrbot_plugin_rsshub.src.infrastructure.media.media_downloader import (
     MediaDownloader,
+)
+from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.base_sender import (
+    DefaultMessageSender,
 )
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.onebot_sender import (
     OneBotMessageSender,
@@ -23,14 +23,14 @@ from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.qq_official_send
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.telegram_sender import (
     TelegramMessageSender,
 )
-from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.weixin_oc_sender import (
-    WeixinOCMessageSender,
-)
 from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.types import (
     MessageContext,
     PreparedMedia,
-    SendResult,
     SendRequest,
+    SendResult,
+)
+from astrbot_plugin_rsshub.src.infrastructure.messaging.senders.weixin_oc_sender import (
+    WeixinOCMessageSender,
 )
 
 

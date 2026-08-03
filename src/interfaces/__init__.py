@@ -2,4 +2,4 @@
 
 from .web_api import PLUGIN_NAME, WebApiHandler
 
-__all__ = ["WebApiHandler", "PLUGIN_NAME"]
+__all__ = ["PLUGIN_NAME", "WebApiHandler"]

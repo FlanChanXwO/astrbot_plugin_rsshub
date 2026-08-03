@@ -243,7 +243,7 @@ class CompiledExpression:
 
 
 __all__ = [
-    "ExpressionParser",
-    "ExpressionEvaluator",
     "CompiledExpression",
+    "ExpressionEvaluator",
+    "ExpressionParser",
 ]

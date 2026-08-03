@@ -10,11 +10,11 @@ from astrbot_plugin_rsshub.src.application.services.feed_polling_service import 
     FeedPollingService,
 )
 from astrbot_plugin_rsshub.src.domain.entities.feed import Feed
+from astrbot_plugin_rsshub.src.infrastructure.config import RSSSettings
 from astrbot_plugin_rsshub.src.infrastructure.fetcher.rss.parser import (
     EntryParsed,
     RSSParser,
 )
-from astrbot_plugin_rsshub.src.infrastructure.config import RSSSettings
 
 
 def _web_feed(**kwargs):

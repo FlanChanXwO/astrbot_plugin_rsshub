@@ -25,12 +25,12 @@ from .rss import (
 )
 
 __all__ = [
-    "WebFeed",
+    "Enclosure",
+    "EntryParsed",
+    "FeedDiscoverer",
+    "FeedDiscoveryResult",
     "HttpFetcher",
     "RSSFeedFetcher",
     "RSSParser",
-    "EntryParsed",
-    "Enclosure",
-    "FeedDiscoverer",
-    "FeedDiscoveryResult",
+    "WebFeed",
 ]

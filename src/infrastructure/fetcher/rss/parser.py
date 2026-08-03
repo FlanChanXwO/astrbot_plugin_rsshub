@@ -13,4 +13,4 @@ class RSSParser(FeedDocumentParser):
     parse_entry = staticmethod(XMLFeedParser.parse_entry)
 
 
-__all__ = ["RSSParser", "EntryParsed", "Enclosure"]
+__all__ = ["Enclosure", "EntryParsed", "RSSParser"]

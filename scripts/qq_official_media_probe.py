@@ -26,7 +26,6 @@ from xml.etree import ElementTree
 
 import aiohttp
 
-
 QQ_API_BASE = "https://api.sgroup.qq.com"
 QQ_TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
 

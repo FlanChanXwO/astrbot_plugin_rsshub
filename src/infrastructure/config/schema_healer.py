@@ -61,7 +61,7 @@ def _coerce_float(value: Any) -> float | None:
 
 
 def _clamp_slider_value(
-    value: int | float,
+    value: float,
     meta: dict[str, Any],
     path: str,
     changes: list[str],

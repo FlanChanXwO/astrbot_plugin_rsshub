@@ -11,6 +11,9 @@ from typing import Any
 _EXPORT_MAP = {
     "AgentXmlPushService": "agent_xml_push_service",
     "AgentXmlValidationError": "agent_xml_push_service",
+    "CardTemplateDownloadService": "card_template_service",
+    "CardTemplateInUseError": "card_template_service",
+    "CardTemplateManagementService": "card_template_service",
     "FeedPollingService": "feed_polling_service",
     "FeedPollingResult": "feed_polling_service",
     "FeedReadResult": "feed_polling_service",
@@ -28,11 +31,13 @@ _EXPORT_MAP = {
     "StopPushJobResult": "session_push_queue",
     "HTMLParser": "html_parser",
     "HTMLCleaner": "html_parser",
+    "InsecureCardTemplateDownloadError": "card_template_service",
     "parse_html": "html_parser",
     "clean_html": "html_parser",
     "serialize_subscriptions_to_toml": "subscription_serializer",
     "parse_subscriptions_toml": "subscription_serializer",
     "SubscriptionImportPayload": "subscription_serializer",
+    "UnsupportedCardTemplateUrlError": "card_template_service",
     "ImportSubscriptionRecord": "subscription_serializer",
 }
 

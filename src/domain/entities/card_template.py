@@ -19,6 +19,12 @@ _SEMVER_PATTERN = re.compile(
     r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?"
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
+_TEMPLATE_ID_PATTERN = re.compile(r"^astrbot_plugin_rsshub_card_[a-z0-9][a-z0-9_-]*$")
+
+
+def is_valid_card_template_id(value: str) -> bool:
+    """判断字符串是否符合卡片模板 ID 契约。"""
+    return _TEMPLATE_ID_PATTERN.fullmatch(value) is not None
 
 
 class CardTemplateMetadata(BaseModel):
@@ -28,7 +34,7 @@ class CardTemplateMetadata(BaseModel):
 
     id: str = Field(
         ...,
-        pattern=r"^astrbot_plugin_rsshub_card_[a-z0-9][a-z0-9_-]*$",
+        pattern=_TEMPLATE_ID_PATTERN.pattern,
         description="模板 ID",
     )
     name: str = Field(..., description="模板名称")

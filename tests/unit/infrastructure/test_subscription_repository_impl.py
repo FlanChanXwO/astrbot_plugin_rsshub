@@ -63,6 +63,9 @@ async def test_update_options_serializes_handlers(monkeypatch):
         display_entry_tags=-100,
         style=-100,
         display_media=-100,
+        send_card=False,
+        template_id=None,
+        card_send_original_content=False,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

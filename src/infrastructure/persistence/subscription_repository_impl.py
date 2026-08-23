@@ -243,6 +243,9 @@ class SubscriptionRepositoryImpl:
             display_entry_tags=orm.display_entry_tags,
             style=orm.style,
             display_media=orm.display_media,
+            send_card=orm.send_card,
+            template_id=orm.template_id,
+            card_send_original_content=orm.card_send_original_content,
             created_at=orm.created_at,
             updated_at=orm.updated_at,
         )
@@ -272,6 +275,9 @@ class SubscriptionRepositoryImpl:
             display_entry_tags=sub.display_entry_tags,
             style=sub.style,
             display_media=sub.display_media,
+            send_card=sub.send_card,
+            template_id=sub.template_id,
+            card_send_original_content=sub.card_send_original_content,
             created_at=sub.created_at,
             updated_at=sub.updated_at,
         )

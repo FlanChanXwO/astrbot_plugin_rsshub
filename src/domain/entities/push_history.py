@@ -57,6 +57,8 @@ class PushHistory(BaseModel):
 
     id: int | None = Field(default=None, description="数据库ID")
     sub_id: int | None = Field(default=None, description="订阅ID")
+    batch_id: int | None = Field(default=None, description="投递批次 ID")
+    bundle_id: int | None = Field(default=None, description="Bundle ID")
     user_id: str = Field(..., description="用户ID")
     feed_id: int | None = Field(default=None, description="FeedID")
     source_type: str = Field(
@@ -72,6 +74,16 @@ class PushHistory(BaseModel):
     handler_trace: list[dict[str, Any]] | None = Field(
         default=None,
         description="内容 handler 执行摘要",
+    )
+    output_kind: str = Field(
+        default="standard",
+        max_length=16,
+        description="批次输出类型: card/standard",
+    )
+    output_order: int = Field(default=0, ge=0, description="批次内输出顺序")
+    source_context: dict[str, Any] | None = Field(
+        default=None,
+        description="来源不可变快照",
     )
 
     entry_title: str = Field(default="", max_length=1024, description="条目标题")
@@ -91,7 +103,9 @@ class PushHistory(BaseModel):
     status: str | None = Field(
         default=None,
         max_length=16,
-        description="状态: pending/success/failed/stopped/skipped",
+        description=(
+            "状态: waiting/pending/retrying/success/failed/stopped/skipped/discarded"
+        ),
     )
     retry_count: int = Field(default=0, description="重试次数")
     max_retries: int = Field(default=3, description="最大重试次数")

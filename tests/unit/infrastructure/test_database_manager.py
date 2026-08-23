@@ -275,7 +275,7 @@ async def test_ensure_user_rows_backfills_when_user_table_lacks_sql_defaults():
 
 
 @pytest.mark.asyncio
-async def test_ensure_profile_schema_adds_handlers_mode_to_existing_sub_table():
+async def test_ensure_profile_schema_adds_current_fields_to_existing_sub_table():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.exec_driver_sql(
@@ -310,7 +310,13 @@ async def test_ensure_profile_schema_adds_handlers_mode_to_existing_sub_table():
 
         applied = await ensure_profile_schema(conn)
 
-        assert applied == ["rsshub_user.handlers", "rsshub_sub.handlers_mode"]
+        assert applied == [
+            "rsshub_user.handlers",
+            "rsshub_sub.handlers_mode",
+            "rsshub_sub.send_card",
+            "rsshub_sub.template_id",
+            "rsshub_sub.card_send_original_content",
+        ]
         sub_columns = {
             str(row[1])
             for row in (
@@ -331,6 +337,11 @@ async def test_ensure_profile_schema_adds_handlers_mode_to_existing_sub_table():
 
         assert "handlers" in user_columns
         assert "handlers_mode" in sub_columns
+        assert {
+            "send_card",
+            "template_id",
+            "card_send_original_content",
+        }.issubset(sub_columns)
         assert rows == [(1, "inherit"), (2, "override")]
 
     await engine.dispose()
@@ -407,12 +418,13 @@ async def test_ensure_profile_schema_allows_current_sub_orm_reads():
 
 
 @pytest.mark.asyncio
-async def test_migration_runner_only_discovers_current_baseline_migration():
+async def test_migration_runner_discovers_current_migrations():
     runner = MigrationRunner()
 
     assert [(item.version, item.name) for item in runner.scripts] == [
         (1, "V1_init"),
         (2, "V2_drop_link_preview"),
+        (3, "V3_unified_delivery_schema"),
     ]
 
 
@@ -422,7 +434,7 @@ async def test_v1_current_baseline_has_expected_core_columns_and_index():
     async with engine.begin() as conn:
         executed = await MigrationRunner().run_all(conn)
 
-        assert executed == [1, 2]
+        assert executed == [1, 2, 3]
 
         sub_columns = {
             str(row[1])

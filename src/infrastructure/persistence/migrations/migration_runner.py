@@ -109,7 +109,8 @@ class MigrationRunner:
             full_module_name = f"{self._package}.{module_name}"
             try:
                 module = importlib.import_module(full_module_name)
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
+                # 迁移模块由目录动态发现，单个模块的任意加载错误均需定位并跳过。
                 logger.error("加载迁移脚本 %s 失败: %s", full_module_name, ex)
                 continue
 
@@ -207,6 +208,33 @@ class MigrationRunner:
             (str(version), description),
         )
 
+    async def _execute_script(self, conn, script: MigrationScript) -> None:
+        """在独立保存点内执行单个迁移并记录版本。
+
+        SQLite 的部分 DDL 经异步驱动执行时不会随外层事务可靠回滚，因此每个
+        迁移必须显式使用 SAVEPOINT，避免失败后留下半套表或字段。
+        """
+        savepoint = f"rsshub_migration_v{script.version}"
+        await conn.exec_driver_sql(f"SAVEPOINT {savepoint}")
+        try:
+            if script.upgrade is None:
+                raise ValueError(f"迁移 V{script.version} 缺少 upgrade 函数")
+            await script.upgrade(conn)
+            await self._record_migration(conn, script.version, script.name)
+        except BaseException:
+            try:
+                await conn.exec_driver_sql(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                await conn.exec_driver_sql(f"RELEASE SAVEPOINT {savepoint}")
+            except Exception as rollback_error:  # noqa: BLE001
+                # 清理失败不能覆盖真正的迁移异常，记录后继续抛出原始异常。
+                logger.error(
+                    "回滚迁移 V%s 的保存点失败: %s",
+                    script.version,
+                    rollback_error,
+                )
+            raise
+        await conn.exec_driver_sql(f"RELEASE SAVEPOINT {savepoint}")
+
     async def run_all(self, conn) -> list[int]:
         """执行所有待迁移的脚本。
 
@@ -227,8 +255,7 @@ class MigrationRunner:
         for script in pending:
             logger.info("执行迁移 V%s: %s", script.version, script.name)
             try:
-                await script.upgrade(conn)
-                await self._record_migration(conn, script.version, script.name)
+                await self._execute_script(conn, script)
                 executed.append(script.version)
                 logger.info("迁移 V%s 执行成功", script.version)
             except Exception:
@@ -257,8 +284,7 @@ class MigrationRunner:
                 break
             logger.info("执行迁移 V%s: %s", script.version, script.name)
             try:
-                await script.upgrade(conn)
-                await self._record_migration(conn, script.version, script.name)
+                await self._execute_script(conn, script)
                 executed.append(script.version)
                 logger.info("迁移 V%s 执行成功", script.version)
             except Exception:
@@ -478,6 +504,24 @@ async def ensure_profile_schema(conn) -> list[str]:
             )
             applied.append("rsshub_sub.handlers_mode")
             logger.info("数据库 schema 自愈: 为 rsshub_sub 添加 handlers_mode 字段")
+        delivery_columns = {
+            "send_card": (
+                "ALTER TABLE rsshub_sub ADD COLUMN send_card BOOLEAN NOT NULL DEFAULT 0"
+            ),
+            "template_id": (
+                "ALTER TABLE rsshub_sub ADD COLUMN template_id VARCHAR(255)"
+            ),
+            "card_send_original_content": (
+                "ALTER TABLE rsshub_sub ADD COLUMN "
+                "card_send_original_content BOOLEAN NOT NULL DEFAULT 0"
+            ),
+        }
+        for column, sql in delivery_columns.items():
+            if column in sub_columns:
+                continue
+            await conn.exec_driver_sql(sql)
+            applied.append(f"rsshub_sub.{column}")
+            logger.info("数据库 schema 自愈: 为 rsshub_sub 添加 %s 字段", column)
 
     return applied
 

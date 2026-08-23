@@ -363,6 +363,11 @@ class DeliveryBatchORM(RSSHubBaseModel, table=True):
         sa_column=Column(JSON),
         description="handler 后文档快照",
     )
+    output_manifest: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+        description="批次配置输出的不可变身份清单",
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="创建时间",

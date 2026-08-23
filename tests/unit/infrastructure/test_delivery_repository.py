@@ -1,0 +1,598 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from astrbot_plugin_rsshub.src.domain.entities.delivery import (
+    DeliveryBatchDraft,
+    DeliveryInboxItemDraft,
+    DeliveryOwner,
+)
+from astrbot_plugin_rsshub.src.domain.entities.push_history import PushHistory
+from astrbot_plugin_rsshub.src.infrastructure.persistence.database import (
+    DatabaseManager,
+)
+from astrbot_plugin_rsshub.src.infrastructure.persistence.delivery_repository_impl import (
+    DeliveryBatchConflictError,
+    DeliveryBatchNotReadyError,
+    DeliveryConsistencyError,
+    DeliveryDeletionBlockedError,
+    DeliveryOwnerNotFoundError,
+    DeliveryRepositoryImpl,
+    DeliverySourceMismatchError,
+)
+from astrbot_plugin_rsshub.src.infrastructure.persistence.models import (
+    BundleFeedORM,
+    BundleORM,
+    FeedORM,
+    PushHistoryORM,
+    SubORM,
+    UserORM,
+)
+from sqlalchemy import func
+from sqlmodel import select
+
+
+async def _create_subscription_owner(database: DatabaseManager) -> DeliveryOwner:
+    async with database.get_session() as session:
+        session.add(UserORM(id="user-1"))
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.flush()
+        subscription = SubORM(user_id="user-1", feed_id=1, send_card=True)
+        session.add(subscription)
+        await session.commit()
+        await session.refresh(subscription)
+    return DeliveryOwner(owner_type="subscription", owner_id=subscription.id)
+
+
+@pytest.mark.asyncio
+async def test_store_inbox_items_is_idempotent_and_keeps_first_snapshot(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "delivery-inbox.db"))
+    owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+
+    first = DeliveryInboxItemDraft(
+        feed_id=1,
+        item_key="entry-1",
+        hash_group=["guid:entry-1"],
+        discovery_key="discovery-1",
+        entry_payload={"title": "first"},
+    )
+    duplicate = first.model_copy(update={"entry_payload": {"title": "changed"}})
+
+    first_result = await repository.store_inbox_items(owner, [first])
+    duplicate_result = await repository.store_inbox_items(owner, [duplicate])
+    inbox = await repository.list_inbox_items(owner)
+
+    assert first_result.inserted_count == 1
+    assert first_result.duplicate_count == 0
+    assert duplicate_result.inserted_count == 0
+    assert duplicate_result.duplicate_count == 1
+    assert len(inbox) == 1
+    assert inbox[0].entry_payload == {"title": "first"}
+    await database.close()
+
+
+async def _create_bundle_owner(database: DatabaseManager):
+    async with database.get_session() as session:
+        session.add(UserORM(id="bundle-user"))
+        session.add_all(
+            [
+                FeedORM(id=10, link="https://example.com/one", title="One"),
+                FeedORM(id=11, link="https://example.com/two", title="Two"),
+            ]
+        )
+        await session.flush()
+        bundle = BundleORM(
+            user_id="bundle-user",
+            name="Bundle",
+            target_sessions=["test:Group:1"],
+            interval=30,
+        )
+        session.add(bundle)
+        await session.flush()
+        member = BundleFeedORM(bundle_id=bundle.id, feed_id=10, position=0)
+        session.add(member)
+        await session.commit()
+        await session.refresh(bundle)
+        await session.refresh(member)
+    return DeliveryOwner(owner_type="bundle", owner_id=bundle.id), member
+
+
+async def _claim_two_output_batch(
+    database: DatabaseManager,
+    repository: DeliveryRepositoryImpl,
+    owner: DeliveryOwner,
+):
+    await repository.store_inbox_items(
+        owner,
+        [
+            DeliveryInboxItemDraft(
+                feed_id=1,
+                item_key="entry-1",
+                discovery_key="discovery-1",
+            )
+        ],
+    )
+    return await repository.claim_batch(
+        owner,
+        DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+        [
+            PushHistory(
+                user_id="user-1",
+                sub_id=owner.owner_id,
+                target_session="test:Group:1",
+                output_kind="card",
+                output_order=0,
+                status="pending",
+            ),
+            PushHistory(
+                user_id="user-1",
+                sub_id=owner.owner_id,
+                target_session="test:Group:1",
+                output_kind="standard",
+                output_order=1,
+                status="waiting",
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_claim_subscription_batch_is_atomic_and_keeps_discovery_boundary(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "claim-subscription.db"))
+    owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    await repository.store_inbox_items(
+        owner,
+        [
+            DeliveryInboxItemDraft(
+                feed_id=1,
+                item_key="entry-1",
+                discovery_key="discovery-1",
+                entry_payload={"title": "one"},
+            ),
+            DeliveryInboxItemDraft(
+                feed_id=1,
+                item_key="entry-2",
+                discovery_key="discovery-1",
+                entry_payload={"title": "two"},
+            ),
+            DeliveryInboxItemDraft(
+                feed_id=1,
+                item_key="entry-3",
+                discovery_key="discovery-2",
+                entry_payload={"title": "three"},
+            ),
+        ],
+    )
+
+    batch = await repository.claim_batch(
+        owner,
+        DeliveryBatchDraft(
+            target_sessions=["test:Group:1"],
+            config_snapshot={"send_card": True},
+        ),
+        [
+            PushHistory(
+                user_id="user-1",
+                sub_id=owner.owner_id,
+                target_session="test:Group:1",
+                output_kind="card",
+                output_order=0,
+                status="pending",
+            )
+        ],
+    )
+    unclaimed = await repository.list_inbox_items(owner, claimed=False)
+
+    assert batch.status == "pending"
+    assert [item.item_key for item in batch.inbox_items] == ["entry-1", "entry-2"]
+    assert len(batch.outputs) == 1
+    assert batch.outputs[0].batch_id == batch.id
+    assert [item.item_key for item in unclaimed] == ["entry-3"]
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_confirm_requires_every_output_and_is_idempotent(tmp_path) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "confirm-batch.db"))
+    owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    batch = await _claim_two_output_batch(database, repository, owner)
+    async with database.get_session() as session:
+        card = await session.get(PushHistoryORM, batch.outputs[0].id)
+        standard = await session.get(PushHistoryORM, batch.outputs[1].id)
+        card.status = "success"
+        standard.status = "failed"
+        await session.commit()
+
+    with pytest.raises(DeliveryBatchNotReadyError) as exc_info:
+        await repository.confirm_batch(batch.id)
+    assert exc_info.value.blocking_statuses == {"failed": 1}
+    assert len(await repository.list_inbox_items(owner, claimed=True)) == 1
+
+    async with database.get_session() as session:
+        standard = await session.get(PushHistoryORM, batch.outputs[1].id)
+        standard.status = "skipped"
+        await session.commit()
+
+    confirmed = await repository.confirm_batch(batch.id)
+    repeated = await repository.confirm_batch(batch.id)
+
+    assert confirmed.status == "confirmed"
+    assert confirmed.confirmed_at is not None
+    assert repeated.status == "confirmed"
+    assert repeated.confirmed_at == confirmed.confirmed_at
+    assert await repository.list_inbox_items(owner) == []
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_discard_only_consumes_claimed_input_and_incomplete_outputs(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "discard-batch.db"))
+    owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    batch = await _claim_two_output_batch(database, repository, owner)
+    async with database.get_session() as session:
+        card = await session.get(PushHistoryORM, batch.outputs[0].id)
+        standard = await session.get(PushHistoryORM, batch.outputs[1].id)
+        card.status = "success"
+        standard.status = "failed"
+        await session.commit()
+    await repository.store_inbox_items(
+        owner,
+        [
+            DeliveryInboxItemDraft(
+                feed_id=1,
+                item_key="entry-backlog",
+                discovery_key="discovery-2",
+            )
+        ],
+    )
+
+    discarded = await repository.discard_batch(batch.id, reason="用户明确丢弃")
+    repeated = await repository.discard_batch(batch.id, reason="重复请求")
+    remaining = await repository.list_inbox_items(owner)
+
+    assert discarded.status == "discarded"
+    assert [output.status for output in discarded.outputs] == ["success", "discarded"]
+    assert discarded.outputs[1].fail_reason == "用户明确丢弃"
+    assert [output.status for output in repeated.outputs] == ["success", "discarded"]
+    assert [item.item_key for item in remaining] == ["entry-backlog"]
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_claim_creates_one_pending_batch_per_owner(tmp_path) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "concurrent-claim.db"))
+    owner = await _create_subscription_owner(database)
+    first_repository = DeliveryRepositoryImpl(database)
+    second_repository = DeliveryRepositoryImpl(database)
+    await first_repository.store_inbox_items(
+        owner,
+        [DeliveryInboxItemDraft(feed_id=1, item_key="entry-1", discovery_key="d1")],
+    )
+
+    def output() -> PushHistory:
+        return PushHistory(
+            user_id="user-1",
+            sub_id=owner.owner_id,
+            target_session="test:Group:1",
+            output_kind="card",
+            status="pending",
+        )
+
+    results = await asyncio.gather(
+        first_repository.claim_batch(
+            owner,
+            DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+            [output()],
+        ),
+        second_repository.claim_batch(
+            owner,
+            DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+            [output()],
+        ),
+        return_exceptions=True,
+    )
+    pending = await first_repository.get_pending_batch(owner)
+
+    assert sum(not isinstance(result, BaseException) for result in results) == 1
+    errors = [result for result in results if isinstance(result, BaseException)]
+    assert len(errors) == 1
+    assert isinstance(errors[0], DeliveryBatchConflictError)
+    assert pending is not None
+    assert len(pending.inbox_items) == 1
+    assert len(pending.outputs) == 1
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_claim_failure_rolls_back_batch_inbox_and_histories(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "claim-rollback.db"))
+    owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    await repository.store_inbox_items(
+        owner,
+        [DeliveryInboxItemDraft(feed_id=1, item_key="entry-1", discovery_key="d1")],
+    )
+
+    async def fail_after_claim(_session, _batch) -> None:
+        raise RuntimeError("injected transaction failure")
+
+    monkeypatch.setattr(repository, "_after_claim", fail_after_claim)
+    with pytest.raises(RuntimeError, match="injected transaction failure"):
+        await repository.claim_batch(
+            owner,
+            DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+            [
+                PushHistory(
+                    user_id="user-1",
+                    sub_id=owner.owner_id,
+                    target_session="test:Group:1",
+                    output_kind="card",
+                    status="pending",
+                )
+            ],
+        )
+
+    assert await repository.get_pending_batch(owner) is None
+    inbox = await repository.list_inbox_items(owner)
+    assert len(inbox) == 1
+    assert inbox[0].batch_id is None
+    async with database.get_session() as session:
+        history_count = (
+            await session.execute(select(func.count()).select_from(PushHistoryORM))
+        ).scalar_one()
+    assert history_count == 0
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_and_bundle_member_deletion_report_unconsumed_inbox(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "delivery-protection.db"))
+    owner, member = await _create_bundle_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    await repository.store_inbox_items(
+        owner,
+        [
+            DeliveryInboxItemDraft(
+                feed_id=member.feed_id,
+                bundle_feed_id=member.id,
+                member_position=member.position,
+                item_key="entry-1",
+                discovery_key="d1",
+            )
+        ],
+    )
+
+    with pytest.raises(DeliveryDeletionBlockedError) as owner_error:
+        await repository.ensure_owner_deletable(owner)
+    with pytest.raises(DeliveryDeletionBlockedError) as member_error:
+        await repository.ensure_bundle_member_removable(member.id)
+
+    assert owner_error.value.blocker_counts == {"unclaimed_inbox": 1}
+    assert member_error.value.blocker_counts == {"unclaimed_inbox": 1}
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_exposes_partial_output_history(tmp_path) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "reconcile-partial-history.db"))
+    owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    await repository.store_inbox_items(
+        owner,
+        [DeliveryInboxItemDraft(feed_id=1, item_key="entry-1", discovery_key="d1")],
+    )
+    batch = await repository.claim_batch(
+        owner,
+        DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+        [
+            PushHistory(
+                user_id="user-1",
+                sub_id=owner.owner_id,
+                target_session="test:Group:1",
+                output_kind=output_kind,
+                output_order=output_order,
+                status="pending",
+            )
+            for output_kind, output_order in (("card", 0), ("standard", 1))
+        ],
+    )
+    async with database.get_session() as session:
+        remaining = await session.get(PushHistoryORM, batch.outputs[0].id)
+        missing = await session.get(PushHistoryORM, batch.outputs[1].id)
+        remaining.status = "success"
+        await session.delete(missing)
+        await session.commit()
+
+    with pytest.raises(DeliveryConsistencyError, match="输出清单"):
+        await repository.confirm_batch(batch.id)
+    with pytest.raises(DeliveryConsistencyError, match="输出清单"):
+        await repository.reconcile_batch(batch.id)
+    still_pending = await repository.get_batch(batch.id)
+    assert still_pending is not None
+    assert still_pending.status == "pending"
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_unblocked_owner_and_member_deletion_happen_in_guarded_transaction(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "guarded-delete.db"))
+    subscription_owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    resolved_batch = await _claim_two_output_batch(
+        database,
+        repository,
+        subscription_owner,
+    )
+    async with database.get_session() as session:
+        for output in resolved_batch.outputs:
+            history = await session.get(PushHistoryORM, output.id)
+            history.status = "success"
+        await session.commit()
+    await repository.confirm_batch(resolved_batch.id)
+
+    assert await repository.delete_owner(subscription_owner) is True
+    async with database.get_session() as session:
+        assert await session.get(SubORM, subscription_owner.owner_id) is None
+        retained_history = await session.get(
+            PushHistoryORM,
+            resolved_batch.outputs[0].id,
+        )
+        assert retained_history is not None
+        assert retained_history.sub_id is None
+
+    bundle_owner, member = await _create_bundle_owner(database)
+    async with database.get_session() as session:
+        second_member = BundleFeedORM(
+            bundle_id=bundle_owner.owner_id,
+            feed_id=11,
+            position=1,
+        )
+        session.add(second_member)
+        await session.commit()
+        await session.refresh(second_member)
+    assert await repository.remove_bundle_member(member.id) is True
+    async with database.get_session() as session:
+        assert await session.get(BundleFeedORM, member.id) is None
+        compacted = await session.get(BundleFeedORM, second_member.id)
+        assert compacted is not None
+        assert compacted.position == 0
+        assert await session.get(BundleORM, bundle_owner.owner_id) is not None
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_bundle_inbox_rejects_stale_member_position_atomically(tmp_path) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "bundle-source-validation.db"))
+    owner, member = await _create_bundle_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+
+    with pytest.raises(DeliverySourceMismatchError):
+        await repository.store_inbox_items(
+            owner,
+            [
+                DeliveryInboxItemDraft(
+                    feed_id=member.feed_id,
+                    bundle_feed_id=member.id,
+                    member_position=member.position + 1,
+                    item_key="entry-1",
+                    discovery_key="d1",
+                )
+            ],
+        )
+
+    assert await repository.list_inbox_items(owner) == []
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_bundle_claim_requires_explicit_selection(tmp_path) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "bundle-claim-selection.db"))
+    owner, member = await _create_bundle_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    await repository.store_inbox_items(
+        owner,
+        [
+            DeliveryInboxItemDraft(
+                feed_id=member.feed_id,
+                bundle_feed_id=member.id,
+                member_position=member.position,
+                item_key="entry-1",
+                discovery_key="d1",
+            )
+        ],
+    )
+    output = PushHistory(
+        user_id="bundle-user",
+        bundle_id=owner.owner_id,
+        target_session="test:Group:1",
+        output_kind="standard",
+        status="pending",
+    )
+
+    with pytest.raises(DeliverySourceMismatchError, match="显式指定"):
+        await repository.claim_batch(
+            owner,
+            DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+            [output],
+        )
+    inbox = await repository.list_inbox_items(owner)
+    batch = await repository.claim_batch(
+        owner,
+        DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+        [output],
+        item_ids=[inbox[0].id],
+    )
+
+    assert [item.id for item in batch.inbox_items] == [inbox[0].id]
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_confirm_rejects_cross_owner_persisted_members(tmp_path) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "cross-owner-batch.db"))
+    owner = await _create_subscription_owner(database)
+    repository = DeliveryRepositoryImpl(database)
+    batch = await _claim_two_output_batch(database, repository, owner)
+    async with database.get_session() as session:
+        other = SubORM(user_id="user-1", feed_id=1, send_card=True)
+        session.add(other)
+        await session.flush()
+        history = await session.get(PushHistoryORM, batch.outputs[0].id)
+        history.sub_id = other.id
+        history.status = "success"
+        second = await session.get(PushHistoryORM, batch.outputs[1].id)
+        second.status = "skipped"
+        await session.commit()
+
+    with pytest.raises(DeliveryConsistencyError, match="归属"):
+        await repository.confirm_batch(batch.id)
+    still_pending = await repository.get_batch(batch.id)
+    assert still_pending is not None
+    assert still_pending.status == "pending"
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_queries_do_not_treat_unknown_owner_as_empty(tmp_path) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "unknown-owner.db"))
+    repository = DeliveryRepositoryImpl(database)
+    unknown = DeliveryOwner(owner_type="subscription", owner_id=999)
+
+    with pytest.raises(DeliveryOwnerNotFoundError):
+        await repository.store_inbox_items(unknown, [])
+    with pytest.raises(DeliveryOwnerNotFoundError):
+        await repository.list_inbox_items(unknown)
+    with pytest.raises(DeliveryOwnerNotFoundError):
+        await repository.get_pending_batch(unknown)
+    await database.close()

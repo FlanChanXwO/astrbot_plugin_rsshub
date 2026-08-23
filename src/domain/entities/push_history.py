@@ -43,7 +43,7 @@ def normalize_fail_reason_for_status(
     max_length: int = MAX_FAIL_REASON_LENGTH,
 ) -> str | None:
     """Normalize stored/displayed fail reason according to push status."""
-    if status in {"failed", "stopped", "retrying", "skipped"}:
+    if status in {"failed", "stopped", "retrying", "skipped", "discarded"}:
         return normalize_display_fail_reason(reason, max_length=max_length)
     return None
 

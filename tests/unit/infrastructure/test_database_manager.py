@@ -425,6 +425,7 @@ async def test_migration_runner_discovers_current_migrations():
         (1, "V1_init"),
         (2, "V2_drop_link_preview"),
         (3, "V3_unified_delivery_schema"),
+        (4, "V4_delivery_output_manifest"),
     ]
 
 
@@ -434,7 +435,7 @@ async def test_v1_current_baseline_has_expected_core_columns_and_index():
     async with engine.begin() as conn:
         executed = await MigrationRunner().run_all(conn)
 
-        assert executed == [1, 2, 3]
+        assert executed == [1, 2, 3, 4]
 
         sub_columns = {
             str(row[1])
@@ -454,6 +455,12 @@ async def test_v1_current_baseline_has_expected_core_columns_and_index():
                 await conn.exec_driver_sql("PRAGMA table_info(rsshub_push_history)")
             ).fetchall()
         }
+        batch_columns = {
+            str(row[1])
+            for row in (
+                await conn.exec_driver_sql("PRAGMA table_info(rsshub_delivery_batch)")
+            ).fetchall()
+        }
         indexes = {
             str(row[0])
             for row in (
@@ -470,6 +477,7 @@ async def test_v1_current_baseline_has_expected_core_columns_and_index():
         assert {"source_type", "source_key", "raw_xml", "handler_trace"}.issubset(
             history_columns
         )
+        assert "output_manifest" in batch_columns
         assert "idx_rsshub_push_history_scope_guid" in indexes
 
     await engine.dispose()

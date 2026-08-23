@@ -16,6 +16,14 @@ from .content_types import (
     TextContent,
     VideoContent,
 )
+from .delivery import (
+    DeliveryBatch,
+    DeliveryBatchDraft,
+    DeliveryInboxItem,
+    DeliveryInboxItemDraft,
+    DeliveryOutputIdentity,
+    DeliveryOwner,
+)
 from .feed import Feed
 from .push_history import PushHistory
 from .subscription import Subscription
@@ -27,6 +35,12 @@ __all__ = [
     "CardTemplateMetadata",
     "ContentNode",
     "ContentNodeType",
+    "DeliveryBatch",
+    "DeliveryBatchDraft",
+    "DeliveryInboxItem",
+    "DeliveryInboxItemDraft",
+    "DeliveryOutputIdentity",
+    "DeliveryOwner",
     "Feed",
     "FileContent",
     "GeneratedImageContent",

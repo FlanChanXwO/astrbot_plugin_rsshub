@@ -750,8 +750,14 @@ async def test_v3_upgrades_v2_database_without_losing_existing_rows() -> None:
                 "source_context FROM rsshub_push_history WHERE id=1"
             )
         ).one()
+        batch_columns = {
+            str(row[1])
+            for row in (
+                await conn.exec_driver_sql("PRAGMA table_info(rsshub_delivery_batch)")
+            ).fetchall()
+        }
 
-    assert executed == [3]
+    assert executed == [3, 4]
     assert {
         "rsshub_bundle",
         "rsshub_bundle_feed",
@@ -766,6 +772,7 @@ async def test_v3_upgrades_v2_database_without_losing_existing_rows() -> None:
     }.issubset(indexes)
     assert sub_row == ("Existing subscription", 0, None, 0)
     assert history_row == ("Existing history", None, None, "standard", 0, None)
+    assert "output_manifest" in batch_columns
     await engine.dispose()
 
 
@@ -865,7 +872,7 @@ async def test_database_startup_is_idempotent_after_v3(tmp_path) -> None:
             ).fetchall()
         }
 
-    assert migration_versions == ["1", "2", "3"]
+    assert migration_versions == ["1", "2", "3", "4"]
     assert new_table_counts == {
         "rsshub_bundle": 1,
         "rsshub_bundle_feed": 1,

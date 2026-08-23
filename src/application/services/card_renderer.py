@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -66,24 +67,37 @@ class CardRenderer:
 
         html_ref = references.get("html")
         if isinstance(html_ref, str):
-            html = self._artifact_store.read_html(html_ref)
+            html = await asyncio.to_thread(self._artifact_store.read_html, html_ref)
         else:
-            html = self._template_service.render(snapshot, context)
-            html_ref = self._artifact_store.write_html(history.id, html)
+            html = await asyncio.to_thread(
+                self._template_service.render,
+                snapshot,
+                context,
+            )
+            html_ref = await asyncio.to_thread(
+                self._artifact_store.write_html,
+                history.id,
+                html,
+            )
             references["html"] = html_ref
             await self._checkpoint(history, source_context, references)
 
         png_ref = references.get("png")
         if not isinstance(png_ref, str):
             image = await self._image_renderer.render(html)
-            png_ref = self._artifact_store.write_png(history.id, image)
+            png_ref = await asyncio.to_thread(
+                self._artifact_store.write_png,
+                history.id,
+                image,
+            )
             references["png"] = png_ref
             await self._checkpoint(history, source_context, references)
 
+        png_path = await asyncio.to_thread(self._artifact_store.path, png_ref)
         return CardRenderResult(
             html_ref=html_ref,
             png_ref=png_ref,
-            png_path=self._artifact_store.path(png_ref),
+            png_path=png_path,
         )
 
     async def _checkpoint(

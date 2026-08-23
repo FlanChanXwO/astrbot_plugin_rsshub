@@ -121,6 +121,36 @@ def test_snapshot_supports_macros_includes_filters_and_packaged_assets(
     assert html.endswith('"><small>astrbot_plugin_rsshub_card_test</small>')
 
 
+@pytest.mark.parametrize("directory_name", ["assets", "partials"])
+def test_snapshot_rejects_symlinked_package_directory_root(
+    tmp_path: Path,
+    directory_name: str,
+) -> None:
+    package_root = tmp_path / "package"
+    package_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("outside", encoding="utf-8")
+    (package_root / directory_name).symlink_to(outside, target_is_directory=True)
+    package = _package(package_root, "ok")
+
+    with pytest.raises(CardTemplateRenderError, match="符号链接"):
+        CardTemplateService().snapshot(package)
+
+
+def test_snapshot_rejects_dangling_package_directory_symlink(tmp_path: Path) -> None:
+    package_root = tmp_path / "package"
+    package_root.mkdir()
+    (package_root / "assets").symlink_to(
+        tmp_path / "missing",
+        target_is_directory=True,
+    )
+    package = _package(package_root, "ok")
+
+    with pytest.raises(CardTemplateRenderError, match="符号链接"):
+        CardTemplateService().snapshot(package)
+
+
 def test_card_template_service_rejects_host_objects(tmp_path: Path) -> None:
     package = _package(tmp_path, "{{ source.__class__ }}")
     service = CardTemplateService()
@@ -137,6 +167,52 @@ def test_card_context_rejects_mixed_feed_and_bundle_shapes() -> None:
                 bundle={"id": 1, "name": "Daily"},
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("entries", "rendered_at"),
+    [
+        (
+            [{"item_key": "entry-1", "feed_id": 1, "published": "yesterday"}],
+            "2026-08-24T00:00:00+00:00",
+        ),
+        ([], "not-an-iso-time"),
+        ([], "2026-08-24T00:00:00"),
+        (
+            [{"item_key": "entry-1", "feed_id": 1, "published": 1787531400}],
+            "2026-08-24T00:00:00+00:00",
+        ),
+    ],
+)
+def test_card_context_rejects_invalid_or_timezone_naive_iso_times(
+    entries: list[dict[str, object]],
+    rendered_at: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        CardRenderContext.model_validate(
+            _context(entries=entries, meta={"batch_id": 1, "rendered_at": rendered_at})
+        )
+
+
+def test_card_context_serializes_optional_iso_times_for_templates() -> None:
+    context = CardRenderContext.model_validate(
+        _context(
+            entries=[
+                {
+                    "item_key": "entry-1",
+                    "feed_id": 1,
+                    "published": "2026-08-24T08:30:00+08:00",
+                    "updated": None,
+                }
+            ]
+        )
+    )
+
+    serialized = context.model_dump(mode="json")
+
+    assert serialized["entries"][0]["published"] == "2026-08-24T08:30:00+08:00"
+    assert serialized["entries"][0]["updated"] is None
+    assert serialized["meta"]["rendered_at"] == "2026-08-24T00:00:00Z"
 
 
 @pytest.mark.asyncio

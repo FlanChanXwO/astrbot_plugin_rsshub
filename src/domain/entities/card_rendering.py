@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    model_validator,
+)
+
+
+def _require_iso_string(value: Any) -> Any:
+    if value is not None and not isinstance(value, str):
+        raise ValueError("时间必须使用 ISO-8601 字符串")
+    return value
+
+
+_IsoDatetime = Annotated[AwareDatetime, BeforeValidator(_require_iso_string)]
 
 
 class _CardContextModel(BaseModel):
@@ -47,8 +63,8 @@ class CardEntryContext(_CardContextModel):
     title: str = ""
     link: str = ""
     author: str = ""
-    published: str | None = None
-    updated: str | None = None
+    published: _IsoDatetime | None = None
+    updated: _IsoDatetime | None = None
     summary: str = ""
     content_html: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -66,7 +82,7 @@ class CardRenderMeta(_CardContextModel):
     """一次渲染的不可变批次元信息。"""
 
     batch_id: int = Field(gt=0)
-    rendered_at: str = Field(min_length=1)
+    rendered_at: _IsoDatetime
 
 
 class CardRenderContext(_CardContextModel):

@@ -76,18 +76,16 @@ class CardTemplateService:
             )
         }
         partials_dir = package.root / "partials"
-        if partials_dir.is_dir():
-            for path in self._package_files(partials_dir):
-                templates[path.relative_to(package.root).as_posix()] = path.read_text(
-                    encoding="utf-8"
-                )
+        for path in self._package_files(partials_dir):
+            templates[path.relative_to(package.root).as_posix()] = path.read_text(
+                encoding="utf-8"
+            )
         assets: dict[str, str] = {}
         assets_dir = package.root / "assets"
-        if assets_dir.is_dir():
-            for path in self._package_files(assets_dir):
-                assets[path.relative_to(assets_dir).as_posix()] = base64.b64encode(
-                    path.read_bytes()
-                ).decode("ascii")
+        for path in self._package_files(assets_dir):
+            assets[path.relative_to(assets_dir).as_posix()] = base64.b64encode(
+                path.read_bytes()
+            ).decode("ascii")
         return CardTemplateSnapshot(
             metadata=package.metadata,
             templates=templates,
@@ -96,6 +94,10 @@ class CardTemplateService:
 
     @staticmethod
     def _package_files(root: Path) -> list[Path]:
+        if root.is_symlink():
+            raise CardTemplateRenderError(f"模板包目录不允许符号链接: {root.name!r}")
+        if root.exists() and not root.is_dir():
+            raise CardTemplateRenderError(f"模板包路径必须是目录: {root.name!r}")
         files: list[Path] = []
         for path in root.rglob("*"):
             if path.is_symlink():

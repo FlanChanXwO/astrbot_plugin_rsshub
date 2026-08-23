@@ -3,29 +3,18 @@ from __future__ import annotations
 import io
 import socket
 import stat
+import threading
 import zipfile
 from pathlib import Path
 
-from aiohttp import web
 import pytest
-
+from aiohttp import web
 from astrbot_plugin_rsshub.src.application.services.card_template_service import (
     CardTemplateDownloadService,
     CardTemplateInUseError,
-    InsecureCardTemplateDownloadError,
     CardTemplateManagementService,
+    InsecureCardTemplateDownloadError,
     UnsupportedCardTemplateUrlError,
-)
-from astrbot_plugin_rsshub.src.infrastructure.templates import (
-    AiohttpCardTemplateArchiveDownloader,
-    CardTemplateHttpStatusError,
-    CardTemplateNetworkError,
-    DatabaseCardTemplateReferenceLookup,
-    CardTemplatePackageError,
-    CardTemplatePackageRepository,
-)
-from astrbot_plugin_rsshub.src.infrastructure.templates import (
-    repository as repository_module,
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.database import (
     DatabaseManager,
@@ -35,6 +24,17 @@ from astrbot_plugin_rsshub.src.infrastructure.persistence.models import (
     FeedORM,
     SubORM,
     UserORM,
+)
+from astrbot_plugin_rsshub.src.infrastructure.templates import (
+    AiohttpCardTemplateArchiveDownloader,
+    CardTemplateHttpStatusError,
+    CardTemplateNetworkError,
+    CardTemplatePackageError,
+    CardTemplatePackageRepository,
+    DatabaseCardTemplateReferenceLookup,
+)
+from astrbot_plugin_rsshub.src.infrastructure.templates import (
+    repository as repository_module,
 )
 
 
@@ -260,6 +260,163 @@ def test_successful_overwrite_replaces_same_id_package(tmp_path) -> None:
     assert loaded is not None
     assert loaded.metadata.version == "2.0.0"
     assert loaded.root.joinpath("template.html").read_text() == "new"
+
+
+def test_concurrent_installers_share_one_atomic_replacement_boundary(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    storage = tmp_path / "card_templates"
+    first_repository = CardTemplatePackageRepository(storage)
+    second_repository = CardTemplatePackageRepository(storage)
+    first_repository.install_archive(
+        _archive_bytes(
+            {
+                "metadata.yaml": _metadata_yaml(version="1.0.0"),
+                "template.html": "initial",
+            }
+        )
+    )
+    template_id = "astrbot_plugin_rsshub_card_example"
+    first_moved_previous = threading.Event()
+    second_installed = threading.Event()
+    real_replace = repository_module.os.replace
+
+    def coordinated_replace(source, destination) -> None:
+        source_path = Path(source)
+        destination_path = Path(destination)
+        thread_name = threading.current_thread().name
+        if (
+            thread_name == "installer-a"
+            and source_path.name == template_id
+            and destination_path.name.startswith(f".{template_id}.backup-")
+        ):
+            real_replace(source, destination)
+            first_moved_previous.set()
+            # 仅防止错误实现永久挂住测试；生产互斥获取没有固定超时。
+            second_installed.wait(timeout=1)
+            return
+        real_replace(source, destination)
+        if (
+            thread_name == "installer-b"
+            and source_path.name == "package"
+            and destination_path.name == template_id
+        ):
+            second_installed.set()
+
+    monkeypatch.setattr(repository_module.os, "replace", coordinated_replace)
+    outcomes: list[Exception | str] = []
+
+    def install(repository, version: str) -> None:
+        try:
+            repository.install_archive(
+                _archive_bytes(
+                    {
+                        "metadata.yaml": _metadata_yaml(version=version),
+                        "template.html": version,
+                    }
+                )
+            )
+            outcomes.append(version)
+        except CardTemplatePackageError as exc:
+            outcomes.append(exc)
+
+    first = threading.Thread(
+        target=install,
+        args=(first_repository, "2.0.0"),
+        name="installer-a",
+    )
+    first.start()
+    assert first_moved_previous.wait(timeout=3)
+    second = threading.Thread(
+        target=install,
+        args=(second_repository, "3.0.0"),
+        name="installer-b",
+    )
+    second.start()
+    first.join(timeout=3)
+    second.join(timeout=3)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert all(isinstance(outcome, str) for outcome in outcomes), outcomes
+    assert sorted(outcomes) == ["2.0.0", "3.0.0"]
+    assert not list(storage.glob(f".{template_id}.backup-*"))
+    installed = first_repository.get(template_id)
+    assert installed is not None
+    assert installed.metadata.version in {"2.0.0", "3.0.0"}
+
+
+def test_package_reader_never_observes_atomic_replacement_gap(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    storage = tmp_path / "card_templates"
+    repository = CardTemplatePackageRepository(storage)
+    repository.install_archive(
+        _archive_bytes(
+            {
+                "metadata.yaml": _metadata_yaml(version="1.0.0"),
+                "template.html": "initial",
+            }
+        )
+    )
+    template_id = "astrbot_plugin_rsshub_card_example"
+    previous_moved = threading.Event()
+    allow_install_to_finish = threading.Event()
+    reader_finished = threading.Event()
+    real_replace = repository_module.os.replace
+
+    def pause_after_previous_is_moved(source, destination) -> None:
+        source_path = Path(source)
+        destination_path = Path(destination)
+        real_replace(source, destination)
+        if source_path.name == template_id and destination_path.name.startswith(
+            f".{template_id}.backup-"
+        ):
+            previous_moved.set()
+            # 仅用于故障注入失败时避免测试永久挂起；生产互斥不设超时。
+            allow_install_to_finish.wait(timeout=3)
+
+    monkeypatch.setattr(repository_module.os, "replace", pause_after_previous_is_moved)
+    install_result: list[CardTemplatePackageError | str] = []
+    read_result: list[object] = []
+
+    def install() -> None:
+        try:
+            repository.install_archive(
+                _archive_bytes(
+                    {
+                        "metadata.yaml": _metadata_yaml(version="2.0.0"),
+                        "template.html": "updated",
+                    }
+                )
+            )
+            install_result.append("ok")
+        except CardTemplatePackageError as exc:
+            install_result.append(exc)
+
+    def read() -> None:
+        read_result.append(repository.get(template_id))
+        reader_finished.set()
+
+    installer = threading.Thread(target=install)
+    installer.start()
+    assert previous_moved.wait(timeout=3)
+    reader = threading.Thread(target=read)
+    reader.start()
+    # reader 若受同一边界保护，在安装切换完成前不能返回瞬时 None。
+    returned_during_gap = reader_finished.wait(timeout=0.1)
+    allow_install_to_finish.set()
+    installer.join(timeout=3)
+    reader.join(timeout=3)
+
+    assert not returned_during_gap
+    assert install_result == ["ok"]
+    assert len(read_result) == 1
+    package = read_result[0]
+    assert package is not None
+    assert package.metadata.version == "2.0.0"
 
 
 def test_catalog_lists_builtin_and_installed_packages(tmp_path) -> None:

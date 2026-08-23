@@ -53,7 +53,7 @@ class CardArtifactStore:
             raise CardArtifactError(f"无效的卡片产物引用: {reference!r}")
         path = self._storage_dir.joinpath(*relative.parts)
         try:
-            storage_root = self._storage_dir.resolve()
+            storage_root = self._resolved_storage_root()
             resolved = path.resolve(strict=True)
             resolved.relative_to(storage_root)
         except (OSError, ValueError) as exc:
@@ -72,8 +72,7 @@ class CardArtifactStore:
 
     def _atomic_write(self, reference: str, data: bytes) -> None:
         destination = self._storage_dir.joinpath(*PurePosixPath(reference).parts)
-        self._storage_dir.mkdir(parents=True, exist_ok=True)
-        storage_root = self._storage_dir.resolve()
+        storage_root = self._resolved_storage_root(create=True)
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             destination.parent.resolve().relative_to(storage_root)
@@ -97,3 +96,17 @@ class CardArtifactStore:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
             raise CardArtifactError(f"无法保存卡片产物 {reference!r}: {exc}") from exc
+
+    def _resolved_storage_root(self, *, create: bool = False) -> Path:
+        if self._storage_dir.is_symlink():
+            raise CardArtifactError(
+                f"卡片产物根目录不允许符号链接: {self._storage_dir}"
+            )
+        try:
+            if create:
+                self._storage_dir.mkdir(parents=True, exist_ok=True)
+            return self._storage_dir.resolve(strict=True)
+        except OSError as exc:
+            raise CardArtifactError(
+                f"无法访问卡片产物根目录 {self._storage_dir}: {exc}"
+            ) from exc

@@ -1,5 +1,7 @@
 """卡片 HTML/PNG 分阶段持久化测试。"""
 
+import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -37,6 +39,17 @@ class FailingOnceImageRenderer:
         if self.should_fail:
             raise RuntimeError("t2i offline")
         return b"png-result"
+
+
+class EventBlockingTemplateService(CardTemplateService):
+    def __init__(self, release: threading.Event) -> None:
+        self.release = release
+        self.event_loop_progressed_during_render = False
+
+    def render(self, snapshot, context) -> str:
+        # 仅防止回归实现永久挂住测试；生产渲染链路没有固定超时。
+        self.event_loop_progressed_during_render = self.release.wait(timeout=0.2)
+        return "<h1>rendered</h1>"
 
 
 def _snapshot(tmp_path: Path):
@@ -113,6 +126,34 @@ async def test_card_renderer_reuses_completed_artifact_stages_after_failure(
     assert len(image_renderer.calls) == 2
 
 
+@pytest.mark.asyncio
+async def test_card_renderer_keeps_event_loop_responsive_during_template_render(
+    tmp_path: Path,
+) -> None:
+    release = threading.Event()
+    template_service = EventBlockingTemplateService(release)
+    image_renderer = FailingOnceImageRenderer()
+    image_renderer.should_fail = False
+    renderer = CardRenderer(
+        template_service=template_service,
+        artifact_store=CardArtifactStore(tmp_path / "artifacts"),
+        image_renderer=image_renderer,
+        history_repository=RecordingHistoryRepository(),
+    )
+    history = PushHistory(id=43, user_id="user", output_kind="card")
+
+    async def advance_event_loop() -> None:
+        await asyncio.sleep(0)
+        release.set()
+
+    heartbeat = asyncio.create_task(advance_event_loop())
+    result = await renderer.render(history, _snapshot(tmp_path / "package"), {})
+    await heartbeat
+
+    assert template_service.event_loop_progressed_during_render
+    assert result.png_path.read_bytes() == b"png-result"
+
+
 def test_card_artifact_store_rejects_symlink_escape(tmp_path: Path) -> None:
     storage = tmp_path / "artifacts"
     outside = tmp_path / "outside"
@@ -124,3 +165,15 @@ def test_card_artifact_store_rejects_symlink_escape(tmp_path: Path) -> None:
         CardArtifactStore(storage).write_html(42, "secret")
 
     assert not (outside / "card.html").exists()
+
+
+def test_card_artifact_store_rejects_symlinked_storage_root(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    storage = tmp_path / "artifacts"
+    storage.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(CardArtifactError, match="产物根目录"):
+        CardArtifactStore(storage).write_html(42, "secret")
+
+    assert not (outside / "42" / "card.html").exists()

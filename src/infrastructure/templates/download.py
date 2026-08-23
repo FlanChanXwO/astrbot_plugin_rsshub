@@ -50,16 +50,18 @@ class AiohttpCardTemplateArchiveDownloader:
     async def download(self, url: str) -> bytes:
         timeout = aiohttp.ClientTimeout(total=None)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
                 # 不自动跟随重定向，避免已确认的 HTTPS URL 静默降级到 HTTP。
-                async with session.get(url, allow_redirects=False) as response:
-                    if response.status != 200:
-                        raise CardTemplateHttpStatusError(
-                            url,
-                            response.status,
-                            response.reason or "",
-                        )
-                    return await response.read()
+                session.get(url, allow_redirects=False) as response,
+            ):
+                if response.status != 200:
+                    raise CardTemplateHttpStatusError(
+                        url,
+                        response.status,
+                        response.reason or "",
+                    )
+                return await response.read()
         except CardTemplateDownloadError:
             raise
         except asyncio.CancelledError:

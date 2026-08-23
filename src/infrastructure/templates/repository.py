@@ -6,6 +6,8 @@ import os
 import shutil
 import stat
 import tempfile
+import threading
+import weakref
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -19,6 +21,18 @@ from ...domain.entities.card_template import (
     is_valid_card_template_id,
 )
 from ..utils.paths import get_plugin_data_dir
+
+_STORAGE_LOCKS_GUARD = threading.Lock()
+_STORAGE_LOCKS: weakref.WeakValueDictionary[str, threading.RLock] = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _shared_storage_lock(storage_dir: Path) -> threading.RLock:
+    """同一进程内访问同一模板目录的仓储实例必须共享切换边界。"""
+    key = os.path.normcase(os.path.abspath(storage_dir))
+    with _STORAGE_LOCKS_GUARD:
+        return _STORAGE_LOCKS.setdefault(key, threading.RLock())
 
 
 class CardTemplatePackageError(ValueError):
@@ -45,9 +59,14 @@ class CardTemplatePackageRepository:
     ) -> None:
         self._storage_dir = Path(storage_dir or get_plugin_data_dir("card_templates"))
         self._builtin_package_dirs = tuple(Path(path) for path in builtin_package_dirs)
+        self._storage_lock = _shared_storage_lock(self._storage_dir)
 
     def get(self, template_id: str) -> CardTemplatePackage | None:
         """按模板 ID 返回已安装模板。"""
+        with self._storage_lock:
+            return self._get(template_id)
+
+    def _get(self, template_id: str) -> CardTemplatePackage | None:
         self._validate_template_id(template_id)
         package_dir = self._storage_dir / template_id
         self._reject_installed_symlink(package_dir)
@@ -61,6 +80,10 @@ class CardTemplatePackageRepository:
 
     def list_packages(self) -> list[CardTemplatePackage]:
         """列出内置与本地模板；同 ID 的本地安装包优先。"""
+        with self._storage_lock:
+            return self._list_packages()
+
+    def _list_packages(self) -> list[CardTemplatePackage]:
         packages = {
             package.metadata.id: package
             for package in (
@@ -80,6 +103,10 @@ class CardTemplatePackageRepository:
 
     def delete(self, template_id: str) -> bool:
         """删除本地安装包；内置包由代码分发，不在此删除。"""
+        with self._storage_lock:
+            return self._delete(template_id)
+
+    def _delete(self, template_id: str) -> bool:
         self._validate_template_id(template_id)
         package_dir = self._storage_dir / template_id
         self._reject_installed_symlink(package_dir)
@@ -94,6 +121,10 @@ class CardTemplatePackageRepository:
 
     def install_archive(self, archive_data: bytes) -> CardTemplatePackage:
         """校验 ZIP 并安装到插件数据目录。"""
+        with self._storage_lock:
+            return self._install_archive(archive_data)
+
+    def _install_archive(self, archive_data: bytes) -> CardTemplatePackage:
         self._storage_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
             prefix=".card-template-", dir=self._storage_dir.parent

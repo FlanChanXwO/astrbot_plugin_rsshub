@@ -24,6 +24,7 @@ from .delivery import (
     DeliveryInboxItemDraft,
     DeliveryOutputIdentity,
     DeliveryOwner,
+    SubscriptionInboxDiscovery,
 )
 from .feed import Feed
 from .push_history import PushHistory
@@ -53,6 +54,7 @@ __all__ = [
     "ParsedResult",
     "PushHistory",
     "Subscription",
+    "SubscriptionInboxDiscovery",
     "TextContent",
     "User",
     "VideoContent",

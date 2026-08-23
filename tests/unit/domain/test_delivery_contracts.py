@@ -7,8 +7,13 @@ from astrbot_plugin_rsshub.src.application.dto.subscription_dto import Subscript
 from astrbot_plugin_rsshub.src.application.services.card_template_policy import (
     validate_card_template_selection,
 )
+from astrbot_plugin_rsshub.src.domain.entities import SubscriptionInboxDiscovery
 from astrbot_plugin_rsshub.src.domain.entities.bundle import Bundle
 from astrbot_plugin_rsshub.src.domain.entities.card_template import CardTemplateMetadata
+from astrbot_plugin_rsshub.src.domain.entities.delivery import (
+    DeliveryInboxItemDraft,
+    DeliveryOwner,
+)
 from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
 from astrbot_plugin_rsshub.src.domain.exceptions import (
     ValidationError as DomainValidationError,
@@ -29,6 +34,21 @@ def make_template_metadata(**overrides: object) -> CardTemplateMetadata:
     }
     payload.update(overrides)
     return CardTemplateMetadata.model_validate(payload)
+
+
+def test_subscription_discovery_requires_one_shared_discovery_key() -> None:
+    with pytest.raises(ValidationError, match="discovery_key"):
+        SubscriptionInboxDiscovery(
+            owner=DeliveryOwner(owner_type="subscription", owner_id=1),
+            items=[
+                DeliveryInboxItemDraft(
+                    feed_id=1,
+                    item_key=f"entry-{index}",
+                    discovery_key=f"discovery-{index}",
+                )
+                for index in (1, 2)
+            ],
+        )
 
 
 def test_subscription_card_settings_have_backward_compatible_defaults() -> None:

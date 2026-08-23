@@ -33,6 +33,59 @@ class _FakeQueue:
         self.stop_all = AsyncMock()
 
 
+@pytest.mark.asyncio
+async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
+    monkeypatch,
+):
+    repositories = {
+        "feed": object(),
+        "subscription": object(),
+        "user": object(),
+        "history": object(),
+        "delivery": object(),
+    }
+    captured_polling_kwargs: dict[str, object] = {}
+
+    def build_polling_service(**kwargs):
+        captured_polling_kwargs.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(bootstrap, "get_feed_repository", lambda: repositories["feed"])
+    monkeypatch.setattr(
+        bootstrap,
+        "get_subscription_repository",
+        lambda: repositories["subscription"],
+    )
+    monkeypatch.setattr(bootstrap, "get_user_repository", lambda: repositories["user"])
+    monkeypatch.setattr(
+        bootstrap,
+        "get_push_history_repository",
+        lambda: repositories["history"],
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "get_delivery_repository",
+        lambda: repositories["delivery"],
+        raising=False,
+    )
+    monkeypatch.setattr(bootstrap, "FeedPollingService", build_polling_service)
+    monkeypatch.setattr(
+        bootstrap,
+        "build_route_knowledge_source",
+        AsyncMock(return_value=object()),
+    )
+    monkeypatch.setattr(bootstrap, "AstrBotRouteKnowledgeRepository", MagicMock())
+    monkeypatch.setattr(bootstrap, "RouteKnowledgeSyncService", MagicMock())
+
+    await bootstrap._build_dependencies(
+        app_settings=ApplicationSettings(media=MediaSettings()),
+        sender_provider=MagicMock(),
+        push_job_queue=MagicMock(),
+    )
+
+    assert captured_polling_kwargs["delivery_repository"] is repositories["delivery"]
+
+
 def test_bot_self_id_provider_returns_only_a_unique_connected_account(monkeypatch):
     """多 bot 连接时不应把任意账号误用为合并转发节点 UIN。"""
     providers: dict[str, object] = {}

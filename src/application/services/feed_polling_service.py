@@ -19,8 +19,17 @@ from itertools import chain
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+from pydantic_core import to_jsonable_python
+
 from ...domain.entities.content_types import AudioContent, FileContent, VideoContent
+from ...domain.entities.delivery import (
+    DeliveryInboxItemDraft,
+    DeliveryOwner,
+    SubscriptionInboxDiscovery,
+)
 from ...domain.entities.feed import Feed, normalize_entry_hashes
+from ...domain.entities.subscription import Subscription
+from ...domain.repositories.delivery_repository import DeliveryRepository
 from ...domain.repositories.feed_repository import FeedRepository
 from ...domain.repositories.subscription_repository import SubscriptionRepository
 from ...infrastructure.config import FeedFetchSettings, RSSSettings
@@ -106,6 +115,7 @@ class FeedPollingService:
         fetcher_factory: FeedFetcherFactory | None = None,
         parser: FeedParser | None = None,
         notification_dispatcher: NotificationDispatcher | None = None,
+        delivery_repository: DeliveryRepository | None = None,
         media_fingerprint_service: MediaFingerprintService | None = None,
         history_entry_limit: int = 0,
     ) -> None:
@@ -116,6 +126,7 @@ class FeedPollingService:
         self._fetcher_factory = fetcher_factory
         self._parser = parser
         self._notification_dispatcher = notification_dispatcher
+        self._delivery_repository = delivery_repository
         self._media_fingerprint_service = media_fingerprint_service
         self._history_entry_limit = max(0, history_entry_limit)
 
@@ -269,6 +280,8 @@ class FeedPollingService:
 
         dispatched = 0
         acknowledged_entries: list[Any] = []
+        card_subscriptions: list[Subscription] = []
+        standard_subscription_ids: list[int] | None = subscription_ids
         bootstrap_skipped = bool(
             notify_new_entries
             and new_entries
@@ -279,15 +292,51 @@ class FeedPollingService:
             notify_new_entries
             and new_entries
             and not bootstrap_skipped
+            and self._delivery_repository is not None
+        ):
+            active_subscriptions = await self._subscription_repo.get_active_by_feed_id(
+                feed.id
+            )
+            # Feed 水位由本次抓取共享推进，因此卡片新增必须扇出到所有活跃
+            # card owner；subscription_ids 只约束本轮到期的普通推送目标。
+            card_subscriptions = [
+                subscription
+                for subscription in active_subscriptions
+                if subscription.send_card
+            ]
+            standard_subscriptions = [
+                subscription
+                for subscription in active_subscriptions
+                if not subscription.send_card
+            ]
+            if subscription_ids is not None:
+                selected_ids = set(subscription_ids)
+                standard_subscriptions = [
+                    subscription
+                    for subscription in standard_subscriptions
+                    if subscription.id in selected_ids
+                ]
+            standard_subscription_ids = [
+                subscription.id
+                for subscription in standard_subscriptions
+                if subscription.id is not None
+            ]
+        if (
+            notify_new_entries
+            and new_entries
+            and not bootstrap_skipped
             and self._notification_dispatcher
+            and (standard_subscription_ids is None or standard_subscription_ids)
         ):
             dispatch_result = await self._dispatch_entries(
                 feed,
                 new_entries,
-                subscription_ids=subscription_ids,
+                subscription_ids=standard_subscription_ids,
             )
             dispatched = dispatch_result.dispatched
             acknowledged_entries = dispatch_result.acknowledged_entries
+        if card_subscriptions and not standard_subscription_ids:
+            acknowledged_entries = list(new_entries)
 
         if notify_new_entries and new_entries and not bootstrap_skipped:
             acknowledged_ids = {id(entry) for entry in acknowledged_entries}
@@ -319,7 +368,18 @@ class FeedPollingService:
             len(entries),
         )
         feed.updated_at = datetime.now(timezone.utc)
-        saved_feed = await self._feed_repo.save(feed)
+        if card_subscriptions:
+            discoveries = self._build_subscription_discoveries(
+                feed,
+                card_subscriptions,
+                new_entries,
+            )
+            saved_feed = await self._delivery_repository.store_subscription_discovery(
+                feed,
+                discoveries,
+            )
+        else:
+            saved_feed = await self._feed_repo.save(feed)
 
         message = f"刷新完成 (ID: {feed_id})，发现 {len(entries)} 个条目"
         if bootstrap_skipped:
@@ -438,6 +498,80 @@ class FeedPollingService:
             known_hashes.update(entry_hashes)
 
         return new_groups, new_entries
+
+    def _build_subscription_discoveries(
+        self,
+        feed: Feed,
+        subscriptions: list[Subscription],
+        entries: list[Any],
+    ) -> list[SubscriptionInboxDiscovery]:
+        if feed.id is None:
+            raise ValueError("持久化卡片 Subscription inbox 前 Feed 必须已有 ID")
+        item_snapshots: list[tuple[str, list[str], dict[str, Any], Any]] = []
+        for entry in entries:
+            hash_group = self._hash_entry(entry, feed.link)
+            item_key = hash_group[0]
+            payload = to_jsonable_python(entry)
+            if not isinstance(payload, dict):
+                payload = {
+                    key: to_jsonable_python(self._entry_value(entry, key, None))
+                    for key in (
+                        "id",
+                        "guid",
+                        "entry_id",
+                        "title",
+                        "link",
+                        "author",
+                        "content",
+                        "summary",
+                        "tags",
+                        "enclosures",
+                        "published",
+                        "updated",
+                    )
+                }
+            item_snapshots.append((item_key, hash_group, payload, entry))
+
+        discoveries: list[SubscriptionInboxDiscovery] = []
+        discovered_at = datetime.now(timezone.utc)
+        for subscription in subscriptions:
+            if subscription.id is None:
+                raise ValueError("持久化卡片 Subscription inbox 前订阅必须已有 ID")
+            owner = DeliveryOwner(
+                owner_type="subscription",
+                owner_id=subscription.id,
+            )
+            discovery_material = "\n".join(
+                sorted(item_key for item_key, *_rest in item_snapshots)
+            )
+            discovery_digest = hashlib.sha256(
+                f"{owner.owner_id}\n{feed.id}\n{discovery_material}".encode()
+            ).hexdigest()
+            discovery_key = (
+                f"subscription:{owner.owner_id}:feed:{feed.id}:"
+                f"discovery:{discovery_digest}"
+            )
+            items = [
+                DeliveryInboxItemDraft(
+                    feed_id=feed.id,
+                    item_key=item_key,
+                    hash_group=hash_group,
+                    discovery_key=discovery_key,
+                    entry_payload=payload,
+                    raw_xml=(
+                        str(self._entry_value(entry, "raw_xml") or "").strip() or None
+                    ),
+                    media_items=to_jsonable_python(
+                        self._entry_value(entry, "enclosures", []) or []
+                    ),
+                    published_at=self._entry_value(entry, "published", None),
+                    entry_updated_at=self._entry_value(entry, "updated", None),
+                    discovered_at=discovered_at,
+                )
+                for item_key, hash_group, payload, entry in item_snapshots
+            ]
+            discoveries.append(SubscriptionInboxDiscovery(owner=owner, items=items))
+        return discoveries
 
     def _hash_entry(self, entry: Any, feed_link: str | None = None) -> list[str]:
         """Build stable and compatibility fingerprints for one entry."""

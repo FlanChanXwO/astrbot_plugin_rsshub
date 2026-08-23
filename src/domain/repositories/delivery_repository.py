@@ -12,7 +12,9 @@ from ..entities.delivery import (
     DeliveryInboxItemDraft,
     DeliveryOwner,
     InboxStoreResult,
+    SubscriptionInboxDiscovery,
 )
+from ..entities.feed import Feed
 from ..entities.push_history import PushHistory
 
 
@@ -69,6 +71,12 @@ class DeliveryRepository(Protocol):
         owner: DeliveryOwner,
         items: Sequence[DeliveryInboxItemDraft],
     ) -> InboxStoreResult: ...
+
+    async def store_subscription_discovery(
+        self,
+        feed: Feed,
+        discoveries: Sequence[SubscriptionInboxDiscovery],
+    ) -> Feed: ...
 
     async def list_inbox_items(
         self,

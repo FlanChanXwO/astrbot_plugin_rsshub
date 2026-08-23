@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .push_history import PushHistory
 
@@ -51,6 +51,22 @@ class DeliveryInboxItem(DeliveryInboxItemDraft):
     id: int = Field(gt=0)
     owner: DeliveryOwner
     batch_id: int | None = Field(default=None, gt=0)
+
+
+class SubscriptionInboxDiscovery(BaseModel):
+    """一个卡片 Subscription 在单次 Feed 发现中的完整 inbox fan-out。"""
+
+    owner: DeliveryOwner
+    items: list[DeliveryInboxItemDraft] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _require_single_subscription_discovery(self) -> SubscriptionInboxDiscovery:
+        if self.owner.owner_type != "subscription":
+            raise ValueError("Subscription discovery owner 必须是 subscription")
+        discovery_keys = {item.discovery_key for item in self.items}
+        if len(discovery_keys) != 1:
+            raise ValueError("Subscription discovery items 必须共享 discovery_key")
+        return self
 
 
 class InboxStoreResult(BaseModel):

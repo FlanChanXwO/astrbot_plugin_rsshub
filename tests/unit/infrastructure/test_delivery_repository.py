@@ -10,7 +10,9 @@ from astrbot_plugin_rsshub.src.domain.entities.delivery import (
     DeliveryBatchDraft,
     DeliveryInboxItemDraft,
     DeliveryOwner,
+    SubscriptionInboxDiscovery,
 )
+from astrbot_plugin_rsshub.src.domain.entities.feed import Feed
 from astrbot_plugin_rsshub.src.domain.entities.push_history import PushHistory
 from astrbot_plugin_rsshub.src.infrastructure.persistence.database import (
     DatabaseManager,
@@ -78,6 +80,174 @@ async def test_store_inbox_items_is_idempotent_and_keeps_first_snapshot(
     assert duplicate_result.duplicate_count == 1
     assert len(inbox) == 1
     assert inbox[0].entry_payload == {"title": "first"}
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_subscription_discovery_rolls_back_every_owner_and_feed_watermark(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "subscription-fanout-rollback.db"))
+    async with database.get_session() as session:
+        session.add(UserORM(id="user-1"))
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.flush()
+        subscriptions = [
+            SubORM(user_id="user-1", feed_id=1, send_card=True) for _index in range(2)
+        ]
+        session.add_all(subscriptions)
+        await session.commit()
+        for subscription in subscriptions:
+            await session.refresh(subscription)
+    repository = DeliveryRepositoryImpl(database)
+    updated_feed = Feed(
+        id=1,
+        link="https://example.com/feed",
+        title="Updated Feed",
+        entry_hashes=[["sid:new-entry"]],
+        etag="new-etag",
+    )
+    discoveries = [
+        SubscriptionInboxDiscovery(
+            owner=DeliveryOwner(
+                owner_type="subscription",
+                owner_id=subscription.id,
+            ),
+            items=[
+                DeliveryInboxItemDraft(
+                    feed_id=1,
+                    item_key="sid:new-entry",
+                    hash_group=["sid:new-entry"],
+                    discovery_key=f"subscription:{subscription.id}:discovery:test",
+                    entry_payload={"guid": "new-entry"},
+                )
+            ],
+        )
+        for subscription in subscriptions
+    ]
+
+    async def fail_after_second_owner(_session, owner_index: int) -> None:
+        if owner_index == 1:
+            raise RuntimeError("injected second owner failure")
+
+    monkeypatch.setattr(
+        repository,
+        "_after_subscription_discovery_owner",
+        fail_after_second_owner,
+        raising=False,
+    )
+    with pytest.raises(RuntimeError, match="injected second owner failure"):
+        await repository.store_subscription_discovery(updated_feed, discoveries)
+
+    for discovery in discoveries:
+        assert await repository.list_inbox_items(discovery.owner) == []
+    async with database.get_session() as session:
+        persisted_feed = await session.get(FeedORM, 1)
+        assert persisted_feed.title == "Feed"
+        assert persisted_feed.entry_hashes is None
+        assert persisted_feed.etag is None
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_subscription_discovery_retry_is_idempotent_for_every_owner(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "subscription-fanout-idempotent.db"))
+    async with database.get_session() as session:
+        session.add(UserORM(id="user-1"))
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.flush()
+        subscriptions = [
+            SubORM(user_id="user-1", feed_id=1, send_card=True) for _index in range(2)
+        ]
+        session.add_all(subscriptions)
+        await session.commit()
+        for subscription in subscriptions:
+            await session.refresh(subscription)
+    repository = DeliveryRepositoryImpl(database)
+    updated_feed = Feed(
+        id=1,
+        link="https://example.com/feed",
+        title="Updated Feed",
+        entry_hashes=[["sid:new-entry"]],
+        etag="new-etag",
+    )
+    discoveries = [
+        SubscriptionInboxDiscovery(
+            owner=DeliveryOwner(
+                owner_type="subscription",
+                owner_id=subscription.id,
+            ),
+            items=[
+                DeliveryInboxItemDraft(
+                    feed_id=1,
+                    item_key="sid:new-entry",
+                    hash_group=["sid:new-entry"],
+                    discovery_key=f"subscription:{subscription.id}:discovery:test",
+                    entry_payload={"title": "first snapshot"},
+                )
+            ],
+        )
+        for subscription in subscriptions
+    ]
+
+    first = await repository.store_subscription_discovery(updated_feed, discoveries)
+    changed_discoveries = [
+        discovery.model_copy(
+            update={
+                "items": [
+                    discovery.items[0].model_copy(
+                        update={"entry_payload": {"title": "changed snapshot"}}
+                    )
+                ]
+            }
+        )
+        for discovery in discoveries
+    ]
+    repeated = await repository.store_subscription_discovery(
+        updated_feed,
+        changed_discoveries,
+    )
+
+    assert first.entry_hashes == [["sid:new-entry"]]
+    assert repeated.etag == "new-etag"
+    for discovery in discoveries:
+        inbox = await repository.list_inbox_items(discovery.owner)
+        assert len(inbox) == 1
+        assert inbox[0].entry_payload == {"title": "first snapshot"}
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_subscription_discovery_rejects_empty_fanout_without_updating_feed(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "subscription-empty-fanout.db"))
+    async with database.get_session() as session:
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.commit()
+    repository = DeliveryRepositoryImpl(database)
+    updated_feed = Feed(
+        id=1,
+        link="https://example.com/feed",
+        title="Updated Feed",
+        entry_hashes=[["sid:new-entry"]],
+        etag="new-etag",
+    )
+
+    with pytest.raises(DeliverySourceMismatchError, match="至少一个"):
+        await repository.store_subscription_discovery(updated_feed, [])
+
+    async with database.get_session() as session:
+        persisted_feed = await session.get(FeedORM, 1)
+        assert persisted_feed.title == "Feed"
+        assert persisted_feed.entry_hashes is None
+        assert persisted_feed.etag is None
     await database.close()
 
 

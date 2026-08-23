@@ -66,6 +66,7 @@ from .src.infrastructure.messaging import (
 )
 from .src.infrastructure.persistence import (
     get_database,
+    get_delivery_repository,
     get_feed_repository,
     get_push_history_repository,
     get_subscription_repository,
@@ -405,6 +406,7 @@ async def _build_dependencies(
     sub_repo = get_subscription_repository()
     user_repo = get_user_repository()
     push_history_repo = get_push_history_repository()
+    delivery_repo = get_delivery_repository()
 
     notification_dispatcher = NotificationDispatcher(
         subscription_repo=sub_repo,
@@ -427,6 +429,7 @@ async def _build_dependencies(
         fetcher_factory=RSSFeedFetcher,
         parser=RSSParser(),
         notification_dispatcher=notification_dispatcher,
+        delivery_repository=delivery_repo,
         history_entry_limit=app_settings.scheduler.history_entry_limit,
     )
     route_source = await build_route_knowledge_source(

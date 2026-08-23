@@ -17,7 +17,9 @@ from ...domain.entities.delivery import (
     DeliveryInboxItemDraft,
     DeliveryOwner,
     InboxStoreResult,
+    SubscriptionInboxDiscovery,
 )
+from ...domain.entities.feed import Feed
 from ...domain.entities.push_history import PushHistory, normalize_fail_reason
 from ...domain.repositories.delivery_repository import (
     DeliveryBatchConflictError,
@@ -37,6 +39,7 @@ from .models import (
     BundleORM,
     DeliveryBatchORM,
     DeliveryInboxItemORM,
+    FeedORM,
     PushHistoryORM,
     SubORM,
 )
@@ -81,6 +84,110 @@ class DeliveryRepositoryImpl:
             inserted_count=inserted_count,
             duplicate_count=len(items) - inserted_count,
         )
+
+    async def store_subscription_discovery(
+        self,
+        feed: Feed,
+        discoveries: Sequence[SubscriptionInboxDiscovery],
+    ) -> Feed:
+        """原子保存共享 Feed 水位与所有卡片 Subscription 的发现 fan-out。"""
+        if feed.id is None:
+            raise DeliverySourceMismatchError("Subscription 发现要求已持久化的 Feed")
+        if not discoveries:
+            raise DeliverySourceMismatchError(
+                "Subscription 发现必须包含至少一个 card owner"
+            )
+        owner_ids = [discovery.owner.owner_id for discovery in discoveries]
+        if len(owner_ids) != len(set(owner_ids)):
+            raise DeliverySourceMismatchError("Subscription 发现 owner 不能重复")
+
+        async with self._db.get_session() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                feed_orm = await session.get(FeedORM, feed.id)
+                if feed_orm is None:
+                    raise DeliverySourceMismatchError(f"Feed 不存在: {feed.id}")
+                subscription_result = await session.execute(
+                    select(SubORM).where(SubORM.id.in_(owner_ids))
+                )
+                subscriptions = {
+                    subscription.id: subscription
+                    for subscription in subscription_result.scalars().all()
+                }
+
+                for owner_index, discovery in enumerate(discoveries):
+                    if discovery.owner.owner_type != "subscription":
+                        raise DeliverySourceMismatchError(
+                            "Subscription 发现只能写入 subscription owner"
+                        )
+                    subscription = subscriptions.get(discovery.owner.owner_id)
+                    if (
+                        subscription is None
+                        or subscription.feed_id != feed.id
+                        or subscription.state != 1
+                        or not subscription.send_card
+                    ):
+                        raise DeliverySourceMismatchError(
+                            "卡片 Subscription owner 不存在、未启用或来源不匹配"
+                        )
+                    if any(
+                        item.feed_id != feed.id
+                        or item.bundle_feed_id is not None
+                        or item.member_position is not None
+                        for item in discovery.items
+                    ):
+                        raise DeliverySourceMismatchError(
+                            "Subscription inbox 来源不匹配"
+                        )
+                    item_values = []
+                    for item in discovery.items:
+                        values = item.model_dump()
+                        values.update(
+                            owner_type=discovery.owner.owner_type,
+                            owner_id=discovery.owner.owner_id,
+                        )
+                        item_values.append(values)
+                    await session.execute(
+                        sqlite_insert(DeliveryInboxItemORM).on_conflict_do_nothing(
+                            index_elements=(
+                                "owner_type",
+                                "owner_id",
+                                "feed_id",
+                                "item_key",
+                            )
+                        ),
+                        item_values,
+                    )
+                    await self._after_subscription_discovery_owner(
+                        session,
+                        owner_index,
+                    )
+
+                feed_orm.state = feed.state
+                feed_orm.link = feed.link
+                feed_orm.title = feed.title
+                feed_orm.entry_hashes = feed.entry_hashes
+                feed_orm.etag = feed.etag
+                feed_orm.last_modified = feed.last_modified
+                feed_orm.created_at = feed.created_at
+                feed_orm.updated_at = feed.updated_at
+                await session.commit()
+                await session.refresh(feed_orm)
+            except BaseException:
+                await session.rollback()
+                raise
+
+            return Feed(
+                id=feed_orm.id,
+                state=feed_orm.state,
+                link=feed_orm.link,
+                title=feed_orm.title,
+                entry_hashes=feed_orm.entry_hashes,
+                etag=feed_orm.etag,
+                last_modified=feed_orm.last_modified,
+                created_at=feed_orm.created_at,
+                updated_at=feed_orm.updated_at,
+            )
 
     async def list_inbox_items(
         self,
@@ -733,6 +840,10 @@ class DeliveryRepositoryImpl:
 
     @staticmethod
     async def _after_discard(_session, _batch) -> None:
+        """故障注入接缝；生产实现不执行额外动作。"""
+
+    @staticmethod
+    async def _after_subscription_discovery_owner(_session, _owner_index) -> None:
         """故障注入接缝；生产实现不执行额外动作。"""
 
     @staticmethod

@@ -24,6 +24,12 @@ class SubscriptionDTO(BaseModel):
     target_session: str | None = Field(default=None, description="推送目标会话")
     platform_name: str | None = Field(default=None, description="平台类型名")
     state: int = Field(default=1, description="状态: 0=停用, 1=启用")
+    send_card: bool = Field(default=False, description="是否发送模板卡片")
+    template_id: str | None = Field(default=None, description="卡片模板 ID")
+    card_send_original_content: bool = Field(
+        default=False,
+        description="卡片发送成功后是否继续发送原始内容",
+    )
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="更新时间")
 

@@ -14,10 +14,14 @@ _EXPORT_MAP = {
     "CardTemplateDownloadService": "card_template_service",
     "CardTemplateInUseError": "card_template_service",
     "CardTemplateManagementService": "card_template_service",
+    "CardRenderer": "card_renderer",
+    "CardRenderResult": "card_renderer",
     "FeedPollingService": "feed_polling_service",
     "FeedPollingResult": "feed_polling_service",
     "FeedReadResult": "feed_polling_service",
     "NotificationDispatcher": "notification_dispatcher",
+    "OutputOrchestrationResult": "output_orchestrator",
+    "OutputOrchestrator": "output_orchestrator",
     "SessionPushQueue": "session_push_queue",
     "RouteKnowledgeSyncService": "route_knowledge_service",
     "RouteKnowledgeSyncPlan": "route_knowledge_service",
@@ -41,7 +45,8 @@ _EXPORT_MAP = {
     "ImportSubscriptionRecord": "subscription_serializer",
 }
 
-__all__ = sorted(_EXPORT_MAP)
+# 兼容导出由上方映射统一生成，避免映射与静态列表发生漂移。
+__all__ = sorted(_EXPORT_MAP)  # noqa: PLE0605
 
 
 def __getattr__(name: str) -> Any:

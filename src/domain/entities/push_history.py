@@ -183,6 +183,15 @@ class PushHistory(BaseModel):
         self.fail_reason = normalize_display_fail_reason(reason)
         return self
 
+    def mark_discarded(self, reason: str | None = None) -> "PushHistory":
+        """标记为随可靠批次被显式丢弃，不再参与重试。"""
+        self.status = "discarded"
+        self.completed_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
+        self.max_retries = 0
+        self.fail_reason = normalize_display_fail_reason(reason)
+        return self
+
     def is_pending(self) -> bool:
         """检查是否处于待推送状态"""
         return self.status == "pending"

@@ -282,6 +282,7 @@ class DeliveryRepositoryImpl:
                         DeliveryInboxItemORM.batch_id == batch_id
                     )
                 )
+                await self._after_discard(session, batch_orm)
                 await session.commit()
             except BaseException:
                 await session.rollback()
@@ -505,19 +506,23 @@ class DeliveryRepositoryImpl:
     ) -> None:
         if not histories:
             raise DeliveryConsistencyError("投递批次缺少输出历史")
-        expected_outputs = {
+        expected_outputs = [
             (
                 item.get("target_session"),
                 item.get("output_kind"),
                 item.get("output_order"),
             )
             for item in batch.output_manifest
-        }
-        actual_outputs = {
+        ]
+        actual_outputs = [
             (history.target_session, history.output_kind, history.output_order)
             for history in histories
-        }
-        if not expected_outputs or actual_outputs != expected_outputs:
+        ]
+        if (
+            not expected_outputs
+            or len(expected_outputs) != len(set(expected_outputs))
+            or Counter(actual_outputs) != Counter(expected_outputs)
+        ):
             raise DeliveryConsistencyError("投递批次输出历史与输出清单不一致")
         if any(
             item.owner_type != batch.owner_type or item.owner_id != batch.owner_id
@@ -553,6 +558,12 @@ class DeliveryRepositoryImpl:
         ]
         if len(identities) != len(set(identities)):
             raise DeliveryConsistencyError("投递批次包含重复输出身份")
+        DeliveryRepositoryImpl._validate_output_layout(
+            batch.target_sessions,
+            batch.config_snapshot,
+            histories,
+            DeliveryConsistencyError,
+        )
         if batch.status == "pending" and not inbox_items:
             raise DeliveryConsistencyError("pending 批次缺少已认领 inbox")
         if (
@@ -671,9 +682,57 @@ class DeliveryRepositoryImpl:
         represented_targets = {output.target_session for output in outputs}
         if represented_targets != set(batch.target_sessions):
             raise DeliveryOutputMismatchError("每个批次目标必须至少有一条输出历史")
+        DeliveryRepositoryImpl._validate_output_layout(
+            batch.target_sessions,
+            batch.config_snapshot,
+            outputs,
+            DeliveryOutputMismatchError,
+        )
+
+    @staticmethod
+    def _validate_output_layout(
+        target_sessions,
+        config_snapshot,
+        outputs,
+        error_type,
+    ) -> None:
+        for target_session in target_sessions:
+            target_outputs = [
+                output for output in outputs if output.target_session == target_session
+            ]
+            cards = [
+                output for output in target_outputs if output.output_kind == "card"
+            ]
+            if len(cards) > 1:
+                raise error_type(
+                    f"每个批次目标最多只能有一条 card 输出: {target_session}"
+                )
+            if config_snapshot.get("send_card") is True and not cards:
+                raise error_type(
+                    f"send_card=true 时每个批次目标必须有一条 card 输出: {target_session}"
+                )
+            if config_snapshot.get("send_card") is False and cards:
+                raise error_type(
+                    f"send_card=false 时批次目标不能有 card 输出: {target_session}"
+                )
+            if cards and (
+                cards[0].output_order != 0
+                or any(
+                    output.output_order <= cards[0].output_order
+                    for output in target_outputs
+                    if output.output_kind != "card"
+                )
+            ):
+                raise error_type(
+                    f"card 输出必须是目标的 order=0 首条输出: {target_session}"
+                )
 
     @staticmethod
     async def _after_claim(_session, _batch) -> None:
+        """故障注入接缝；生产实现不执行额外动作。"""
+
+    @staticmethod
+    async def _after_discard(_session, _batch) -> None:
         """故障注入接缝；生产实现不执行额外动作。"""
 
     @staticmethod

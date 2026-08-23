@@ -24,6 +24,21 @@ class RecordingHistoryRepository:
         return history
 
 
+class RecordingDeliveryRepository:
+    def __init__(self, result: DeliveryBatch) -> None:
+        self.result = result
+        self.discard_calls: list[tuple[int, str | None]] = []
+
+    async def discard_batch(
+        self,
+        batch_id: int,
+        *,
+        reason: str | None = None,
+    ) -> DeliveryBatch:
+        self.discard_calls.append((batch_id, reason))
+        return self.result
+
+
 class ScriptedOutputExecutor:
     def __init__(self, results: dict[int, list[SendResult]]) -> None:
         self.results = results
@@ -91,7 +106,11 @@ async def test_card_gate_partial_success_and_retry_are_isolated_per_output() -> 
             4: [SendResult(ok=True)],
         }
     )
-    orchestrator = OutputOrchestrator(repository, executor)
+    orchestrator = OutputOrchestrator(
+        repository,
+        executor,
+        RecordingDeliveryRepository(batch),
+    )
 
     first = await orchestrator.run(batch)
 
@@ -128,21 +147,25 @@ async def test_card_gate_partial_success_and_retry_are_isolated_per_output() -> 
 
 
 @pytest.mark.asyncio
-async def test_discard_marks_only_unfinished_outputs() -> None:
+async def test_discard_delegates_the_whole_batch_to_delivery_repository() -> None:
     failed = _history(1, "card", 0, status="failed")
     waiting = _history(2, "standard", 1)
     success = _history(3, "standard", 2, status="success")
-    repository = RecordingHistoryRepository()
-    orchestrator = OutputOrchestrator(repository, ScriptedOutputExecutor({}))
+    pending_batch = _batch([failed, waiting, success])
+    discarded_batch = pending_batch.model_copy(update={"status": "discarded"})
+    history_repository = RecordingHistoryRepository()
+    delivery_repository = RecordingDeliveryRepository(discarded_batch)
+    orchestrator = OutputOrchestrator(
+        history_repository,
+        ScriptedOutputExecutor({}),
+        delivery_repository,
+    )
 
-    discarded = await orchestrator.discard(_batch([failed, waiting, success]))
+    result = await orchestrator.discard(pending_batch, reason="用户明确丢弃")
 
-    assert discarded == [1, 2]
-    assert [failed.status, waiting.status, success.status] == [
-        "discarded",
-        "discarded",
-        "success",
-    ]
+    assert result is discarded_batch
+    assert delivery_repository.discard_calls == [(pending_batch.id, "用户明确丢弃")]
+    assert history_repository.saved == []
 
 
 @pytest.mark.asyncio
@@ -157,7 +180,9 @@ async def test_missing_manifest_output_never_reports_ready_to_confirm() -> None:
         )
     )
     orchestrator = OutputOrchestrator(
-        RecordingHistoryRepository(), ScriptedOutputExecutor({})
+        RecordingHistoryRepository(),
+        ScriptedOutputExecutor({}),
+        RecordingDeliveryRepository(batch),
     )
 
     result = await orchestrator.run(batch)
@@ -172,7 +197,11 @@ async def test_output_outside_manifest_is_not_executed() -> None:
     batch = _batch([expected])
     batch.outputs.append(unexpected)
     executor = ScriptedOutputExecutor({2: [SendResult(ok=True)]})
-    orchestrator = OutputOrchestrator(RecordingHistoryRepository(), executor)
+    orchestrator = OutputOrchestrator(
+        RecordingHistoryRepository(),
+        executor,
+        RecordingDeliveryRepository(batch),
+    )
 
     result = await orchestrator.run(batch)
 

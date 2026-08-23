@@ -8,6 +8,7 @@ from typing import Protocol
 
 from ...domain.entities.delivery import DeliveryBatch
 from ...domain.entities.push_history import PushHistory
+from ...domain.repositories.delivery_repository import DeliveryRepository
 from ...domain.repositories.push_history_repository import PushHistoryRepository
 from ..ports.message_sender import SendResult
 
@@ -32,15 +33,16 @@ class OutputOrchestrator:
     """按 target 隔离执行，并把 card 作为 standard 的严格前置门。"""
 
     _CONFIRMED_OUTPUT_STATUSES = frozenset({"success", "skipped"})
-    _TERMINAL_OUTPUT_STATUSES = frozenset({"success", "skipped", "discarded"})
 
     def __init__(
         self,
         history_repository: PushHistoryRepository,
         executor: DeliveryOutputExecutor,
+        delivery_repository: DeliveryRepository,
     ) -> None:
         self._history_repository = history_repository
         self._executor = executor
+        self._delivery_repository = delivery_repository
 
     async def run(
         self,
@@ -119,17 +121,9 @@ class OutputOrchestrator:
         batch: DeliveryBatch,
         *,
         reason: str = "批次已显式丢弃",
-    ) -> list[int]:
-        """保留已完成输出，并终结批次内其余输出。"""
-        discarded: list[int] = []
-        for output in batch.outputs:
-            if output.status in self._TERMINAL_OUTPUT_STATUSES:
-                continue
-            output.mark_discarded(reason)
-            await self._history_repository.save(output)
-            if output.id is not None:
-                discarded.append(output.id)
-        return discarded
+    ) -> DeliveryBatch:
+        """通过统一批次仓储原子终结 batch、inbox 与未完成 histories。"""
+        return await self._delivery_repository.discard_batch(batch.id, reason=reason)
 
     @staticmethod
     def _is_actionable(output: PushHistory, *, retry_failed: bool) -> bool:

@@ -31,6 +31,7 @@
 | --- | --- | --- | --- |
 | `rss_subscribe` | 只暴露 `targets: string[]` | 批量订阅目标 | `targets` 中每项可以是完整 Feed URL、RSSHub path 或 route path。 |
 | `rss_push_xml_entry` | 只暴露安全格式化参数，如 `style`、`send_mode`、显示选项、`length_limit` | 立即推送 XML/HTML 条目并写入 `push_history` | 不暴露 `handlers`，避免即时推送注入处理链。 |
+| `rss_bundle_*` | 只使用当前事件用户；公开 create/list/get/update_members/set_option/set_handlers/set_state/delete | 管理当前用户 Bundle | 不暴露 test/retry/discard；成员、模板和删除保护复用 Bundle 应用用例。 |
 | XML payload 校验 | 拒绝 malformed、超大、DOCTYPE 输入 | 失败时不进入发送链路 | 保护 XML 解析和后续 handler。 |
 | agent push 去重 | `(source_type, source_key, user_id, target_session, entry_guid)` | 只看成功态 | 不依赖公开 `sub_id`。 |
 | agent retry | 复用历史记录中的 target 和 media 上下文 | 直接重发 | 保留审计连续性。 |

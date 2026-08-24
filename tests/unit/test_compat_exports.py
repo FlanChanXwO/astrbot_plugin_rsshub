@@ -45,3 +45,11 @@ def test_subscription_card_management_service_is_a_public_application_export() -
         "astrbot_plugin_rsshub.src.application.services.subscription_card_management_service"
     )
     assert exported is implementation.SubscriptionCardManagementService
+
+
+def test_bundle_dtos_are_public_application_exports() -> None:
+    application = import_module("astrbot_plugin_rsshub.src.application")
+    dto_module = import_module("astrbot_plugin_rsshub.src.application.dto.bundle_dto")
+
+    assert application.BundleDTO is dto_module.BundleDTO
+    assert application.BundleMemberDTO is dto_module.BundleMemberDTO

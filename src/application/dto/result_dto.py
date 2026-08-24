@@ -26,5 +26,11 @@ class CommandResult(BaseModel):
     data: Any | None = None
     """附加数据（可选）"""
 
+    error_code: str | None = None
+    """失败时供 API/客户端分支处理的稳定机器码。"""
+
+    details: Any | None = None
+    """失败时的可诊断阻塞详情。"""
+
     class Config:
         frozen = True

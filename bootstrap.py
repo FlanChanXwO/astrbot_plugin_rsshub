@@ -39,6 +39,9 @@ from .src.application.services.agent_xml_push_service import AgentXmlPushService
 from .src.application.services.bundle_batch_delivery_service import (
     BundleBatchDeliveryService,
 )
+from .src.application.services.bundle_card_management_service import (
+    BundleCardManagementService,
+)
 from .src.application.services.bundle_collection_service import (
     BundleCollectionService,
 )
@@ -164,6 +167,7 @@ class PluginDeps(TypedDict, total=False):
     bundle_collection_service: BundleCollectionService
     bundle_document_service: BundleDocumentService
     bundle_batch_delivery_service: BundleBatchDeliveryService
+    bundle_card_management_service: BundleCardManagementService
     bundle_cmd: BundleCommand
 
 
@@ -568,6 +572,15 @@ async def _build_dependencies(
         template_service=template_service,
         image_renderer=image_renderer,
     )
+    bundle_card_management_service = BundleCardManagementService(
+        bundle_repository=bundle_repo,
+        feed_repository=feed_repo,
+        template_repository=template_repository,
+        polling_service=polling_service,
+        document_service=bundle_document_service,
+        template_service=template_service,
+        image_renderer=image_renderer,
+    )
     template_download_service = CardTemplateDownloadService(
         template_repository,
         AiohttpCardTemplateArchiveDownloader(),
@@ -654,6 +667,7 @@ async def _build_dependencies(
         bundle_collection_service=bundle_collection_service,
         bundle_document_service=bundle_document_service,
         bundle_batch_delivery_service=bundle_batch_delivery_service,
+        bundle_card_management_service=bundle_card_management_service,
         bundle_cmd=bundle_command,
     )
     return deps, notification_dispatcher
@@ -725,6 +739,10 @@ def _register_web_api(
         template_management_service=deps["template_management_service"],
         subscription_batch_delivery_service=deps["subscription_batch_delivery_service"],
         delivery_repository=deps["delivery_repository"],
+        bundle_cmd=deps["bundle_cmd"],
+        bundle_repository=deps["bundle_repository"],
+        bundle_card_management_service=deps["bundle_card_management_service"],
+        bundle_batch_delivery_service=deps["bundle_batch_delivery_service"],
     )
     web_api.register_all(context)
     logger.info("Web API 已注册")

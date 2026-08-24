@@ -407,3 +407,40 @@ async def test_set_name_rejects_another_owned_bundle_before_save() -> None:
     assert result.success is False
     assert "名称已存在" in result.message
     bundle_repository.save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replace_members_validates_all_feeds_before_atomic_write() -> None:
+    from astrbot_plugin_rsshub.src.application.commands.bundle_cmd import (
+        BundleCommand,
+    )
+
+    bundle_repository = MagicMock()
+    bundle_repository.get_by_id = AsyncMock(
+        return_value=Bundle(
+            id=7,
+            user_id="owner",
+            name="Daily",
+            target_sessions=["telegram:group:1"],
+            interval=10,
+        )
+    )
+    bundle_repository.replace_members = AsyncMock()
+    feed_repository = MagicMock()
+    feed_repository.get_by_ids = AsyncMock(
+        return_value=[Feed(id=1, link="https://example.com/one")]
+    )
+    command = BundleCommand(
+        bundle_repository=bundle_repository,
+        feed_repository=feed_repository,
+    )
+
+    result = await command.replace_members(
+        bundle_id=7,
+        user_id="owner",
+        feed_ids=[1, 2],
+    )
+
+    assert result.success is False
+    assert "Feed" in result.message
+    bundle_repository.replace_members.assert_not_awaited()

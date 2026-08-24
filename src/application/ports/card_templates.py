@@ -31,3 +31,7 @@ class CardTemplateReferenceLookup(Protocol):
     async def is_template_in_use(self, template_id: str) -> bool:
         """模板存在任何活动引用时返回 True。"""
         ...
+
+    async def get_template_references(self, template_id: str) -> list[dict[str, Any]]:
+        """返回阻止模板删除的 owner 引用摘要。"""
+        ...

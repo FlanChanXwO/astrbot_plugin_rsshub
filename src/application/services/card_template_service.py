@@ -17,8 +17,13 @@ from ..ports.card_templates import (
 class CardTemplateInUseError(DomainException):
     """模板仍被 Subscription 或 Bundle 引用。"""
 
-    def __init__(self, template_id: str) -> None:
+    def __init__(
+        self,
+        template_id: str,
+        references: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.template_id = template_id
+        self.references = references or []
         super().__init__(
             message=f"模板 {template_id} 正在被引用，不能删除",
             code="CARD_TEMPLATE_IN_USE",
@@ -61,7 +66,15 @@ class CardTemplateManagementService:
     async def delete_template(self, template_id: str) -> bool:
         """删除未被引用的模板。"""
         if await self._reference_lookup.is_template_in_use(template_id):
-            raise CardTemplateInUseError(template_id)
+            get_references = getattr(
+                self._reference_lookup,
+                "get_template_references",
+                None,
+            )
+            references = (
+                await get_references(template_id) if callable(get_references) else []
+            )
+            raise CardTemplateInUseError(template_id, references)
         return await asyncio.to_thread(self._repository.delete, template_id)
 
 

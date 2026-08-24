@@ -157,6 +157,58 @@ async def test_start_scheduler_wires_bundle_collection_and_delivery(monkeypatch)
     )
 
 
+def test_register_web_api_wires_bundle_batch_delivery_service(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeWebApi:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def register_all(self, _context):
+            return None
+
+    monkeypatch.setattr(bootstrap, "WebApiHandler", FakeWebApi)
+    monkeypatch.setattr(bootstrap, "get_user_repository", lambda: object())
+    monkeypatch.setattr(bootstrap, "get_push_history_repository", lambda: object())
+    bundle_batch_delivery_service = object()
+    deps = {
+        key: object()
+        for key in (
+            "subscribe_cmd",
+            "unsubscribe_cmd",
+            "update_sub_cmd",
+            "batch_activate_cmd",
+            "batch_deactivate_cmd",
+            "batch_unsub_cmd",
+            "export_cmd",
+            "import_cmd",
+            "get_user_settings_cmd",
+            "set_user_settings_cmd",
+            "test_sub_cmd",
+            "get_items_query",
+            "polling_service",
+            "feed_repo",
+            "subscription_repo",
+            "notification_dispatcher",
+            "route_knowledge_service",
+            "card_management_service",
+            "template_repository",
+            "template_download_service",
+            "template_management_service",
+            "subscription_batch_delivery_service",
+            "delivery_repository",
+            "bundle_cmd",
+            "bundle_repository",
+            "bundle_card_management_service",
+        )
+    }
+    deps["bundle_batch_delivery_service"] = bundle_batch_delivery_service
+
+    bootstrap._register_web_api(MagicMock(), MagicMock(), deps)
+
+    assert captured["bundle_batch_delivery_service"] is bundle_batch_delivery_service
+
+
 def test_bot_self_id_provider_returns_only_a_unique_connected_account(monkeypatch):
     """多 bot 连接时不应把任意账号误用为合并转发节点 UIN。"""
     providers: dict[str, object] = {}

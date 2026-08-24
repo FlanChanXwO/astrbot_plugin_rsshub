@@ -15,6 +15,12 @@
 - `rss_list_handlers` / `rss_get_handlers` / `rss_set_subscription_handlers` / `rss_set_user_handlers`: 管理长期 AI 过滤、总结和改写 handlers。
 - `rss_list_push_history`: 查询当前会话推送历史，用于排查 `status`、`fail_reason`、`handler_trace`、`raw_xml` 和媒体。
 - `rss_push_xml_entry`: 一次性解析 XML/HTML 标签内容并推送到当前会话。
+- `rss_bundle_create` / `rss_bundle_list` / `rss_bundle_get`: 创建和查看当前用户的 Bundle。
+- `rss_bundle_update_members`: 原子替换 Bundle 的 Feed 成员顺序。
+- `rss_bundle_set_option` / `rss_bundle_set_handlers` / `rss_bundle_set_state`: 管理 Bundle 配置、文档 handlers 和启停状态。
+- `rss_bundle_delete`: 删除当前用户 Bundle；未解决投递数据会触发删除保护。
+
+Bundle LLM tools 只使用当前事件 owner，不暴露 `test`、`retry`、`discard` 等高风险操作。
 
 RSSHub 路由检索后续走 AstrBot 知识库和 route skill；插件不再提供 route 搜索 LLM tool。
 

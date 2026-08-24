@@ -254,6 +254,47 @@ class BundleCommand:
             data=updated_members,
         )
 
+    async def replace_members(
+        self,
+        *,
+        bundle_id: int,
+        user_id: str,
+        feed_ids: Sequence[int],
+    ) -> CommandResult:
+        """按给定顺序原子替换成员，先校验全部 Feed 和启用约束。"""
+        owned = await self._owned(bundle_id, user_id)
+        if isinstance(owned, CommandResult):
+            return owned
+        try:
+            normalized_feed_ids = self._normalize_feed_ids(feed_ids)
+        except ValueError as exc:
+            return CommandResult(success=False, message=str(exc))
+        if owned.state == 1 and len(normalized_feed_ids) < 2:
+            return CommandResult(
+                success=False,
+                message="启用 Bundle 至少需要两个不同 Feed",
+            )
+        missing = await self._missing_feed_ids(normalized_feed_ids)
+        if missing:
+            return CommandResult(
+                success=False,
+                message=f"Feed 不存在: {', '.join(map(str, missing))}",
+            )
+        try:
+            updated_members = await _maybe_await(
+                self._bundle_repository.replace_members(
+                    bundle_id,
+                    normalized_feed_ids,
+                )
+            )
+        except (ValueError, DeliveryDeletionBlockedError) as exc:
+            return CommandResult(success=False, message=str(exc))
+        return CommandResult(
+            success=True,
+            message=f"已更新 Bundle 成员（共 {len(normalized_feed_ids)} 个）",
+            data=updated_members,
+        )
+
     async def remove(
         self,
         *,
@@ -358,6 +399,20 @@ class BundleCommand:
             bundle_id=bundle_id,
             user_id=user_id,
             options={option: value},
+        )
+
+    async def set_handlers(
+        self,
+        *,
+        bundle_id: int,
+        user_id: str,
+        handlers: Any,
+    ) -> CommandResult:
+        """原子替换 Bundle 文档级 handlers。"""
+        return await self.set(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            options={"handlers": handlers},
         )
 
     async def set(
@@ -595,6 +650,11 @@ class BundleCommand:
             return CommandResult(
                 success=False,
                 message=f"Bundle 有未解决投递，不能删除: {exc}",
+                error_code="DELIVERY_BLOCKED",
+                details={
+                    "blocker_counts": exc.blocker_counts,
+                    "owner_blockers": exc.owner_blockers,
+                },
             )
         if not deleted:
             return CommandResult(
@@ -604,14 +664,24 @@ class BundleCommand:
 
     async def _owned(self, bundle_id: int, user_id: str) -> Bundle | CommandResult:
         if bundle_id <= 0:
-            return CommandResult(success=False, message="Bundle ID 必须是正整数")
+            return CommandResult(
+                success=False,
+                message="Bundle ID 必须是正整数",
+                error_code="INVALID_BUNDLE_ID",
+            )
         bundle = await _maybe_await(self._bundle_repository.get_by_id(bundle_id))
         if bundle is None:
             return CommandResult(
-                success=False, message=f"Bundle 不存在 (ID: {bundle_id})"
+                success=False,
+                message=f"Bundle 不存在 (ID: {bundle_id})",
+                error_code="BUNDLE_NOT_FOUND",
             )
         if bundle.user_id != user_id:
-            return CommandResult(success=False, message="无权操作此 Bundle")
+            return CommandResult(
+                success=False,
+                message="无权操作此 Bundle",
+                error_code="FORBIDDEN",
+            )
         return bundle
 
     @staticmethod

@@ -55,6 +55,13 @@ class BundleRepositoryImpl:
             )
             return [self._to_entity(orm) for orm in result.scalars().all()]
 
+    async def get_all(self) -> list[Bundle]:
+        async with self._db.get_session() as session:
+            result = await session.execute(
+                select(BundleORM).order_by(asc(BundleORM.id))
+            )
+            return [self._to_entity(orm) for orm in result.scalars().all()]
+
     async def get_all_active(self) -> list[Bundle]:
         async with self._db.get_session() as session:
             result = await session.execute(

@@ -36,6 +36,7 @@ def _build_deps():
         "agent_xml_push_service": AgentXmlPushService(
             notification_dispatcher=AsyncMock()
         ),
+        "bundle_cmd": MagicMock(),
     }
 
 
@@ -75,6 +76,14 @@ def test_build_llm_tools_names():
         "rss_get_handlers",
         "rss_set_subscription_handlers",
         "rss_set_user_handlers",
+        "rss_bundle_create",
+        "rss_bundle_list",
+        "rss_bundle_get",
+        "rss_bundle_update_members",
+        "rss_bundle_set_option",
+        "rss_bundle_set_handlers",
+        "rss_bundle_set_state",
+        "rss_bundle_delete",
     }
 
 

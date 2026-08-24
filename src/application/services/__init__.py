@@ -23,6 +23,8 @@ _EXPORT_MAP = {
     "BundleCollectionService": "bundle_collection_service",
     "BundleCollectionResult": "bundle_collection_service",
     "BundleMemberCollectionResult": "bundle_collection_service",
+    "BundleCardManagementService": "bundle_card_management_service",
+    "BundleCardPreview": "bundle_card_management_service",
     "BundleBatchDeliveryError": "bundle_batch_delivery_service",
     "BundleBatchDeliveryResult": "bundle_batch_delivery_service",
     "BundleBatchDeliveryService": "bundle_batch_delivery_service",

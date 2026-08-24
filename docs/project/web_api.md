@@ -49,6 +49,10 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | 分组 | 端点 | 输入 / 过滤 | 行为 | 备注 |
 | --- | --- | --- | --- | --- |
 | 订阅列表 | `GET /subscriptions` | `user_id`、`feed_id`、`feed_link`、`sub_id`、`keyword`、分页 | 调用 `SubscriptionRepository.list_for_dashboard()`，再补 Feed 信息。 | 服务端完成主筛选，前端不要先拉全量再本地过滤。 |
+| Bundle 列表 | `GET /bundles` | `user_id`、`keyword`、`page`、`page_size` | 返回当前 owner 或 Dashboard 管理范围内的 Bundle 摘要。 | 无 `user_id` 时仅使用已注入的 Dashboard Bundle repository 范围。 |
+| Bundle 详情 | `GET /bundles/detail` | `id`、`user_id` | 返回 Bundle、成员、未认领 backlog 和 pending 批次摘要。 | owner 校验由 `BundleCommand.show()` 执行。 |
+| Bundle 写操作 | `POST /bundles/create|update|members|handlers|state|delete` | JSON，ID 为整数 | 复用 Bundle 应用命令；启用、模板、成员和可靠投递保护不在 Web 层复制。 | 冲突响应包含 `error_code` 和可诊断 `details`。 |
+| Bundle 管理测试 | `POST /bundles/test` | `{id, user_id, target_session?}` | 仅 Dashboard 管理权限下抓取并返回只读测试结果。 | 不写水位、inbox、batch 或 history；不注册为 LLM tool。 |
 | 订阅删除 | `POST /unsubscribe` | 订阅 ID / URL，`delete_push_history` | 删除订阅记录。 | 推送历史默认保留；显式传 `delete_push_history=true` 才删除对应历史。 |
 | 批量订阅删除 | `POST /batch/unsubscribe` | 订阅 ID 列表，`delete_push_history` | 批量删除订阅记录。 | 与单条删除保持相同历史保留语义。 |
 | 用户统计 | `GET /users` | 分页 | 按 `user_id` 汇总总订阅数和启用订阅数。 | 更偏统计视图，不是用户编辑详情。 |
@@ -61,7 +65,8 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | URL 测试推送 | `POST /test-url` | Feed URL / RSSHub URL | 按临时目标直发。 | 不读取订阅，不应用订阅默认配置。 |
 | Dashboard 图表 | `GET /dashboard/charts` | `range=24h\|7d\|30d` | 返回 Feed 新鲜度、推送成功率和 Feed 订阅占比。 | 非法 range 按 `7d` 处理；服务端完成聚合，前端只绘图。 |
 | 推送历史列表 | `GET /push-history` | `status`、`user_id`、`target_session`、`feed_link`、`keyword`、分页 | 返回推送历史、媒体、handler trace、失败原因和来源字段。 | 用于排障和审计。 |
-| 推送历史重试 | `POST /push-history/retry` | `history_id` | 复用原记录文本、媒体 URL、目标会话和来源信息立即重发，并把结果写回同一条记录。 | 响应中的 `history_id` 和兼容字段 `source_history_id` 都指向原记录；重试后按最近活动时间回到列表顶部。 |
+| 推送历史重试 | `POST /push-history/retry` | `history_id` | 普通历史沿用旧路径；批次历史按 Subscription/Bundle owner 恢复当前未完成且可运行的输出。 | 成功输出不重复发送；未知历史返回 `HISTORY_NOT_FOUND`。 |
+| 批次丢弃 | `POST /delivery-batches/discard` | `{batch_id, reason?}` | 复用可靠投递仓储显式丢弃 pending 批次并消费已认领输入。 | 未知/未就绪批次返回机器码和 blocker 详情；未认领 backlog 不受影响。 |
 | 推送历史按天清理 | `POST /push-history/cleanup` | 保留天数 | 按最后活动时间清理历史，返回 `removed_count`。 | 最后活动时间取 `created_at`、`updated_at`、`completed_at` 中较新的时间。 |
 | 推送历史清空 | `POST /push-history/clear` | 无 | 清空全部 push history。 | 只删除历史，不删除订阅、Feed 或用户配置。 |
 | 数据概览 | `GET /data-management/overview` | 无 | 统计 cache、exports 的文件数、总大小和分类 breakdown。 | 只统计插件自己的目录。 |

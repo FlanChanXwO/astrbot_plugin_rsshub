@@ -13,6 +13,7 @@ import re
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote, urlparse
 
@@ -41,9 +42,15 @@ from ..application.services.notification_dispatcher import NotificationDispatche
 from ..application.services.route_knowledge_service import (
     RouteKnowledgeSyncService,
 )
+from ..domain.entities.delivery import DeliveryOwner
 from ..domain.entities.handlers import list_handler_registry
 from ..domain.exceptions import DomainException
-from ..domain.repositories.delivery_repository import DeliveryDeletionBlockedError
+from ..domain.repositories.delivery_repository import (
+    DeliveryBatchNotFoundError,
+    DeliveryBatchNotReadyError,
+    DeliveryConsistencyError,
+    DeliveryDeletionBlockedError,
+)
 from ..domain.repositories.feed_repository import FeedRepository
 from ..domain.repositories.push_history_repository import PushHistoryRepository
 from ..domain.repositories.subscription_repository import SubscriptionRepository
@@ -73,6 +80,17 @@ SUGGESTION_SCOPES: dict[str, set[str]] = {
     "users": {"user_id", "keyword"},
     "feeds": {"feed_id", "keyword"},
     "push-history": {"feed_link", "keyword"},
+}
+_BUNDLE_FORMATTING_OPTIONS = {
+    "notify",
+    "send_mode",
+    "length_limit",
+    "display_author",
+    "display_via",
+    "display_title",
+    "display_entry_tags",
+    "style",
+    "display_media",
 }
 
 
@@ -111,6 +129,10 @@ class WebApiHandler:
         template_management_service=None,
         subscription_batch_delivery_service=None,
         delivery_repository=None,
+        bundle_cmd=None,
+        bundle_repository=None,
+        bundle_card_management_service=None,
+        bundle_batch_delivery_service=None,
     ):
         self._sse_clients: list[asyncio.Queue] = []
         self._change_counter: int = 0
@@ -142,6 +164,10 @@ class WebApiHandler:
         self._template_management_service = template_management_service
         self._subscription_batch_delivery_service = subscription_batch_delivery_service
         self._delivery_repository = delivery_repository
+        self._bundle_cmd = bundle_cmd
+        self._bundle_repository = bundle_repository
+        self._bundle_card_management_service = bundle_card_management_service
+        self._bundle_batch_delivery_service = bundle_batch_delivery_service
 
     def register_all(self, context: Context) -> None:
         """注册所有 API 端点到 AstrBot"""
@@ -151,6 +177,20 @@ class WebApiHandler:
             ("GET", "/events", self.handle_events, "SSE 事件推送"),
             ("GET", "/updates", self.handle_updates, "检查更新"),
             ("GET", "/subscriptions", self.handle_list_subscriptions, "列出所有订阅"),
+            ("GET", "/bundles", self.handle_bundles, "列出聚合订阅"),
+            ("GET", "/bundles/detail", self.handle_bundle_detail, "聚合订阅详情"),
+            ("POST", "/bundles/create", self.handle_bundle_create, "创建聚合订阅"),
+            ("POST", "/bundles/update", self.handle_bundle_update, "更新聚合订阅"),
+            ("POST", "/bundles/members", self.handle_bundle_members, "更新聚合成员"),
+            (
+                "POST",
+                "/bundles/handlers",
+                self.handle_bundle_handlers,
+                "更新聚合 handlers",
+            ),
+            ("POST", "/bundles/state", self.handle_bundle_state, "切换聚合状态"),
+            ("POST", "/bundles/test", self.handle_bundle_test, "测试聚合订阅"),
+            ("POST", "/bundles/delete", self.handle_bundle_delete, "删除聚合订阅"),
             ("GET", "/templates", self.handle_templates, "列出卡片模板"),
             (
                 "GET",
@@ -458,6 +498,271 @@ class WebApiHandler:
 
         return jsonify({"ok": True, "items": items, "total": len(items)})
 
+    async def handle_bundle_create(self):
+        """创建停用的 Bundle；成员与配置校验由 BundleCommand 负责。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        name = str(data.get("name", "") or "").strip()
+        user_id = str(data.get("user_id", "") or "").strip()
+        feed_ids = data.get("feed_ids")
+        target_sessions = data.get("target_sessions")
+        if not name or not user_id:
+            return jsonify(_error_payload("name 和 user_id 不能为空"))
+        if not isinstance(feed_ids, list) or not isinstance(target_sessions, list):
+            return jsonify(_error_payload("feed_ids 和 target_sessions 必须是数组"))
+        interval = data.get("interval")
+        if interval is not None:
+            try:
+                interval = int(interval)
+            except (TypeError, ValueError):
+                return jsonify(_error_payload("interval 必须是整数"))
+        result = await self._bundle_cmd.create(
+            user_id=user_id,
+            name=name,
+            feed_ids=feed_ids,
+            target_sessions=target_sessions,
+            interval=interval,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_update(self):
+        """更新 Bundle 配置；格式化字段只接受已声明的安全选项。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        try:
+            bundle_id = int(data.get("id", 0))
+        except (TypeError, ValueError):
+            bundle_id = 0
+        user_id = str(data.get("user_id", "") or "").strip()
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+
+        options: dict[str, Any] = {}
+        for key in (
+            "name",
+            "target_sessions",
+            "interval",
+            "send_card",
+            "template_id",
+            "card_send_original_content",
+        ):
+            if key in data:
+                options[key] = data[key]
+        formatting = data.get("formatting", {})
+        if formatting is None:
+            formatting = {}
+        if not isinstance(formatting, dict):
+            return jsonify(_error_payload("formatting 必须是 JSON 对象"))
+        unsupported = sorted(set(formatting) - _BUNDLE_FORMATTING_OPTIONS)
+        if unsupported:
+            return jsonify(
+                _error_payload(
+                    "formatting 包含不支持的配置项",
+                    "UNSUPPORTED_OPTION",
+                    {"options": unsupported},
+                )
+            )
+        options.update(formatting)
+        if "interval" in options:
+            try:
+                options["interval"] = int(options["interval"])
+            except (TypeError, ValueError):
+                return jsonify(_error_payload("interval 必须是整数"))
+        for key in ("send_card", "card_send_original_content"):
+            if key in options and not isinstance(options[key], bool):
+                return jsonify(_error_payload(f"{key} 必须是 boolean"))
+        result = await self._bundle_cmd.set(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            options=options,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_members(self):
+        """原子替换 Bundle 成员，并保留应用层删除保护。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        feed_ids = data.get("feed_ids")
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        if not isinstance(feed_ids, list):
+            return jsonify(_error_payload("feed_ids 必须是数组"))
+        result = await self._bundle_cmd.replace_members(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            feed_ids=feed_ids,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_handlers(self):
+        """原子替换 Bundle 文档级 handlers。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        handlers = data.get("handlers")
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        if not isinstance(handlers, list):
+            return jsonify(_error_payload("handlers 必须是数组"))
+        result = await self._bundle_cmd.set_handlers(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            handlers=handlers,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_state(self):
+        """切换 Bundle 状态；只有 0/1 才能进入应用命令。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        state = data.get("state")
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        if isinstance(state, bool) or state not in (0, 1, "0", "1"):
+            return jsonify(_error_payload("state 只能是 0 或 1", "INVALID_STATE"))
+        result = await self._bundle_cmd.state(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            enable=int(state) == 1,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_delete(self):
+        """删除 Bundle；未解决 inbox/batch 由应用命令和仓储阻止。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        result = await self._bundle_cmd.delete(bundle_id=bundle_id, user_id=user_id)
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundles(self):
+        """列出当前 Dashboard owner 范围内的 Bundle。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        user_id = str(request.args.get("user_id", "") or "").strip()
+        if user_id:
+            result = await self._bundle_cmd.list(user_id=user_id)
+        elif self._bundle_repository is not None:
+            bundles = await self._bundle_repository.get_all()
+            result = SimpleNamespace(success=True, message="", data=bundles)
+        else:
+            return jsonify(_error_payload("user_id 不能为空"))
+        if not bool(getattr(result, "success", False)):
+            return jsonify(_command_result_payload(result))
+        bundles = list(getattr(result, "data", None) or [])
+        keyword = str(request.args.get("keyword", "") or "").strip().casefold()
+        if keyword:
+            bundles = [
+                bundle
+                for bundle in bundles
+                if keyword in str(getattr(bundle, "name", "") or "").casefold()
+            ]
+        page = request.args.get("page", default=1, type=int) or 1
+        page_size = request.args.get("page_size", default=20, type=int) or 20
+        if page <= 0 or page_size <= 0:
+            return jsonify(_error_payload("page 和 page_size 必须是正整数"))
+        total = len(bundles)
+        start = (page - 1) * page_size
+        items = [
+            _dump_dataclass_like(item) for item in bundles[start : start + page_size]
+        ]
+        return jsonify(
+            {
+                "ok": True,
+                "items": items,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
+
+    async def handle_bundle_detail(self):
+        """查看 Bundle 详情；owner 归属校验由 show 用例执行。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        bundle_id = request.args.get("id", type=int) or 0
+        user_id = str(request.args.get("user_id", "") or "").strip()
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        result = await self._bundle_cmd.show(bundle_id=bundle_id, user_id=user_id)
+        payload = _command_result_payload(result)
+        if payload.get("ok") and self._delivery_repository is not None:
+            owner = DeliveryOwner(owner_type="bundle", owner_id=bundle_id)
+            inbox_items = await self._delivery_repository.list_inbox_items(
+                owner,
+                claimed=False,
+            )
+            pending_batch = await self._delivery_repository.get_pending_batch(owner)
+            data = payload.get("data")
+            if isinstance(data, dict):
+                data["backlog"] = {
+                    "unclaimed_count": len(inbox_items or []),
+                    "items": [_dump_dataclass_like(item) for item in inbox_items or []],
+                }
+                data["pending_batch"] = _delivery_batch_summary(pending_batch)
+        return jsonify(payload)
+
+    async def handle_bundle_test(self):
+        """管理员执行只读 Bundle 测试；不写水位、inbox、批次或历史。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        target_session = data.get("target_session")
+        if target_session is not None:
+            target_session = str(target_session).strip() or None
+        result = await self._bundle_cmd.test(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            is_admin=_dashboard_request_is_admin(),
+            target_session=target_session,
+        )
+        return jsonify(_command_result_payload(result))
+
     async def handle_templates(self):
         """列出全部已安装和内置卡片模板。"""
         if self._template_repository is None:
@@ -468,20 +773,32 @@ class WebApiHandler:
 
     async def handle_template_options(self):
         """列出 owner 严格匹配的模板候选。"""
-        if self._card_management_service is None:
-            return jsonify({"ok": False, "error": "卡片配置服务未初始化"})
         owner_type = str(request.args.get("owner_type", "") or "").strip()
         owner_id = request.args.get("owner_id", type=int)
         user_id = str(request.args.get("user_id", "") or "").strip()
-        if owner_type != "subscription":
-            return jsonify({"ok": False, "error": "当前仅支持 subscription owner"})
+        if owner_type not in {"subscription", "bundle"}:
+            return jsonify(
+                {"ok": False, "error": "owner_type 必须是 subscription 或 bundle"}
+            )
+        if owner_type == "subscription" and self._card_management_service is None:
+            return jsonify({"ok": False, "error": "卡片配置服务未初始化"})
+        if owner_type == "bundle" and self._bundle_card_management_service is None:
+            return jsonify({"ok": False, "error": "Bundle 卡片配置服务未初始化"})
         if not owner_id or not user_id:
             return jsonify({"ok": False, "error": "owner_id 和 user_id 不能为空"})
         try:
-            options = await self._card_management_service.list_template_options(
-                subscription_id=owner_id,
-                user_id=user_id,
-            )
+            if owner_type == "subscription":
+                options = await self._card_management_service.list_template_options(
+                    subscription_id=owner_id,
+                    user_id=user_id,
+                )
+            else:
+                options = (
+                    await self._bundle_card_management_service.list_template_options(
+                        bundle_id=owner_id,
+                        user_id=user_id,
+                    )
+                )
         except (ValueError, PermissionError) as exc:
             return jsonify({"ok": False, "error": str(exc)})
         items = [_dump_dataclass_like(option) for option in options]
@@ -534,12 +851,14 @@ class WebApiHandler:
         )
 
     async def handle_template_preview(self):
-        """零业务副作用生成 Subscription 卡片 PNG。"""
-        if self._card_management_service is None:
-            return jsonify({"ok": False, "error": "卡片预览服务未初始化"})
+        """零业务副作用生成 Subscription 或 Bundle 卡片 PNG。"""
         data = await request.get_json()
         owner_type = str((data or {}).get("owner_type", "") or "").strip()
-        if owner_type != "subscription":
+        if owner_type == "subscription" and self._card_management_service is None:
+            return jsonify({"ok": False, "error": "卡片预览服务未初始化"})
+        if owner_type == "bundle" and self._bundle_card_management_service is None:
+            return jsonify({"ok": False, "error": "Bundle 卡片预览服务未初始化"})
+        if owner_type not in {"subscription", "bundle"}:
             return jsonify({"ok": False, "error": "当前仅支持 subscription owner"})
         try:
             owner_id = int((data or {}).get("owner_id", 0))
@@ -552,11 +871,18 @@ class WebApiHandler:
                 {"ok": False, "error": "owner_id、user_id 和 template_id 不能为空"}
             )
         try:
-            preview = await self._card_management_service.preview(
-                subscription_id=owner_id,
-                user_id=user_id,
-                template_id=template_id,
-            )
+            if owner_type == "subscription":
+                preview = await self._card_management_service.preview(
+                    subscription_id=owner_id,
+                    user_id=user_id,
+                    template_id=template_id,
+                )
+            else:
+                preview = await self._bundle_card_management_service.preview(
+                    bundle_id=owner_id,
+                    user_id=user_id,
+                    template_id=template_id,
+                )
         except (ValueError, PermissionError) as exc:
             return jsonify({"ok": False, "error": str(exc)})
         return jsonify(
@@ -581,7 +907,15 @@ class WebApiHandler:
             removed = await self._template_management_service.delete_template(
                 template_id
             )
-        except (DomainException, ValueError, OSError) as exc:
+        except DomainException as exc:
+            return jsonify(
+                _error_payload(
+                    exc.message,
+                    exc.code,
+                    getattr(exc, "references", None),
+                )
+            )
+        except (ValueError, OSError) as exc:
             return jsonify({"ok": False, "error": str(exc)})
         if removed:
             self._bump_counter()
@@ -2130,6 +2464,7 @@ class WebApiHandler:
         if (
             self._notification_dispatcher is None
             and self._subscription_batch_delivery_service is None
+            and self._bundle_batch_delivery_service is None
         ):
             return jsonify({"ok": False, "error": "retry service unavailable"})
 
@@ -2140,18 +2475,29 @@ class WebApiHandler:
             return jsonify({"ok": False, "error": "history_id 不能为空"})
 
         history = None
-        if self._subscription_batch_delivery_service is not None:
+        if (
+            self._subscription_batch_delivery_service is not None
+            or self._bundle_batch_delivery_service is not None
+        ):
             history = await self._push_history_repo.get_by_id(history_id)
+            if history is None:
+                return jsonify(_error_payload("推送历史不存在", "HISTORY_NOT_FOUND"))
         if history is not None and history.batch_id is not None:
-            if (
-                self._subscription_batch_delivery_service is None
-                or history.sub_id is None
-            ):
-                return jsonify({"ok": False, "error": "批次重试服务不可用"})
-            result = await self._subscription_batch_delivery_service.deliver(
-                history.sub_id,
-                retry_failed=True,
-            )
+            bundle_id = getattr(history, "bundle_id", None)
+            if bundle_id is not None:
+                if self._bundle_batch_delivery_service is None:
+                    return jsonify({"ok": False, "error": "Bundle 批次重试服务不可用"})
+                result = await self._bundle_batch_delivery_service.retry(bundle_id)
+            else:
+                if (
+                    self._subscription_batch_delivery_service is None
+                    or history.sub_id is None
+                ):
+                    return jsonify({"ok": False, "error": "批次重试服务不可用"})
+                result = await self._subscription_batch_delivery_service.deliver(
+                    history.sub_id,
+                    retry_failed=True,
+                )
             self._bump_counter()
             asyncio.create_task(self._broadcast({"event": "data_changed"}))
             return jsonify(
@@ -2207,6 +2553,24 @@ class WebApiHandler:
                 batch_id,
                 reason=reason,
             )
+        except DeliveryBatchNotFoundError as exc:
+            return jsonify(
+                _error_payload(
+                    str(exc),
+                    "DELIVERY_BATCH_NOT_FOUND",
+                    {"batch_id": batch_id},
+                )
+            )
+        except DeliveryBatchNotReadyError as exc:
+            return jsonify(
+                _error_payload(
+                    str(exc),
+                    "DELIVERY_BATCH_NOT_READY",
+                    {"batch_id": exc.batch_id, "blockers": exc.blocking_statuses},
+                )
+            )
+        except DeliveryConsistencyError as exc:
+            return jsonify(_error_payload(str(exc), "DELIVERY_CONSISTENCY_ERROR"))
         except (LookupError, ValueError) as exc:
             return jsonify({"ok": False, "error": str(exc)})
         self._bump_counter()
@@ -2253,7 +2617,10 @@ def _dump_dataclass_like(value: Any) -> dict[str, Any]:
         if isinstance(item, tuple):
             return [_convert(part) for part in item]
         if hasattr(item, "model_dump"):
-            return {key: _convert(part) for key, part in item.model_dump().items()}
+            return {
+                key: _convert(part)
+                for key, part in item.model_dump(by_alias=True).items()
+            }
         if hasattr(item, "__dict__"):
             return {
                 key: _convert(part)
@@ -2263,6 +2630,89 @@ def _dump_dataclass_like(value: Any) -> dict[str, Any]:
         return item
 
     return _convert(value)
+
+
+def _error_payload(
+    message: str,
+    code: str = "REQUEST_ERROR",
+    details: Any | None = None,
+) -> dict[str, Any]:
+    """返回新管理 API 共用的机器可读错误 envelope。"""
+    payload: dict[str, Any] = {
+        "ok": False,
+        "error": message,
+        "error_code": code,
+    }
+    if details is not None:
+        payload["details"] = _dump_dataclass_like(details)
+    return payload
+
+
+def _command_result_payload(result: Any) -> dict[str, Any]:
+    """把应用命令结果转换为稳定的 Web JSON envelope。"""
+    if not bool(getattr(result, "success", False)):
+        message = str(getattr(result, "message", "操作失败"))
+        code = str(getattr(result, "error_code", "") or "") or _infer_error_code(
+            message
+        )
+        return _error_payload(
+            message,
+            code,
+            getattr(result, "details", None),
+        )
+    payload: dict[str, Any] = {
+        "ok": True,
+        "message": str(getattr(result, "message", "") or ""),
+    }
+    data = getattr(result, "data", None)
+    if data is not None:
+        payload["data"] = _dump_dataclass_like(data)
+    return payload
+
+
+def _infer_error_code(message: str) -> str:
+    """兼容尚未结构化的旧命令结果，避免客户端依赖中文文案。"""
+    if "不存在" in message:
+        return "NOT_FOUND"
+    if "无权" in message or "权限" in message:
+        return "FORBIDDEN"
+    if "投递" in message and ("未解决" in message or "阻止" in message):
+        return "DELIVERY_BLOCKED"
+    if "必须" in message or "不能" in message or "无效" in message:
+        return "VALIDATION_ERROR"
+    return "COMMAND_ERROR"
+
+
+def _bundle_identity(data: dict[str, Any]) -> tuple[int, str]:
+    try:
+        bundle_id = int(data.get("id", 0))
+    except (TypeError, ValueError):
+        bundle_id = 0
+    return bundle_id, str(data.get("user_id", "") or "").strip()
+
+
+def _dashboard_request_is_admin() -> bool:
+    """读取 bridge 已完成的 Dashboard 管理权限标记。
+
+    Web API 由宿主 Dashboard bridge 注册并保护；保留显式否决 header 便于
+    集成测试和反向代理传递权限结果，不能用请求体中的任意字段自授予权限。
+    """
+    raw = request.headers.get("X-AstrBot-Admin")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _delivery_batch_summary(batch: Any | None) -> dict[str, Any] | None:
+    if batch is None:
+        return None
+    outputs = list(getattr(batch, "outputs", None) or [])
+    return {
+        "id": getattr(batch, "id", None),
+        "status": getattr(batch, "status", None),
+        "output_count": len(outputs),
+        "output_statuses": [getattr(output, "status", None) for output in outputs],
+    }
 
 
 def _query_values(name: str) -> list[str]:

@@ -28,3 +28,37 @@ class DatabaseCardTemplateReferenceLookup:
                 .limit(1)
             )
             return bundle.scalar_one_or_none() is not None
+
+    async def get_template_references(
+        self, template_id: str
+    ) -> list[dict[str, object]]:
+        """返回引用模板的 Subscription/Bundle owner 摘要。"""
+        references: list[dict[str, object]] = []
+        async with self._database.get_session() as session:
+            subscriptions = await session.execute(
+                select(SubORM.id, SubORM.user_id).where(
+                    SubORM.template_id == template_id
+                )
+            )
+            references.extend(
+                {
+                    "owner_type": "subscription",
+                    "owner_id": owner_id,
+                    "user_id": user_id,
+                }
+                for owner_id, user_id in subscriptions.all()
+            )
+            bundles = await session.execute(
+                select(BundleORM.id, BundleORM.user_id).where(
+                    BundleORM.template_id == template_id
+                )
+            )
+            references.extend(
+                {
+                    "owner_type": "bundle",
+                    "owner_id": owner_id,
+                    "user_id": user_id,
+                }
+                for owner_id, user_id in bundles.all()
+            )
+        return references

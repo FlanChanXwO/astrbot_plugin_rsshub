@@ -140,6 +140,8 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 
 Dashboard 删除用户或 Feed 时，Web API 会先把关联订阅交给可靠投递仓储，在同一写事务中检查未领取 inbox、已领取 inbox 和 `pending` 批次。只要任一订阅被阻塞，整组订阅不执行删除，并返回可定位到用户、Feed 和订阅 ID 的 blocker 计数：
 
+删除预检到最终删除期间，Dashboard 删除与 Bundle owner/member 结构性写操作在同一 AstrBot 进程共享 mutation lock；各仓储自身仍使用 SQLite `BEGIN IMMEDIATE` 保护单次写事务。
+
 - 用户删除响应使用 `blocked_users`，其中 `blockers` 按订阅 ID 分组。
 - Feed 删除响应使用 `blocked_feeds`，其中 `blockers` 按订阅 ID 分组。
 - 用户仍拥有 Bundle 时，`blocked_users` 会报告 `{"bundles": 数量}`；本端点不会级联删除 Bundle，调用方必须先显式删除 Bundle。

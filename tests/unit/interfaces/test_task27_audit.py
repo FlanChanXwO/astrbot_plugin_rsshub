@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,6 +19,9 @@ from astrbot_plugin_rsshub.src.infrastructure.persistence.database import (
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.delivery_repository_impl import (
     DeliveryRepositoryImpl,
+)
+from astrbot_plugin_rsshub.src.infrastructure.persistence.bundle_repository_impl import (
+    get_bundle_mutation_lock,
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.migrations import (
     MigrationRunner,
@@ -127,6 +132,53 @@ async def test_delete_feed_blocks_bundle_member_reference_before_mutation():
     ]
     delivery_repository.delete_subscription_owners.assert_not_awaited()
     feed_repository.delete_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_feed_serializes_bundle_mutation_while_deleting():
+    mutation_lock = get_bundle_mutation_lock()
+    mutation_entered = asyncio.Event()
+    bundle_repository = MagicMock()
+    bundle_repository.get_all = AsyncMock(return_value=[])
+    feed_repository = MagicMock()
+
+    async def delete_many(_feed_ids):
+        async def competing_bundle_write():
+            async with mutation_lock:
+                mutation_entered.set()
+
+        competing_task = asyncio.create_task(competing_bundle_write())
+        await asyncio.sleep(0)
+        assert not mutation_entered.is_set()
+        competing_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await competing_task
+        return 1
+
+    feed_repository.delete_many = delete_many
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(return_value=0)
+    sub_repository = MagicMock()
+    sub_repository.list_for_dashboard = AsyncMock(return_value=[])
+    handler = _handler(
+        bundle_repository=bundle_repository,
+        feed_repo=feed_repository,
+        sub_repo=sub_repository,
+        delivery_repository=delivery_repository,
+        mutation_lock=mutation_lock,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/feeds/delete",
+        method="POST",
+        json={"feed_id": 9},
+    ):
+        response = await handler.handle_delete_feeds()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert not mutation_entered.is_set()
 
 
 @pytest.mark.asyncio

@@ -95,6 +95,7 @@ from .src.infrastructure.messaging import (
     set_bot_self_id_provider,
 )
 from .src.infrastructure.persistence import (
+    get_bundle_mutation_lock,
     get_bundle_repository,
     get_database,
     get_delivery_repository,
@@ -746,6 +747,7 @@ def _register_web_api(
         bundle_repository=deps["bundle_repository"],
         bundle_card_management_service=deps["bundle_card_management_service"],
         bundle_batch_delivery_service=deps["bundle_batch_delivery_service"],
+        mutation_lock=get_bundle_mutation_lock(),
     )
     web_api.register_all(context)
     logger.info("Web API 已注册")

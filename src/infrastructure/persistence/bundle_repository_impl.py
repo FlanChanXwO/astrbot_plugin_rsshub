@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
@@ -19,6 +20,16 @@ from ...domain.repositories.delivery_repository import (
 from .database import DatabaseManager, get_database
 from .delivery_repository_impl import DeliveryRepositoryImpl
 from .models import BundleFeedORM, BundleORM, FeedORM
+
+# Web API 删除用户/Feed 会跨多个仓储完成清理；SQLite 的 BEGIN IMMEDIATE
+# 只能保护单次写事务，因此 Bundle 结构性写操作必须共享同一进程锁，避免
+# 在删除预检与最终删除之间插入新的 owner/member 引用。
+_bundle_mutation_lock = asyncio.Lock()
+
+
+def get_bundle_mutation_lock() -> asyncio.Lock:
+    """返回 Bundle 结构性写操作与 Dashboard 删除共用的进程锁。"""
+    return _bundle_mutation_lock
 
 
 class BundleRepositoryImpl:
@@ -110,6 +121,10 @@ class BundleRepositoryImpl:
                 raise
 
     async def save(self, bundle: Bundle) -> Bundle:
+        async with get_bundle_mutation_lock():
+            return await self._save(bundle)
+
+    async def _save(self, bundle: Bundle) -> Bundle:
         async with self._db.get_session() as session:
             try:
                 await session.execute(text("BEGIN IMMEDIATE"))
@@ -151,9 +166,10 @@ class BundleRepositoryImpl:
                 raise
 
     async def delete(self, bundle_id: int) -> bool:
-        return await self._delivery.delete_owner(
-            DeliveryOwner(owner_type="bundle", owner_id=bundle_id)
-        )
+        async with get_bundle_mutation_lock():
+            return await self._delivery.delete_owner(
+                DeliveryOwner(owner_type="bundle", owner_id=bundle_id)
+            )
 
     async def list_members(self, bundle_id: int) -> list[BundleFeed]:
         async with self._db.get_session() as session:
@@ -165,6 +181,16 @@ class BundleRepositoryImpl:
             return [self._to_member_entity(orm) for orm in result.scalars().all()]
 
     async def add_member(
+        self,
+        bundle_id: int,
+        feed_id: int,
+        *,
+        position: int | None = None,
+    ) -> BundleFeed:
+        async with get_bundle_mutation_lock():
+            return await self._add_member(bundle_id, feed_id, position=position)
+
+    async def _add_member(
         self,
         bundle_id: int,
         feed_id: int,
@@ -224,11 +250,13 @@ class BundleRepositoryImpl:
         bundle_id: int,
         feed_ids: Sequence[int],
     ) -> list[BundleFeed]:
-        await self._delivery.replace_bundle_members(bundle_id, feed_ids)
-        return await self.list_members(bundle_id)
+        async with get_bundle_mutation_lock():
+            await self._delivery.replace_bundle_members(bundle_id, feed_ids)
+            return await self.list_members(bundle_id)
 
     async def remove_member(self, bundle_feed_id: int) -> bool:
-        return await self._delivery.remove_bundle_member(bundle_feed_id)
+        async with get_bundle_mutation_lock():
+            return await self._delivery.remove_bundle_member(bundle_feed_id)
 
     async def move_member(self, bundle_feed_id: int, position: int) -> list[BundleFeed]:
         async with self._db.get_session() as session:

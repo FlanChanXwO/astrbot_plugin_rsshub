@@ -133,6 +133,7 @@ class WebApiHandler:
         bundle_repository=None,
         bundle_card_management_service=None,
         bundle_batch_delivery_service=None,
+        mutation_lock=None,
     ):
         self._sse_clients: list[asyncio.Queue] = []
         self._change_counter: int = 0
@@ -168,6 +169,7 @@ class WebApiHandler:
         self._bundle_repository = bundle_repository
         self._bundle_card_management_service = bundle_card_management_service
         self._bundle_batch_delivery_service = bundle_batch_delivery_service
+        self._mutation_lock = mutation_lock
 
     def register_all(self, context: Context) -> None:
         """注册所有 API 端点到 AstrBot"""
@@ -1081,6 +1083,12 @@ class WebApiHandler:
         return jsonify({"ok": result.success, "message": result.message})
 
     async def handle_delete_user(self):
+        if self._mutation_lock is None:
+            return await self._handle_delete_user()
+        async with self._mutation_lock:
+            return await self._handle_delete_user()
+
+    async def _handle_delete_user(self):
         """删除用户"""
         data = await request.get_json()
         user_ids: list[str] = []
@@ -1478,6 +1486,12 @@ class WebApiHandler:
         return feeds
 
     async def handle_delete_feeds(self):
+        if self._mutation_lock is None:
+            return await self._handle_delete_feeds()
+        async with self._mutation_lock:
+            return await self._handle_delete_feeds()
+
+    async def _handle_delete_feeds(self):
         """删除 Feed，并级联删除对应订阅。"""
         data = await request.get_json()
         feed_ids: list[int] = []

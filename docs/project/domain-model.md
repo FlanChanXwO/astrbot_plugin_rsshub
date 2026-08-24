@@ -14,7 +14,7 @@
 | `send_mode` | `-1` / `0` / `1` | 仅链接 / 自动 / 直接发送 | 旧 `1=Telegraph` 归一化为 `0`，旧 `2=直接消息` 归一化为 `1`。 |
 | `style` | `0` / `1` / `2` | 自动或平台经典 / RSSRT / original | 旧 `flowerss=1` 迁移为 `0`，不恢复 flowerss UI 文案。 |
 | 显示类字段 | 整数状态 | `display_author`、`display_via`、`display_title`、`display_entry_tags`、`display_media` | 需要支持继承，不能简化为 `true/false`。 |
-| `source_type` | `feed` / `agent` | 普通订阅轮询或测试推送 / AI tool 或 XML 即时推送 | `source_key` 必须稳定表达去重范围。 |
+| `source_type` | `feed` / `bundle` / `agent` | Feed 订阅、Bundle 聚合 / AI tool 或 XML 即时推送 | `source_key` 必须稳定表达去重范围。 |
 | `handlers_mode` | disabled / override / inherit 等 | 订阅级 handler 链继承策略 | 只属于订阅配置。 |
 
 配置继承关系：
@@ -33,6 +33,8 @@ subscription option
 | `rsshub_user` | 用户配置通过 `-100` 继承全局默认；`handlers` 保存 JSON handler 链 | `use_user_config`、插件自有 admin / guest 角色。 |
 | `rsshub_user` 事实表 | 订阅或推送历史中出现的非空 `user_id` 都应有对应用户行 | 不要让订阅 / 历史长期引用缺失用户。 |
 | `push_history` | 保存最终可发送文本、原始 XML、媒体上下文、失败原因和 handler trace | 不要把失败历史当成可随意丢弃的临时日志。 |
+| `rsshub_delivery_inbox` | 保存 owner 私有、可幂等认领的 JSON-safe 条目快照 | 不从 handler 输出反推输入消费身份。 |
+| `rsshub_delivery_batch` | 保存 owner、目标、配置/模板/文档快照和 `pending|confirmed|discarded` 状态 | 一个 owner 同时最多一个未解决批次。 |
 
 启动期数据库自愈会从订阅和推送历史补齐缺失用户。删除用户默认删除该用户订阅，但推送历史默认保留，只有显式选择时才删除。
 
@@ -55,7 +57,20 @@ subscription option
 | `skipped` | handler 或多 bot 等价去重压制 | 必须保留审计记录。 |
 | `stopped` | 任务被停止 | 不进入自动重试。 |
 | `source_type=feed` | 正常订阅轮询或测试推送 | `source_key` 应包含稳定 feed/sub 范围。 |
+| `source_type=bundle` | Bundle 多源聚合输出 | `source_key` 固定为 Bundle owner 范围。 |
 | `source_type=agent` | AI tool / XML 即时推送 | 不依赖公开 `sub_id`。 |
+
+## 卡片与 Bundle 字段
+
+`Subscription` 与 `Bundle` 都保留以下三个向后兼容字段；普通路径的默认值不改变：
+
+| 字段 | 默认值 | 语义 |
+| --- | --- | --- |
+| `send_card` | `false` | 是否先生成并发送模板卡片。 |
+| `template_id` | `null` | 开启卡片时必须由应用服务校验存在、ID 一致且匹配 owner。 |
+| `card_send_original_content` | `false` | 卡片成功后是否继续发送 standard 输出。 |
+
+可靠批次的输出状态为 `waiting|pending|retrying|success|failed|stopped|skipped|discarded`。只有 `success` 或规则性 `skipped` 可以确认批次；显式 `discarded` 会消费本批已认领 inbox，但不会清理未认领 backlog。
 
 ## 配置模型归属
 

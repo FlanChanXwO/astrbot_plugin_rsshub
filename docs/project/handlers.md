@@ -165,3 +165,7 @@ RSS 推送是持续型基础设施。AI provider 失败、超时、返回脏 JSO
 Bundle 不把完整 RSS channel 拆成 entry 后套用订阅 handler。`BundleDocumentHandlerRuntime` 以 `Bundle.handlers` 的配置顺序运行独立的文档级 `ai_filter` / `ai_transform`：过滤器读取整份文档并返回 `allow/reason`；plaintext 改写更新 `document.text`；XML 改写必须返回合法 RSS 2.0 文档，并按输出 item 重建模板可见的 `entries` 与文档文本。XML 输出会拒绝 malformed、DOCTYPE 和 ENTITY。
 
 文档 handler 失败时沿用增强层 fallback：provider 不可用、非法 JSON/XML、provider 异常均不覆盖上一步文档，并在同一文档 trace 中记录原因。handler 可以改变输出文档的删、增、改、排，但可靠投递的 `consumption_item_keys` 永远取自输入 inbox，不从输出 XML 推断。
+
+## 与卡片模板的边界
+
+handler 总在模板渲染之前执行。`SubscriptionBatchDeliveryService` 和 `BundleBatchDeliveryService` 只把 handler 后的 JSON-safe `entries`、`document`、来源与 `meta` 放入批次快照；模板不能访问 provider、领域实体、文件系统或原始 handler 对象。重试读取同一份快照和已保存的 HTML/PNG 产物，因此不会因为 handler、成员配置或模板覆盖而改变已经创建的批次。

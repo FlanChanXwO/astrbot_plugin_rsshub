@@ -8,6 +8,8 @@ Plugin Pages 提供：
 
 - 左侧导航与独立「概览」页，用于查看总订阅、启用订阅、Feed 源、用户数和健康度图表。
 - 订阅、Feed、用户列表管理。
+- Bundle 聚合订阅和成员顺序、状态、backlog 管理。
+- 卡片模板列表、安装、候选筛选、预览和引用保护删除。
 - 推送历史查询、筛选、重试和清理。
 - 默认订阅设置。
 - 用户/订阅 handler 链编辑。
@@ -21,11 +23,17 @@ Plugin Pages 不创建新订阅，也不提供 TOML 导入导出。新增、导�
 
 Feed 列表支持编辑和删除。删除 Feed 会删除对应订阅；用户、订阅和 Feed 删除时推送历史默认保留，只有在确认中显式选择时才一起删除。
 
+## Bundle 与卡片模板
+
+Bundle 页面只管理已有 Feed 成员，不在 Pages 创建 Bundle 或发现新 Feed。详情页展示成员 position、最近采集状态、未认领 backlog 和 pending batch；移除成员或删除 Bundle 遇到已认领/未认领输入时会显示机器可读的阻塞详情。
+
+卡片模板页展示内置和已安装包的 metadata。Subscription/Bundle 编辑侧栏只显示通过 owner 匹配校验的候选模板，并提供 `send_card`、`card_send_original_content` 和非持久化预览。模板预览会运行当前 handler，但不修改水位、inbox、batch 或 history；模板删除前会检查活动引用。
+
 ## 概览图表
 
 概览页提供三类只读图表：Feed 新鲜度、推送成功率和 Feed 订阅占比。时间范围固定为 24 小时、1 周和 1 个月，默认 1 周。
 
-Feed 新鲜度按最近一次成功解析保存时间与订阅监控间隔分档；推送成功率按 `success / (success + failed + stopped + skipped)` 计算，`pending` 只作为积压参考；Feed 订阅占比展示 Top 8，其余合并为「其他」。图表库作为本地静态资源随插件提供，不依赖 CDN。
+Feed 新鲜度按最近一次成功解析保存时间与订阅监控间隔分档；推送成功率按 `success / (success + failed)` 计算，`stopped` / `skipped` / `pending` / `retrying` 只作为参考计数或积压参考；Feed 订阅占比展示 Top 8，其余合并为「其他」。图表库作为本地静态资源随插件提供，不依赖 CDN。
 
 ## 用户与默认设置
 

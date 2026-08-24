@@ -22,6 +22,8 @@
 
 Bundle LLM tools 只使用当前事件 owner，不暴露 `test`、`retry`、`discard` 等高风险操作。
 
+Subscription 的配置 LLM tool 只支持卡片开关和成功后的 standard 行为：`send_card`、`card_send_original_content`；Bundle 的 `rss_bundle_set_option` 另外支持 `template_id`。模板 ID 不能绕过应用层的存在、owner 和全部成员 Feed 匹配校验。LLM tool 不直接触发卡片 retry/discard；模板候选、预览和安装由 Plugin Pages/Web API 完成。卡片批次失败时请先用 `rss_list_push_history` 查看 batch/output 状态，再使用管理页面或批次 Web API 处理。
+
 RSSHub 路由检索后续走 AstrBot 知识库和 route skill；插件不再提供 route 搜索 LLM tool。
 
 ## Agent 推荐顺序

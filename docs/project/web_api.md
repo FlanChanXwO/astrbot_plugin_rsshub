@@ -53,6 +53,11 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | Bundle 详情 | `GET /bundles/detail` | `id`、`user_id` | 返回 Bundle、成员、未认领 backlog 和 pending 批次摘要。 | owner 校验由 `BundleCommand.show()` 执行。 |
 | Bundle 写操作 | `POST /bundles/create|update|members|handlers|state|delete` | JSON，ID 为整数 | 复用 Bundle 应用命令；启用、模板、成员和可靠投递保护不在 Web 层复制。 | 冲突响应包含 `error_code` 和可诊断 `details`。 |
 | Bundle 管理测试 | `POST /bundles/test` | `{id, user_id, target_session?}` | 仅 Dashboard 管理权限下抓取并返回只读测试结果。 | 不写水位、inbox、batch 或 history；不注册为 LLM tool。 |
+| 卡片模板列表 | `GET /templates` | `owner_type`、`owner_id` 可选 | 列出已安装与内置模板 metadata。 | 返回的 repository 只允许安全 HTTP(S) 链接。 |
+| 卡片模板候选 | `GET /templates/options` | `owner_type`、`owner_id` | 按 Feed/Bundle owner 过滤可匹配模板。 | 无匹配模板时 Pages 不允许保存 `send_card=true`。 |
+| 卡片模板安装 | `POST /templates/install` | multipart `archive` 或 JSON `{url, allow_insecure_http}` | 安装或原子覆盖模板包。 | HTTP 明文必须显式确认；ZIP 路径、符号链接和 metadata 先校验。 |
+| 卡片模板预览 | `POST /templates/preview` | `{owner_type, owner_id, template_id}` | 抓取当前 owner 数据、运行 handler 并返回 PNG base64。 | 不写水位、inbox、batch 或 history。 |
+| 卡片模板删除 | `POST /templates/delete` | `{template_id}` | 删除未被 Subscription/Bundle 引用的模板。 | 活动引用返回机器可读冲突详情。 |
 | 订阅删除 | `POST /unsubscribe` | 订阅 ID / URL，`delete_push_history` | 删除订阅记录。 | 推送历史默认保留；显式传 `delete_push_history=true` 才删除对应历史。 |
 | 批量订阅删除 | `POST /batch/unsubscribe` | 订阅 ID 列表，`delete_push_history` | 批量删除订阅记录。 | 与单条删除保持相同历史保留语义。 |
 | 用户统计 | `GET /users` | 分页 | 按 `user_id` 汇总总订阅数和启用订阅数。 | 更偏统计视图，不是用户编辑详情。 |
@@ -95,6 +100,10 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | `entry_title` / `entry_link` / `entry_guid` | 条目身份字段 | 用于展示和排障。 |
 | `feed_title` / `feed_link` | Feed 展示字段 | 用于跨页面联动过滤。 |
 | `sub_id` | 订阅 ID | 可能被删除后复用，不能单独作为长期身份。 |
+| `batch_id` | 可靠投递批次 ID | 同一 owner 的 card/standard history 以此分组。 |
+| `bundle_id` | Bundle 来源 ID | Bundle history 没有 `sub_id` 时使用。 |
+| `output_kind` / `output_order` | 输出类型与同 target 顺序 | `card` 固定为 order 0，standard 受 card gate 约束。 |
+| `source_context` | 模板、文档、发送参数和来源快照 | 重试必须复用，不重新读取当前配置。 |
 
 ## Dashboard 图表口径
 

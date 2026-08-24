@@ -40,6 +40,8 @@ flowchart TD
 
 卡片 Subscription 是旁路的可靠批次分支：完整 `new_entries` 不受 `history_entry_limit` 影响，先与 Feed 水位在同一事务中扇出到各 owner inbox；普通 Subscription 仍走逐条 `NotificationDispatcher`。入箱成功后会立即尝试推进卡片批次，失败或 backlog 则由 scheduler 后续周期继续处理。
 
+Bundle 复用抓取和解析端口，但使用 `BundleFeed` 私有指纹与条件请求水位。`BundleCollectionService` 按成员 `position` 串行调用 `fetch_feed_entries()`，成功发现通过 `DeliveryRepository.store_bundle_discovery()` 将 inbox 和成员水位一起提交；304、抓取/解析失败或事务异常不会推进失败成员水位，并继续处理后续成员。采集完成后，scheduler 在同一轮推进 `BundleBatchDeliveryService`，由批次服务负责 handler、卡片/标准输出和历史。
+
 ## 输入与输出
 
 ### 主要输入

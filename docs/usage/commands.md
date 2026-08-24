@@ -60,6 +60,20 @@
 /sub_session get
 ```
 
+## Bundle 聚合订阅
+
+| 命令 | 说明 |
+| --- | --- |
+| `/bundle create <名称> <Feed...>` | 创建 Bundle；启用时至少需要两个不同 Feed 和一个目标会话。 |
+| `/bundle list` / `/bundle show <ID>` | 查看当前用户 Bundle、成员顺序、状态和 backlog。 |
+| `/bundle add|remove|move ...` | 原子维护已有 Feed 成员；有未解决 inbox/batch 时按保护规则拒绝破坏性操作。 |
+| `/bundle set|state ...` | 修改聚合配置、handlers 和启停状态；卡片模板必须匹配全部成员。 |
+| `/bundle test <ID>` | 管理员只读抓取测试，不写水位、inbox、batch 或 history。 |
+| `/bundle retry|discard <ID>` | 重试或显式丢弃当前 pending batch；不影响未认领 backlog。 |
+| `/bundle delete <ID>` | 删除 Bundle；存在未解决可靠投递数据时返回阻塞详情。 |
+
+`/聚合订阅` 是 `/bundle` 的中文命令组别名。`/bundle set <ID> template_id <模板 ID>` 可以选择已安装模板，但仍由应用层校验模板存在、当前用户归属和全部成员 Feed 匹配；模板候选、预览和安装请在 Plugin Pages/Web API 完成。
+
 ## 帮助与测试
 
 | 命令 | 中文别名 | 说明 |

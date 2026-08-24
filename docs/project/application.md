@@ -38,6 +38,10 @@
 
 `src/application/llmtools/` 按订阅、配置、handlers、历史和 XML 直推拆分工具实现；公开入口仍是 `build_llm_tools` 与 `LLM_TOOL_NAMES`。这次拆分只改变代码组织和工具说明，不改变公开参数 schema。
 
+### 卡片模板与预览
+
+卡片模板由 `CardTemplatePackageRepository` 管理内置包和安装包，内置包当前包括 `astrbot_plugin_rsshub_card_juya`（Feed）与 `astrbot_plugin_rsshub_card_bundle`（Bundle）。`CardTemplateService` 在批次创建时固化 metadata、HTML、partials 和受控 assets；预览则调用同一套 owner/handler/template 校验，但不得写 Feed 水位、inbox、batch 或 push history。模板只接收 handler 后的 JSON-safe 快照，渲染失败不回退为普通发送。
+
 ## 订阅、用户与历史语义
 
 ### Bundle 成员采集
@@ -58,7 +62,7 @@ Bundle 的 `ai_filter` 与 `ai_transform` 在完整 channel 上运行，和现�
 
 `OutputOrchestrator` 对每个目标会话按 `card → standard` 编排：卡片失败、停止或未确认时不会发送同批 standard；卡片成功或规则性 skip 后才发送 standard。发送成功、规则性 skip、失败、取消停止、自动重试和显式 discard 都通过可靠投递仓储更新 history、batch 与 inbox。进程可能在发送后、confirm 前退出，下一次推进会先 reconciliation，已确认或已丢弃的历史批次不会被重新发送。
 
-`RSSScheduler` 每轮先处理到期 Bundle 成员采集，再推进 Bundle 批次重试，并将 `next_check_time` 沿原滚动计划推进到首个未来周期；采集失败不会阻止后续 Bundle 或普通 Subscription。运行时 bootstrap 为 Bundle 单独实例化文档服务、输出执行器和批次服务，同时复用共享的 history/delivery 仓储。
+`RSSScheduler` 每轮依次处理到期 Bundle 成员采集、Subscription 卡片批次重试、Bundle 批次重试、旧 `PushHistory` pending 重试，最后执行普通 Subscription Feed 轮询；Bundle 的 `next_check_time` 沿原滚动计划推进到首个未来周期，采集失败不会阻止后续 Bundle 或普通 Subscription。运行时 bootstrap 为 Bundle 单独实例化文档服务、输出执行器和批次服务，同时复用共享的 history/delivery 仓储。
 
 | 主题 | 当前语义 | 备注 |
 | --- | --- | --- |

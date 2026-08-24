@@ -12,6 +12,7 @@
   - 配置项、继承语义、默认值或兼容规则变化
   - handler、AI、sender、KB、push history、queue、dedup 算法变化
   - 仓储查询语义、测试推送路径、失败重试语义变化
+  - card template、Bundle 采集、可靠 inbox/batch 或 card→standard gate 变化
 - 修改 repo-wide 维护规则或 agent 入口约定时，同步更新 `AGENTS.md` 和 `CLAUDE.md`。
 
 ## 入口与分层
@@ -75,6 +76,9 @@
 - sender 降级和媒体缓存
 - push history retry / dedup / skipped 审计
 - handler 链继承和 trace
+- card / Bundle 跨层链路：抓取、handler 后快照、模板、history、retry/discard
+
+跨层投递变更至少同步检查以下专题：[`architecture.md`](../project/architecture.md)、[`domain-model.md`](../project/domain-model.md)、[`repositories.md`](../project/repositories.md)、[`polling.md`](../project/polling.md)、[`dispatch.md`](../project/dispatch.md)、[`handlers.md`](../project/handlers.md)、[`application.md`](../project/application.md)、[`web_api.md`](../project/web_api.md)、[`plugin-pages.md`](../usage/plugin-pages.md) 和 [`testing.md`](./testing.md)。
 
 ## 仓库体积
 

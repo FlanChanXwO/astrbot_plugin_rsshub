@@ -11,6 +11,9 @@
 | 集成分类测试 | AstrBot 根目录 | `uv run python data/plugins/astrbot_plugin_rsshub/tests/run_tests.py --category integration` |
 | shell 分类单测 | 插件目录 | `./tests/run_tests.sh --category unit` |
 | shell 分类集成 | 插件目录 | `./tests/run_tests.sh --category integration` |
+| Feed/Bundle 可靠投递跨层 | 插件目录 | `uv run python -m pytest tests/integration/test_delivery_end_to_end.py -q` |
+| Plugin Pages 单测 | 插件目录 | `node --test tests/frontend/*.mjs` |
+| Dashboard JS 语法 | 插件目录 | `find pages/dashboard -name '*.js' -print0 \| xargs -0 -n1 node --check` |
 
 > [!TIP]
 > 从 IDE 直接运行脚本时，优先使用 `tests/run_tests.sh --category ...` 或 `python tests/run_tests.py --category ...`，避免当前 shell 的隐式目录影响结果。
@@ -37,6 +40,7 @@ uv pip install --python .venv/bin/python -r data/plugins/astrbot_plugin_rsshub/r
 | 配置或迁移 | 相关配置 / migration 测试 | 旧配置兼容、`_conf_schema.json`、旧 sqlite、旧 TOML | 脏配置和旧库要能被容忍。 |
 | sender / 媒体 | sender 单测、媒体下载相关测试 | OneBot、QQ Official、Telegram、Weixin OC 关键路径 | 这四个平台是当前明确测试覆盖点。 |
 | handler runtime | handler 相关单测 | `ai_filter`、`ai_transform plaintext/xml`、trace 写入 | handler 失败默认不能阻断 RSS。 |
+| card / Bundle delivery | `tests/integration/test_delivery_end_to_end.py` | 真实 SQLite inbox/batch/history、handler 后快照、card gate、retry/discard | 发送端只 mock 系统边界；不得用字典/字符串模拟整个业务链。 |
 
 ## QQ Official 媒体探针
 
@@ -89,3 +93,6 @@ stty echo
 - [ ] `-100` 继承规则没有被破坏。
 - [ ] OneBot 媒体/文本顺序没有回退。
 - [ ] Plugin Pages 没有重新暴露 `link_preview`。
+- [ ] Feed 卡片覆盖抓取 → handler → card/standard → history → retry。
+- [ ] Bundle 覆盖多成员抓取 → RSS 2.0/handler → card/standard → history → retry/discard。
+- [ ] 模板预览没有写水位、inbox、batch 或 history；重试复用原快照。

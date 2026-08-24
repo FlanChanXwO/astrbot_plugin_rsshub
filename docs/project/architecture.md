@@ -123,9 +123,13 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 
 `BundleBatchDeliveryService` 在 Bundle owner 锁内恢复 pending 批次或从未认领 inbox 创建批次，并把不可变 document/template/send 快照交给独立的 `BundleOutputExecutor`。它只认领文档实际消费的原始 item key；`OutputOrchestrator` 复用公共 card 前置门、逐目标执行、失败重试和取消停止语义。批次在输出全部 success/skipped 后才 confirm，进程中断时下一轮先 reconciliation，避免重建或重复发送已终结批次。
 
-`RSSScheduler` 的 Bundle 顺序是“到期成员采集 → 批次重试 → 旧 pending 重试 → 普通 Feed 轮询”。每次到期采集后沿既有 `next_check_time` 和 `interval` 推进下次时间，按计划点滚动而不按完成时间漂移；单个 Bundle 的采集、批次推进或时间更新异常只隔离当前 owner。`bootstrap.py` 将 Bundle 文档服务、输出执行器、批次服务和调度器连接起来，Bundle 与 Subscription 共享可靠 history/delivery 仓储但不共享输出快照。
+`RSSScheduler` 每轮顺序是“到期成员采集 → Subscription 卡片批次重试 → Bundle 批次重试 → 旧 `PushHistory` pending 重试 → 普通 Feed 轮询”。每次到期采集后沿既有 `next_check_time` 和 `interval` 推进下次时间，按计划点滚动而不按完成时间漂移；单个 Bundle 的采集、批次推进或时间更新异常只隔离当前 owner。`bootstrap.py` 将 Bundle 文档服务、输出执行器、批次服务和调度器连接起来，Bundle 与 Subscription 共享可靠 history/delivery 仓储但不共享输出快照。
 
-### 5. 测试推送
+### 5. 卡片模板与快照边界
+
+`CardTemplatePackageRepository` 同时发现内置包和安装包；当前内置包分别面向 Juya Feed 与通用 Bundle。应用服务在创建可靠批次前校验 owner、模板 metadata 和全部 Feed pattern，并由 `CardTemplateService` 固化入口 HTML、partials、assets、metadata 与 handler 后文档。`CardRenderer`/输出执行器只消费 JSON-safe `source/feed|bundle/entries/document/meta` 上下文，HTML、PNG 和发送参数在 history 中 checkpoint；重试不重新读取安装目录或重新运行 handler。
+
+### 6. 测试推送
 
 - 当目标是 `sub_id` 时，走正式 dispatcher 链路，应用订阅配置和 handlers。
 - 当目标是 URL 时，走轻量直发链路，不读取订阅配置。
@@ -135,7 +139,7 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 - 真实订阅回归验证
 - 临时 URL 手工测试
 
-### 6. Handler 处理链
+### 7. Handler 处理链
 
 - `subscription.handlers_mode` 决定继承、覆盖或禁用
 - builtin handler 当前支持：
@@ -149,7 +153,7 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 
 详见 [`handlers.md`](./handlers.md)。
 
-### 7. XML 即时推送
+### 8. XML 即时推送
 
 AI tool `rss_push_xml_entry` 不依赖 `sub_id`。它直接：
 
@@ -227,6 +231,8 @@ flowchart TD
 Plugin Pages 当前管理：
 
 - 订阅列表
+- Bundle 聚合订阅与成员顺序
+- 卡片模板安装、候选、预览和引用保护删除
 - 用户列表
 - Feed 列表
 - 推送历史
@@ -254,6 +260,8 @@ Plugin Pages 当前不负责：
 - `media_urls`: 媒体链接
 - `handler_trace`: handler 执行摘要
 - `fail_reason`: 失败原因
+- `batch_id` / `output_kind` / `output_order`: 可靠批次和 card→standard 顺序
+- `source_context`: 模板、文档、发送参数和来源快照
 
 因此，任何内容链路改动都要优先保证 history 可读性不回退。
 
@@ -261,6 +269,9 @@ Plugin Pages 当前不负责：
 
 - [`polling.md`](./polling.md)
 - [`dispatch.md`](./dispatch.md)
+- [`repositories.md`](./repositories.md)
+- [`application.md`](./application.md)
+- [`web_api.md`](./web_api.md)
 - [`handlers.md`](./handlers.md)
 - [`formatting.md`](./formatting.md)
 - [`knowledge.md`](./knowledge.md)

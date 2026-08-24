@@ -46,6 +46,7 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     }
     captured_polling_kwargs: dict[str, object] = {}
     card_delivery_service = object()
+    bundle_delivery_service = object()
 
     def build_polling_service(**kwargs):
         captured_polling_kwargs.update(kwargs)
@@ -77,13 +78,18 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     )
     monkeypatch.setattr(
         bootstrap,
+        "BundleBatchDeliveryService",
+        MagicMock(return_value=bundle_delivery_service),
+    )
+    monkeypatch.setattr(
+        bootstrap,
         "build_route_knowledge_source",
         AsyncMock(return_value=object()),
     )
     monkeypatch.setattr(bootstrap, "AstrBotRouteKnowledgeRepository", MagicMock())
     monkeypatch.setattr(bootstrap, "RouteKnowledgeSyncService", MagicMock())
 
-    await bootstrap._build_dependencies(
+    deps, _ = await bootstrap._build_dependencies(
         app_settings=ApplicationSettings(media=MediaSettings()),
         sender_provider=MagicMock(),
         push_job_queue=MagicMock(),
@@ -93,6 +99,53 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     assert (
         captured_polling_kwargs["subscription_batch_delivery_service"]
         is card_delivery_service
+    )
+    assert deps["bundle_batch_delivery_service"] is bundle_delivery_service
+
+
+@pytest.mark.asyncio
+async def test_start_scheduler_wires_bundle_collection_and_delivery(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeScheduler:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self._running = False
+            self._bg_task = None
+
+        async def start(self):
+            self._running = True
+
+    monkeypatch.setattr(bootstrap, "RSSScheduler", FakeScheduler)
+
+    def create_task(coro):
+        coro.close()
+        return MagicMock()
+
+    monkeypatch.setattr(bootstrap.asyncio, "create_task", create_task)
+    app_settings = SimpleNamespace(
+        scheduler=SimpleNamespace(default_interval=10, history_retention_days=30)
+    )
+    deps = {
+        "polling_service": object(),
+        "subscription_batch_delivery_service": object(),
+        "bundle_repository": object(),
+        "bundle_collection_service": object(),
+        "bundle_batch_delivery_service": object(),
+    }
+
+    scheduler = await bootstrap._start_scheduler(
+        app_settings=app_settings,
+        deps=deps,
+        notification_dispatcher=object(),
+    )
+
+    assert isinstance(scheduler, FakeScheduler)
+    assert captured["bundle_repository"] is deps["bundle_repository"]
+    assert captured["bundle_collection_service"] is deps["bundle_collection_service"]
+    assert (
+        captured["bundle_batch_delivery_service"]
+        is deps["bundle_batch_delivery_service"]
     )
 
 

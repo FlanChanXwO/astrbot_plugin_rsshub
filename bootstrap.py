@@ -35,9 +35,17 @@ from .src.application.queries import (
     SearchFeedsQuery,
 )
 from .src.application.services.agent_xml_push_service import AgentXmlPushService
+from .src.application.services.bundle_batch_delivery_service import (
+    BundleBatchDeliveryService,
+)
 from .src.application.services.bundle_collection_service import (
     BundleCollectionService,
 )
+from .src.application.services.bundle_document_service import (
+    BundleDocumentHandlerRuntime,
+    BundleDocumentService,
+)
+from .src.application.services.bundle_output_executor import BundleOutputExecutor
 from .src.application.services.card_renderer import CardRenderer
 from .src.application.services.card_template_service import (
     CardTemplateDownloadService,
@@ -153,6 +161,8 @@ class PluginDeps(TypedDict, total=False):
     delivery_repository: Any
     bundle_repository: Any
     bundle_collection_service: BundleCollectionService
+    bundle_document_service: BundleDocumentService
+    bundle_batch_delivery_service: BundleBatchDeliveryService
 
 
 @dataclass(slots=True)
@@ -300,9 +310,9 @@ def _register_bot_client_provider(context: Context) -> None:
                 )
                 if inst_name == platform_name and hasattr(inst, "get_client"):
                     return inst.get_client()
-        except Exception as exc:
+        except Exception:
             logger.debug(
-                "解析 bot client 失败: platform=%s, err=%s", platform_name, exc
+                "解析 bot client 失败: platform=%s", platform_name, exc_info=True
             )
         return None
 
@@ -478,6 +488,15 @@ async def _build_dependencies(
         output_executor,
         delivery_repo,
     )
+    bundle_output_executor = BundleOutputExecutor(
+        notification_dispatcher=notification_dispatcher,
+        card_renderer=card_renderer,
+    )
+    bundle_output_orchestrator = OutputOrchestrator(
+        push_history_repo,
+        bundle_output_executor,
+        delivery_repo,
+    )
     subscription_batch_delivery_service = SubscriptionBatchDeliveryService(
         delivery_repository=delivery_repo,
         subscription_repository=sub_repo,
@@ -509,6 +528,22 @@ async def _build_dependencies(
         polling_service=polling_service,
         delivery_repository=delivery_repo,
         rss_settings=app_settings.rss,
+    )
+    bundle_document_service = BundleDocumentService(
+        handler_runtime=BundleDocumentHandlerRuntime(context=context),
+    )
+    bundle_batch_delivery_service = BundleBatchDeliveryService(
+        delivery_repository=delivery_repo,
+        bundle_repository=bundle_repo,
+        feed_repository=feed_repo,
+        template_repository=template_repository,
+        template_service=template_service,
+        document_service=bundle_document_service,
+        output_orchestrator=bundle_output_orchestrator,
+        notification_dispatcher=notification_dispatcher,
+        user_repository=user_repo,
+        history_entry_limit=app_settings.scheduler.history_entry_limit,
+        max_retries=app_settings.basic.failed_queue_max_retries,
     )
     card_management_service = SubscriptionCardManagementService(
         subscription_repository=sub_repo,
@@ -605,6 +640,8 @@ async def _build_dependencies(
         delivery_repository=delivery_repo,
         bundle_repository=bundle_repo,
         bundle_collection_service=bundle_collection_service,
+        bundle_document_service=bundle_document_service,
+        bundle_batch_delivery_service=bundle_batch_delivery_service,
     )
     return deps, notification_dispatcher
 
@@ -619,6 +656,9 @@ async def _start_scheduler(
         feed_polling_service=deps["polling_service"],
         notification_dispatcher=notification_dispatcher,
         subscription_batch_delivery_service=deps["subscription_batch_delivery_service"],
+        bundle_repository=deps["bundle_repository"],
+        bundle_collection_service=deps["bundle_collection_service"],
+        bundle_batch_delivery_service=deps["bundle_batch_delivery_service"],
         default_interval=app_settings.scheduler.default_interval,
         history_retention_days=app_settings.scheduler.history_retention_days,
     )
@@ -629,8 +669,8 @@ async def _start_scheduler(
         while scheduler._running:
             try:
                 await scheduler.run_periodic_task()
-            except Exception as e:
-                logger.exception("RSS 定时任务执行异常: %s", e)
+            except Exception:
+                logger.exception("RSS 定时任务执行异常")
             await asyncio.sleep(60)
 
     scheduler._bg_task = asyncio.create_task(_run_periodic())

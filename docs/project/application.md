@@ -50,6 +50,14 @@ Bundle 的成员由 `BundleFeed.position` 定义稳定顺序，采集由 `Bundle
 
 Bundle 的 `ai_filter` 与 `ai_transform` 在完整 channel 上运行，和现有 entry handler 使用独立输入契约。provider 不可用、非法 JSON/XML 或 handler 异常会记录文档级 trace 并保留上一步快照；过滤拒绝只改变输出允许状态。`consumption_item_keys` 始终来自原始 inbox 条目，不能从 handler 改写后的 XML 反推，后续批次确认或丢弃据此消费原始输入。
 
+### Bundle 可靠投递与调度
+
+`BundleBatchDeliveryService` 以 `(owner_type=bundle, owner_id)` 为并发边界：先恢复并 reconciliation 现有 pending 批次，再从未认领 inbox 创建一个新批次。文档生成后只认领本批实际消费的 `item_key`，因此成员级 `history_entry_limit` 留下的 backlog 会进入后续批次；批次中的 document、template、send payload 和 Feed 上下文均为不可变快照。
+
+`OutputOrchestrator` 对每个目标会话按 `card → standard` 编排：卡片失败、停止或未确认时不会发送同批 standard；卡片成功或规则性 skip 后才发送 standard。发送成功、规则性 skip、失败、取消停止、自动重试和显式 discard 都通过可靠投递仓储更新 history、batch 与 inbox。进程可能在发送后、confirm 前退出，下一次推进会先 reconciliation，已确认或已丢弃的历史批次不会被重新发送。
+
+`RSSScheduler` 每轮先处理到期 Bundle 成员采集，再推进 Bundle 批次重试，并将 `next_check_time` 沿原滚动计划推进到首个未来周期；采集失败不会阻止后续 Bundle 或普通 Subscription。运行时 bootstrap 为 Bundle 单独实例化文档服务、输出执行器和批次服务，同时复用共享的 history/delivery 仓储。
+
 | 主题 | 当前语义 | 备注 |
 | --- | --- | --- |
 | 配置继承 | 订阅继承用户，用户继承全局默认；继承值只认 `-100` | 不恢复 `use_sub_config` / `use_user_config`。 |

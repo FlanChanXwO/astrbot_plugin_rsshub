@@ -119,7 +119,13 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 
 `BundleDocumentService` 消费已认领的 Bundle inbox 快照，组合 `BundleDocumentBuilder` 与 `BundleDocumentHandlerRuntime`。builder 只依赖成员 position、Feed 元数据和原始 item key，生成可验证的 RSS 2.0 channel；handler runtime 处理完整文档而不改变 `ContentHandlerRuntime` 的 entry 输入契约。文档 handler 的结果同时保留 handler 后的 text/XML 和原始 `consumption_item_keys`，供后续可靠批次在 skip、确认或 discard 时消费正确输入。
 
-### 3. 测试推送
+### 4. Bundle 可靠投递
+
+`BundleBatchDeliveryService` 在 Bundle owner 锁内恢复 pending 批次或从未认领 inbox 创建批次，并把不可变 document/template/send 快照交给独立的 `BundleOutputExecutor`。它只认领文档实际消费的原始 item key；`OutputOrchestrator` 复用公共 card 前置门、逐目标执行、失败重试和取消停止语义。批次在输出全部 success/skipped 后才 confirm，进程中断时下一轮先 reconciliation，避免重建或重复发送已终结批次。
+
+`RSSScheduler` 的 Bundle 顺序是“到期成员采集 → 批次重试 → 旧 pending 重试 → 普通 Feed 轮询”。每次到期采集后沿既有 `next_check_time` 和 `interval` 推进下次时间，按计划点滚动而不按完成时间漂移；单个 Bundle 的采集、批次推进或时间更新异常只隔离当前 owner。`bootstrap.py` 将 Bundle 文档服务、输出执行器、批次服务和调度器连接起来，Bundle 与 Subscription 共享可靠 history/delivery 仓储但不共享输出快照。
+
+### 5. 测试推送
 
 - 当目标是 `sub_id` 时，走正式 dispatcher 链路，应用订阅配置和 handlers。
 - 当目标是 URL 时，走轻量直发链路，不读取订阅配置。
@@ -129,7 +135,7 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 - 真实订阅回归验证
 - 临时 URL 手工测试
 
-### 4. Handler 处理链
+### 6. Handler 处理链
 
 - `subscription.handlers_mode` 决定继承、覆盖或禁用
 - builtin handler 当前支持：
@@ -143,7 +149,7 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 
 详见 [`handlers.md`](./handlers.md)。
 
-### 5. XML 即时推送
+### 7. XML 即时推送
 
 AI tool `rss_push_xml_entry` 不依赖 `sub_id`。它直接：
 
@@ -173,6 +179,8 @@ flowchart TD
   BUNDLE --> F
   BUNDLE --> BDEL["BundleRepository / DeliveryRepository"]
   BUNDLE --> BDOC["BundleDocumentService / RSS validator"]
+  BDEL --> BOUT["BundleBatchDeliveryService / OutputOrchestrator"]
+  BOUT --> BEXEC["BundleOutputExecutor / CardRenderer"]
 
   C --> G["SubscriptionRepository / UserRepository"]
   C --> H["ContentHandlerRuntime"]

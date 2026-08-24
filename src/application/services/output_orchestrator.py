@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -49,6 +50,7 @@ class OutputOrchestrator:
         batch: DeliveryBatch,
         *,
         retry_failed: bool = False,
+        force_retry: bool = False,
     ) -> OutputOrchestrationResult:
         """执行当前可运行输出；card 未成功或 skip 时保持 standard waiting。"""
         if not self._manifest_is_complete(batch):
@@ -75,7 +77,11 @@ class OutputOrchestrator:
             ]
             gate_open = True
             for card in cards:
-                if self._is_actionable(card, retry_failed=retry_failed):
+                if self._is_actionable(
+                    card,
+                    retry_failed=retry_failed,
+                    force_retry=force_retry,
+                ):
                     await self._attempt(card)
                     if card.id is not None:
                         attempted.append(card.id)
@@ -85,7 +91,11 @@ class OutputOrchestrator:
             if not gate_open:
                 continue
             for standard in standards:
-                if self._is_actionable(standard, retry_failed=retry_failed):
+                if self._is_actionable(
+                    standard,
+                    retry_failed=retry_failed,
+                    force_retry=force_retry,
+                ):
                     await self._attempt(standard)
                     if standard.id is not None:
                         attempted.append(standard.id)
@@ -126,12 +136,19 @@ class OutputOrchestrator:
         return await self._delivery_repository.discard_batch(batch.id, reason=reason)
 
     @staticmethod
-    def _is_actionable(output: PushHistory, *, retry_failed: bool) -> bool:
+    def _is_actionable(
+        output: PushHistory,
+        *,
+        retry_failed: bool,
+        force_retry: bool,
+    ) -> bool:
         if output.status in {None, "waiting", "pending"}:
             return True
         if output.status == "retrying":
             return True
-        return retry_failed and output.can_retry()
+        if output.status != "failed":
+            return False
+        return retry_failed and (force_retry or output.can_retry())
 
     async def _attempt(self, output: PushHistory) -> None:
         is_retry = output.status in {"failed", "retrying"}
@@ -141,6 +158,10 @@ class OutputOrchestrator:
         await self._history_repository.save(output)
         try:
             result = await self._executor.execute(output)
+        except asyncio.CancelledError:
+            output.mark_stopped("运行关闭，输出已取消")
+            await asyncio.shield(self._history_repository.save(output))
+            raise
         # 执行器是外部发送边界，必须把任意业务失败持久化后再继续同批其他输出。
         except Exception as exc:  # noqa: BLE001
             reason = f"{type(exc).__name__}: {exc}"
@@ -150,7 +171,9 @@ class OutputOrchestrator:
                 output.record_first_failure(reason)
             await self._history_repository.save(output)
             return
-        if result.ok:
+        if result.cancelled:
+            output.mark_stopped(result.detail or "输出已取消")
+        elif result.ok:
             output.mark_success()
         elif is_retry:
             output.record_retry_failure(result.detail or "输出执行失败")

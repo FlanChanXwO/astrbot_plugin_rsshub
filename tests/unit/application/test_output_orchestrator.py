@@ -1,5 +1,6 @@
 """可靠批次输出编排状态机测试。"""
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -208,3 +209,85 @@ async def test_output_outside_manifest_is_not_executed() -> None:
     assert result.ready_to_confirm is False
     assert executor.calls == []
     assert unexpected.status == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_output_is_persisted_as_stopped_and_blocks_confirmation() -> (
+    None
+):
+    history = _history(1, "standard", 0)
+    batch = _batch([history])
+    executor = ScriptedOutputExecutor(
+        {1: [SendResult(ok=False, cancelled=True, detail="queue stopped")]}
+    )
+    orchestrator = OutputOrchestrator(
+        RecordingHistoryRepository(),
+        executor,
+        RecordingDeliveryRepository(batch),
+    )
+
+    result = await orchestrator.run(batch)
+
+    assert result.ready_to_confirm is False
+    assert history.status == "stopped"
+    assert history.fail_reason == "queue stopped"
+
+
+@pytest.mark.asyncio
+async def test_runtime_cancellation_persists_stopped_before_propagating() -> None:
+    history = _history(1, "standard", 0)
+    batch = _batch([history])
+
+    class RuntimeCancellationExecutor:
+        async def execute(self, _history: PushHistory) -> SendResult:
+            raise asyncio.CancelledError
+
+    repository = RecordingHistoryRepository()
+    orchestrator = OutputOrchestrator(
+        repository,
+        RuntimeCancellationExecutor(),
+        RecordingDeliveryRepository(batch),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await orchestrator.run(batch)
+
+    assert history.status == "stopped"
+    assert history.fail_reason == "运行关闭，输出已取消"
+    assert repository.saved[-1] == (1, "stopped")
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_can_reuse_an_exhausted_output() -> None:
+    history = _history(1, "standard", 0, status="failed")
+    history.retry_count = history.max_retries
+    batch = _batch([history])
+    executor = ScriptedOutputExecutor({1: [SendResult(ok=True)]})
+    orchestrator = OutputOrchestrator(
+        RecordingHistoryRepository(),
+        executor,
+        RecordingDeliveryRepository(batch),
+    )
+
+    result = await orchestrator.run(batch, retry_failed=True, force_retry=True)
+
+    assert result.ready_to_confirm is True
+    assert executor.calls == [1]
+    assert history.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_does_not_resend_resolved_outputs() -> None:
+    history = _history(1, "standard", 0, status="success")
+    batch = _batch([history])
+    executor = ScriptedOutputExecutor({})
+    orchestrator = OutputOrchestrator(
+        RecordingHistoryRepository(),
+        executor,
+        RecordingDeliveryRepository(batch),
+    )
+
+    result = await orchestrator.run(batch, retry_failed=True, force_retry=True)
+
+    assert result.ready_to_confirm is True
+    assert executor.calls == []

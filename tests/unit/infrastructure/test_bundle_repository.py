@@ -300,3 +300,105 @@ async def test_enabled_bundle_requires_two_members(tmp_path) -> None:
         1
     ]
     await database.close()
+
+
+@pytest.mark.asyncio
+async def test_bundle_repository_lists_enabled_owners_for_delivery_retry(
+    tmp_path,
+) -> None:
+    database = await _create_database(tmp_path)
+    repository = BundleRepositoryImpl(
+        database,
+        delivery_repository=DeliveryRepositoryImpl(database),
+    )
+    enabled = await repository.save(
+        Bundle(
+            user_id="user-1",
+            name="Enabled",
+            target_sessions=["test:Group:1"],
+            interval=30,
+        )
+    )
+    await repository.replace_members(enabled.id, [1, 2])
+    enabled.state = 1
+    await repository.save(enabled)
+    await repository.save(
+        Bundle(
+            user_id="user-1",
+            name="Disabled",
+            target_sessions=["test:Group:1"],
+            interval=30,
+            state=0,
+        )
+    )
+
+    active = await repository.get_all_active()
+
+    assert [bundle.id for bundle in active] == [enabled.id]
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_enabling_bundle_starts_its_rolling_schedule_now(tmp_path) -> None:
+    database = await _create_database(tmp_path)
+    repository = BundleRepositoryImpl(
+        database,
+        delivery_repository=DeliveryRepositoryImpl(database),
+    )
+    bundle = await repository.save(
+        Bundle(
+            user_id="user-1",
+            name="Schedule",
+            target_sessions=["test:Group:1"],
+            interval=30,
+        )
+    )
+    await repository.replace_members(bundle.id, [1, 2])
+    before = datetime.now(timezone.utc)
+    bundle.state = 1
+    bundle.next_check_time = None
+
+    saved = await repository.save(bundle)
+
+    assert saved.next_check_time is not None
+    normalized = saved.next_check_time.replace(tzinfo=timezone.utc)
+    assert normalized >= before
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_time_update_does_not_reenable_disabled_bundle(
+    tmp_path,
+) -> None:
+    database = await _create_database(tmp_path)
+    repository = BundleRepositoryImpl(
+        database,
+        delivery_repository=DeliveryRepositoryImpl(database),
+    )
+    bundle = await repository.save(
+        Bundle(
+            user_id="user-1",
+            name="Concurrent",
+            target_sessions=["test:Group:1"],
+            interval=30,
+        )
+    )
+    await repository.replace_members(bundle.id, [1, 2])
+    bundle.state = 1
+    enabled = await repository.save(bundle)
+    original_next_check = enabled.next_check_time
+
+    enabled.state = 0
+    await repository.save(enabled)
+    updated = await repository.update_next_check_time(
+        bundle.id,
+        datetime(2026, 8, 25, tzinfo=timezone.utc),
+    )
+
+    current = await repository.get_by_id(bundle.id)
+    assert updated is None
+    assert current.state == 0
+    assert current.next_check_time.replace(tzinfo=timezone.utc) == (
+        original_next_check.replace(tzinfo=timezone.utc)
+    )
+    await database.close()

@@ -37,6 +37,7 @@ class SendResult:
     """Result returned by a message sender."""
 
     ok: bool = False
+    cancelled: bool = False
     needs_rebind: bool = False
     transient: bool = False
     detail: str = ""

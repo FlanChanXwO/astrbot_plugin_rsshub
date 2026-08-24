@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import func, text
+from sqlalchemy import func, text, update
 from sqlmodel import asc, or_, select
 
 from ...domain.entities.bundle import Bundle
@@ -55,6 +55,15 @@ class BundleRepositoryImpl:
             )
             return [self._to_entity(orm) for orm in result.scalars().all()]
 
+    async def get_all_active(self) -> list[Bundle]:
+        async with self._db.get_session() as session:
+            result = await session.execute(
+                select(BundleORM)
+                .where(BundleORM.state == 1)
+                .order_by(asc(BundleORM.id))
+            )
+            return [self._to_entity(orm) for orm in result.scalars().all()]
+
     async def list_due(self, now: datetime) -> list[Bundle]:
         async with self._db.get_session() as session:
             result = await session.execute(
@@ -69,6 +78,29 @@ class BundleRepositoryImpl:
                 .order_by(asc(BundleORM.next_check_time), asc(BundleORM.id))
             )
             return [self._to_entity(orm) for orm in result.scalars().all()]
+
+    async def update_next_check_time(
+        self,
+        bundle_id: int,
+        next_check_time: datetime,
+    ) -> Bundle | None:
+        """只更新仍启用 Bundle 的计划时间，避免覆盖并发状态变更。"""
+        async with self._db.get_session() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                result = await session.execute(
+                    update(BundleORM)
+                    .where(BundleORM.id == bundle_id, BundleORM.state == 1)
+                    .values(next_check_time=next_check_time)
+                )
+                await session.commit()
+                if not result.rowcount:
+                    return None
+                orm = await session.get(BundleORM, bundle_id)
+                return self._to_entity(orm) if orm is not None else None
+            except BaseException:
+                await session.rollback()
+                raise
 
     async def save(self, bundle: Bundle) -> Bundle:
         async with self._db.get_session() as session:
@@ -95,6 +127,9 @@ class BundleRepositoryImpl:
                     )
                     if member_count < 2:
                         raise ValueError("启用 Bundle 至少需要两个不同 Feed")
+                    if bundle.next_check_time is None:
+                        # 启用时立即建立滚动计划；Scheduler 后续只沿既有计划点推进。
+                        bundle.next_check_time = datetime.now(timezone.utc)
 
                 if orm is None:
                     orm = self._to_orm(bundle)

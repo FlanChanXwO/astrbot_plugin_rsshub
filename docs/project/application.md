@@ -44,6 +44,12 @@ Bundle 的成员由 `BundleFeed.position` 定义稳定顺序，采集由 `Bundle
 
 成功发现和对应成员水位通过可靠投递仓储在同一事务写入通用 inbox。首次成功 200 遵循全局 `bootstrap_skip_history`：开启时只初始化水位，关闭时把当前响应的新增条目完整入箱；首次 304、抓取/解析失败或事务回滚都不会初始化成员。单成员失败会记录状态并继续后续成员。
 
+### Bundle 聚合文档
+
+`BundleDocumentService` 在批次认领后按成员 `position` 构造 RSS 2.0 文档：成员内有发布时间的条目按发布时间降序排列，无时间条目保留抓取顺序；`history_entry_limit` 只作用于每个成员，不设置 Bundle 总量上限。builder 使用结构化 XML API 写入来源、媒体、作者、标签和转义后的内容，并由 `BundleRssDocumentValidator` 校验文档结构。
+
+Bundle 的 `ai_filter` 与 `ai_transform` 在完整 channel 上运行，和现有 entry handler 使用独立输入契约。provider 不可用、非法 JSON/XML 或 handler 异常会记录文档级 trace 并保留上一步快照；过滤拒绝只改变输出允许状态。`consumption_item_keys` 始终来自原始 inbox 条目，不能从 handler 改写后的 XML 反推，后续批次确认或丢弃据此消费原始输入。
+
 | 主题 | 当前语义 | 备注 |
 | --- | --- | --- |
 | 配置继承 | 订阅继承用户，用户继承全局默认；继承值只认 `-100` | 不恢复 `use_sub_config` / `use_user_config`。 |

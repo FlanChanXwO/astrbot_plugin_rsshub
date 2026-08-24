@@ -115,6 +115,10 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 
 成员替换、重排和移除通过 `BundleRepository` / 可靠投递仓储的事务边界完成；移除成员前检查未认领或已认领 inbox，启用 Bundle 始终要求至少两个不同 Feed。相同 Feed 被多个 Bundle 或普通 Subscription 使用时，各消费者的条件请求和指纹水位相互隔离。
 
+### 3. Bundle 聚合文档与 handlers
+
+`BundleDocumentService` 消费已认领的 Bundle inbox 快照，组合 `BundleDocumentBuilder` 与 `BundleDocumentHandlerRuntime`。builder 只依赖成员 position、Feed 元数据和原始 item key，生成可验证的 RSS 2.0 channel；handler runtime 处理完整文档而不改变 `ContentHandlerRuntime` 的 entry 输入契约。文档 handler 的结果同时保留 handler 后的 text/XML 和原始 `consumption_item_keys`，供后续可靠批次在 skip、确认或 discard 时消费正确输入。
+
 ### 3. 测试推送
 
 - 当目标是 `sub_id` 时，走正式 dispatcher 链路，应用订阅配置和 handlers。
@@ -168,6 +172,7 @@ flowchart TD
   BUNDLE --> E
   BUNDLE --> F
   BUNDLE --> BDEL["BundleRepository / DeliveryRepository"]
+  BUNDLE --> BDOC["BundleDocumentService / RSS validator"]
 
   C --> G["SubscriptionRepository / UserRepository"]
   C --> H["ContentHandlerRuntime"]

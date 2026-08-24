@@ -73,7 +73,7 @@ Subscription card 批次会在 `document_snapshot.input_entries` 保存本批所
 | 旧翻译字段 | `translate`、`translate_target_lang` 保持移除 | 翻译不再是应用层内置入口。 |
 | `minimal_interval` | 写入阶段硬下限 | 不要降级成运行时临时 clamp。 |
 | 用户事实表 | 写入订阅或推送历史前必须确保非空 `user_id` 有用户记录 | 启动自愈会从订阅和历史补齐缺失用户。 |
-| 删除用户 | 默认删除用户和该用户全部订阅 | 推送历史默认保留，显式 `delete_push_history=true` 才删除。 |
+| 删除用户 | 默认删除用户和该用户全部订阅 | 推送历史默认保留，显式 `delete_push_history=true` 才删除；用户仍拥有 Bundle 时先返回 blocker，要求显式删除 Bundle。 |
 
 ## 推送历史与重试
 

@@ -62,10 +62,10 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | 批量订阅删除 | `POST /batch/unsubscribe` | 订阅 ID 列表，`delete_push_history` | 批量删除订阅记录。 | 与单条删除保持相同历史保留语义。 |
 | 用户统计 | `GET /users` | 分页 | 按 `user_id` 汇总总订阅数和启用订阅数。 | 更偏统计视图，不是用户编辑详情。 |
 | 用户详情 | `GET /users/detail` | `user_id`、`keyword`、分页 | 返回用户实体和 `subscription_count`、`active_subscription_count`。 | Pages 不展示或编辑 `default_target_session`。 |
-| 用户删除 | `POST /users/delete` | `user_id`、`delete_push_history` | 删除用户并级联删除该用户全部订阅。 | 推送历史默认保留；缺失用户行但仍有订阅或历史时，也允许按 `user_id` 清理孤儿资源。命中未解决可靠投递数据时返回 `blocked_users`，不删除受阻用户及其关联数据。 |
+| 用户删除 | `POST /users/delete` | `user_id`、`delete_push_history` | 删除用户并级联删除该用户全部订阅。 | 推送历史默认保留；缺失用户行但仍有订阅或历史时，也允许按 `user_id` 清理孤儿资源。命中未解决可靠投递数据或仍归属于该用户的 Bundle 时返回 `blocked_users`，不删除受阻用户及其关联数据。 |
 | Feed 列表 | `GET /feeds` | `feed_id`、`keyword`、分页 | 返回 Feed 基础信息和订阅数。 | 用于 Feed 管理和订阅联动。 |
 | Feed 更新 | `POST /feeds/update` | Feed 可编辑字段 | 更新 Feed 标题、链接、状态等基础字段。 | 只服务 Dashboard 的 Feed 编辑，不负责创建新订阅。 |
-| Feed 删除 | `POST /feeds/delete` | `feed_id`、`delete_push_history` | 删除 Feed 并级联删除关联订阅。 | 推送历史默认保留；显式传 `delete_push_history=true` 才删除对应历史。命中未解决可靠投递数据时返回 `blocked_feeds`，不删除受阻 Feed、订阅或历史。 |
+| Feed 删除 | `POST /feeds/delete` | `feed_id`、`delete_push_history` | 删除 Feed 并级联删除关联订阅。 | 推送历史默认保留；显式传 `delete_push_history=true` 才删除对应历史。命中未解决可靠投递数据或仍被 BundleFeed 引用时返回 `blocked_feeds`，不删除受阻 Feed、订阅或历史。 |
 | 订阅测试推送 | `POST /test-subscription` | `sub_id` | 校验订阅，补齐目标会话和平台，调用 `TestSubscriptionCommand.execute_target()`。 | 这是真实链路单条模拟发送，不是 preview。 |
 | URL 测试推送 | `POST /test-url` | Feed URL / RSSHub URL | 按临时目标直发。 | 不读取订阅，不应用订阅默认配置。 |
 | Dashboard 图表 | `GET /dashboard/charts` | `range=24h\|7d\|30d` | 返回 Feed 新鲜度、推送成功率和 Feed 订阅占比。 | 非法 range 按 `7d` 处理；服务端完成聚合，前端只绘图。 |
@@ -142,6 +142,8 @@ Dashboard 删除用户或 Feed 时，Web API 会先把关联订阅交给可靠�
 
 - 用户删除响应使用 `blocked_users`，其中 `blockers` 按订阅 ID 分组。
 - Feed 删除响应使用 `blocked_feeds`，其中 `blockers` 按订阅 ID 分组。
+- 用户仍拥有 Bundle 时，`blocked_users` 会报告 `{"bundles": 数量}`；本端点不会级联删除 Bundle，调用方必须先显式删除 Bundle。
+- Feed 仍被 BundleFeed 引用时，`blocked_feeds` 会报告 `{"bundle_members": 数量}`；本端点不会级联移除成员，调用方必须先显式移除成员或删除 Bundle。
 - 全部订阅可删除时，已解决的推送历史保留，并解除其 `sub_id` 关联；显式 `delete_push_history=true` 的历史清理由原有流程继续负责。
 
 ## 插件设置约束

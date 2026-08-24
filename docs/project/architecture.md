@@ -222,7 +222,7 @@ flowchart TD
 - handlers 链
 - 推送历史自动清理范围
 
-`rsshub_user` 是插件用户事实表。任何写入订阅或推送历史的入口都必须确保对应 `user_id` 存在；启动期数据库自愈也会扫描订阅和推送历史引用，补齐旧库缺失的用户行。Dashboard 删除用户会删除该用户订阅，推送历史默认保留，只有显式选择时才删除历史。
+`rsshub_user` 是插件用户事实表。任何写入订阅或推送历史的入口都必须确保对应 `user_id` 存在；启动期数据库自愈也会扫描订阅和推送历史引用，补齐旧库缺失的用户行。Dashboard 删除用户会删除该用户订阅，推送历史默认保留，只有显式选择时才删除历史；若用户仍拥有 Bundle，删除会先返回 blocker，避免留下孤儿 owner。
 
 详见 [`handlers.md`](./handlers.md) 与 [`knowledge.md`](./knowledge.md) 中的状态管理部分。
 

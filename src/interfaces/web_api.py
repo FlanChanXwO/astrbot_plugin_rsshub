@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 import shutil
@@ -15,10 +16,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from quart import Response, jsonify, request
-
 from astrbot.api import AstrBotConfig
 from astrbot.api.star import Context
+from quart import Response, jsonify, request
 
 from ..application.commands.batch_activate_cmd import BatchActivateCommand
 from ..application.commands.batch_deactivate_cmd import BatchDeactivateCommand
@@ -42,11 +42,11 @@ from ..application.services.route_knowledge_service import (
     RouteKnowledgeSyncService,
 )
 from ..domain.entities.handlers import list_handler_registry
+from ..domain.exceptions import DomainException
 from ..domain.repositories.feed_repository import FeedRepository
 from ..domain.repositories.push_history_repository import PushHistoryRepository
 from ..domain.repositories.subscription_repository import SubscriptionRepository
 from ..domain.repositories.user_repository import UserRepository
-from ..shared.constants import INHERIT_VALUE
 from ..infrastructure.config import (
     RsshubPluginConfig,
     build_application_settings,
@@ -54,6 +54,7 @@ from ..infrastructure.config import (
     validate_interval_value,
 )
 from ..infrastructure.utils import get_plugin_cache_dir, get_plugin_export_dir
+from ..shared.constants import INHERIT_VALUE
 
 PLUGIN_NAME = "astrbot_plugin_rsshub"
 USER_ID_REQUIRED_ERROR = "user_id 不能为空"
@@ -103,6 +104,12 @@ class WebApiHandler:
         route_knowledge_service: RouteKnowledgeSyncService | None = None,
         config: RsshubPluginConfig | None = None,
         raw_config: AstrBotConfig | None = None,
+        card_management_service=None,
+        template_repository=None,
+        template_download_service=None,
+        template_management_service=None,
+        subscription_batch_delivery_service=None,
+        delivery_repository=None,
     ):
         self._sse_clients: list[asyncio.Queue] = []
         self._change_counter: int = 0
@@ -128,6 +135,12 @@ class WebApiHandler:
         self._route_knowledge_service = route_knowledge_service
         self._config = config
         self._raw_config = raw_config
+        self._card_management_service = card_management_service
+        self._template_repository = template_repository
+        self._template_download_service = template_download_service
+        self._template_management_service = template_management_service
+        self._subscription_batch_delivery_service = subscription_batch_delivery_service
+        self._delivery_repository = delivery_repository
 
     def register_all(self, context: Context) -> None:
         """注册所有 API 端点到 AstrBot"""
@@ -137,6 +150,31 @@ class WebApiHandler:
             ("GET", "/events", self.handle_events, "SSE 事件推送"),
             ("GET", "/updates", self.handle_updates, "检查更新"),
             ("GET", "/subscriptions", self.handle_list_subscriptions, "列出所有订阅"),
+            ("GET", "/templates", self.handle_templates, "列出卡片模板"),
+            (
+                "GET",
+                "/templates/options",
+                self.handle_template_options,
+                "列出 owner 可用模板",
+            ),
+            (
+                "POST",
+                "/templates/install",
+                self.handle_template_install,
+                "安装卡片模板",
+            ),
+            (
+                "POST",
+                "/templates/preview",
+                self.handle_template_preview,
+                "预览卡片模板",
+            ),
+            (
+                "POST",
+                "/templates/delete",
+                self.handle_template_delete,
+                "删除卡片模板",
+            ),
             ("GET", "/users", self.handle_users, "列出所有用户"),
             ("GET", "/feeds", self.handle_feeds, "列出所有 Feed"),
             ("GET", "/suggestions", self.handle_suggestions, "Dashboard 智能补全"),
@@ -256,6 +294,12 @@ class WebApiHandler:
                 "/push-history/clear",
                 self.handle_clear_push_history,
                 "清空推送历史",
+            ),
+            (
+                "POST",
+                "/delivery-batches/discard",
+                self.handle_discard_delivery_batch,
+                "丢弃可靠投递批次",
             ),
             ("GET", "/users/detail", self.handle_user_details, "用户详情列表"),
             ("POST", "/users/update", self.handle_update_user, "更新用户配置"),
@@ -401,12 +445,146 @@ class WebApiHandler:
                     "display_entry_tags": s.display_entry_tags,
                     "style": s.style,
                     "display_media": s.display_media,
+                    "send_card": getattr(s, "send_card", False),
+                    "template_id": getattr(s, "template_id", None),
+                    "card_send_original_content": getattr(
+                        s, "card_send_original_content", False
+                    ),
                     "created_at": s.created_at.isoformat() if s.created_at else None,
                     "updated_at": s.updated_at.isoformat() if s.updated_at else None,
                 }
             )
 
         return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_templates(self):
+        """列出全部已安装和内置卡片模板。"""
+        if self._template_repository is None:
+            return jsonify({"ok": False, "error": "模板仓储未初始化"})
+        packages = await asyncio.to_thread(self._template_repository.list_packages)
+        items = [package.metadata.model_dump(mode="json") for package in packages]
+        return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_template_options(self):
+        """列出 owner 严格匹配的模板候选。"""
+        if self._card_management_service is None:
+            return jsonify({"ok": False, "error": "卡片配置服务未初始化"})
+        owner_type = str(request.args.get("owner_type", "") or "").strip()
+        owner_id = request.args.get("owner_id", type=int)
+        user_id = str(request.args.get("user_id", "") or "").strip()
+        if owner_type != "subscription":
+            return jsonify({"ok": False, "error": "当前仅支持 subscription owner"})
+        if not owner_id or not user_id:
+            return jsonify({"ok": False, "error": "owner_id 和 user_id 不能为空"})
+        try:
+            options = await self._card_management_service.list_template_options(
+                subscription_id=owner_id,
+                user_id=user_id,
+            )
+        except (ValueError, PermissionError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        items = [_dump_dataclass_like(option) for option in options]
+        return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_template_install(self):
+        """从上传 ZIP 或 HTTP(S) URL 安装模板。"""
+        if self._template_repository is None:
+            return jsonify({"ok": False, "error": "模板仓储未初始化"})
+        try:
+            if request.content_type and request.content_type.startswith(
+                "multipart/form-data"
+            ):
+                files = await request.files
+                archive = files.get("archive")
+                if archive is None:
+                    return jsonify({"ok": False, "error": "archive 不能为空"})
+                archive_data = await asyncio.to_thread(archive.read)
+                package = await asyncio.to_thread(
+                    self._template_repository.install_archive,
+                    archive_data,
+                )
+            else:
+                data = await request.get_json()
+                if self._template_download_service is None:
+                    return jsonify({"ok": False, "error": "模板下载服务未初始化"})
+                url = str((data or {}).get("url", "") or "").strip()
+                if not url:
+                    return jsonify({"ok": False, "error": "url 不能为空"})
+                allow_insecure_http = (data or {}).get(
+                    "allow_insecure_http",
+                    False,
+                )
+                if not isinstance(allow_insecure_http, bool):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "allow_insecure_http 必须是 boolean",
+                        }
+                    )
+                package = await self._template_download_service.install_from_url(
+                    url,
+                    allow_insecure_http=allow_insecure_http,
+                )
+        except (DomainException, ValueError, OSError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        self._bump_counter()
+        return jsonify(
+            {"ok": True, "template": package.metadata.model_dump(mode="json")}
+        )
+
+    async def handle_template_preview(self):
+        """零业务副作用生成 Subscription 卡片 PNG。"""
+        if self._card_management_service is None:
+            return jsonify({"ok": False, "error": "卡片预览服务未初始化"})
+        data = await request.get_json()
+        owner_type = str((data or {}).get("owner_type", "") or "").strip()
+        if owner_type != "subscription":
+            return jsonify({"ok": False, "error": "当前仅支持 subscription owner"})
+        try:
+            owner_id = int((data or {}).get("owner_id", 0))
+        except (TypeError, ValueError):
+            owner_id = 0
+        user_id = str((data or {}).get("user_id", "") or "").strip()
+        template_id = str((data or {}).get("template_id", "") or "").strip()
+        if owner_id <= 0 or not user_id or not template_id:
+            return jsonify(
+                {"ok": False, "error": "owner_id、user_id 和 template_id 不能为空"}
+            )
+        try:
+            preview = await self._card_management_service.preview(
+                subscription_id=owner_id,
+                user_id=user_id,
+                template_id=template_id,
+            )
+        except (ValueError, PermissionError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        return jsonify(
+            {
+                "ok": True,
+                "png_base64": base64.b64encode(preview.png).decode("ascii"),
+                "entry_count": preview.entry_count,
+                "template": preview.template,
+                "source_summary": preview.source_summary,
+            }
+        )
+
+    async def handle_template_delete(self):
+        """删除未被 owner 引用的模板。"""
+        if self._template_management_service is None:
+            return jsonify({"ok": False, "error": "模板管理服务未初始化"})
+        data = await request.get_json()
+        template_id = str((data or {}).get("template_id", "") or "").strip()
+        if not template_id:
+            return jsonify({"ok": False, "error": "template_id 不能为空"})
+        try:
+            removed = await self._template_management_service.delete_template(
+                template_id
+            )
+        except (DomainException, ValueError, OSError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        if removed:
+            self._bump_counter()
+        return jsonify({"ok": removed, "removed": removed})
 
     # ─── 用户列表 ─────────────────────────────────────────────
 
@@ -1101,6 +1279,7 @@ class WebApiHandler:
         result = await self._update_sub_cmd.execute(
             sub_id=int(sub_id),
             user_id=user_id,
+            allow_template_selection=True,
             **options,
         )
         self._bump_counter()
@@ -1868,16 +2047,47 @@ class WebApiHandler:
 
     async def handle_retry_push_history(self):
         """基于单条推送历史重发，并把结果写回原记录。"""
-        if self._notification_dispatcher is None:
-            return jsonify(
-                {"ok": False, "error": "notification dispatcher unavailable"}
-            )
+        if (
+            self._notification_dispatcher is None
+            and self._subscription_batch_delivery_service is None
+        ):
+            return jsonify({"ok": False, "error": "retry service unavailable"})
 
         data = await request.get_json()
         history_ids = _coerce_int_values([data.get("history_id")]) if data else []
         history_id = history_ids[0] if history_ids else 0
         if history_id <= 0:
             return jsonify({"ok": False, "error": "history_id 不能为空"})
+
+        history = None
+        if self._subscription_batch_delivery_service is not None:
+            history = await self._push_history_repo.get_by_id(history_id)
+        if history is not None and history.batch_id is not None:
+            if (
+                self._subscription_batch_delivery_service is None
+                or history.sub_id is None
+            ):
+                return jsonify({"ok": False, "error": "批次重试服务不可用"})
+            result = await self._subscription_batch_delivery_service.deliver(
+                history.sub_id,
+                retry_failed=True,
+            )
+            self._bump_counter()
+            asyncio.create_task(self._broadcast({"event": "data_changed"}))
+            return jsonify(
+                {
+                    "ok": True,
+                    "message": "批次重试已执行",
+                    "source_history_id": history_id,
+                    "batch_id": result.batch_id,
+                    "ready_to_confirm": result.ready_to_confirm,
+                }
+            )
+
+        if self._notification_dispatcher is None:
+            return jsonify(
+                {"ok": False, "error": "notification dispatcher unavailable"}
+            )
 
         result = await self._notification_dispatcher.retry_push_history_once(history_id)
         self._bump_counter()
@@ -1899,6 +2109,29 @@ class WebApiHandler:
                 else None,
             }
         )
+
+    async def handle_discard_delivery_batch(self):
+        """通过统一事务仓储显式丢弃未解决批次。"""
+        if self._delivery_repository is None:
+            return jsonify({"ok": False, "error": "可靠投递仓储未初始化"})
+        data = await request.get_json()
+        try:
+            batch_id = int((data or {}).get("batch_id", 0))
+        except (TypeError, ValueError):
+            batch_id = 0
+        if batch_id <= 0:
+            return jsonify({"ok": False, "error": "batch_id 不能为空"})
+        reason = str((data or {}).get("reason", "") or "").strip() or None
+        try:
+            batch = await self._delivery_repository.discard_batch(
+                batch_id,
+                reason=reason,
+            )
+        except (LookupError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        self._bump_counter()
+        asyncio.create_task(self._broadcast({"event": "data_changed"}))
+        return jsonify({"ok": True, "batch_id": batch.id, "status": batch.status})
 
     async def handle_cleanup_push_history(self):
         """清理旧推送历史"""

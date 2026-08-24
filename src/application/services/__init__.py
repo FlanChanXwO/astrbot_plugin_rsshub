@@ -26,6 +26,7 @@ _EXPORT_MAP = {
     "SubscriptionBatchDeliveryError": "subscription_batch_delivery_service",
     "SubscriptionBatchDeliveryResult": "subscription_batch_delivery_service",
     "SubscriptionBatchDeliveryService": "subscription_batch_delivery_service",
+    "SubscriptionCardManagementService": "subscription_card_management_service",
     "SubscriptionOutputExecutor": "subscription_output_executor",
     "RouteKnowledgeSyncService": "route_knowledge_service",
     "RouteKnowledgeSyncPlan": "route_knowledge_service",

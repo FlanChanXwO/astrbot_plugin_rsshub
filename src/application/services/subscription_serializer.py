@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from ..dto.subscription_export_record import (
+    SUBSCRIPTION_EXPORT_BOOL_FIELDS,
     SUBSCRIPTION_EXPORT_INT_FIELDS,
     SUBSCRIPTION_EXPORT_STRING_FIELDS,
     SubscriptionExportRecord,
@@ -24,6 +25,7 @@ EXPORT_EXCLUDED_FIELDS = {"id", "sid", "sub_id"}
 
 STRING_FIELDS = SUBSCRIPTION_EXPORT_STRING_FIELDS
 INT_FIELDS = SUBSCRIPTION_EXPORT_INT_FIELDS
+BOOL_FIELDS = SUBSCRIPTION_EXPORT_BOOL_FIELDS
 
 
 @dataclass
@@ -32,7 +34,7 @@ class ImportSubscriptionRecord:
 
     link: str
     feed_title: str | None = None
-    options: dict[str, int | str] = field(default_factory=dict)
+    options: dict[str, bool | int | str] = field(default_factory=dict)
 
 
 @dataclass
@@ -94,6 +96,11 @@ def serialize_subscriptions_to_toml(
                 continue
             if isinstance(value, int):
                 lines.append(f"{key} = {value}")
+
+        for key in sorted(BOOL_FIELDS):
+            value = record.options.get(key)
+            if isinstance(value, bool):
+                lines.append(f"{key} = {'true' if value else 'false'}")
 
         lines.append("")
 
@@ -288,6 +295,16 @@ def parse_subscriptions_toml(content: str) -> SubscriptionImportPayload:
                 continue
             if parsed is not None:
                 record.options[key] = parsed
+
+        for key in BOOL_FIELDS:
+            if key not in raw:
+                continue
+            value = raw.get(key)
+            if not isinstance(value, bool):
+                payload.errors.append(f"subscriptions[{i}].{key} must be a boolean")
+                has_error = True
+                continue
+            record.options[key] = value
 
         if has_error:
             continue

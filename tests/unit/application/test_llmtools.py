@@ -132,6 +132,19 @@ async def test_llm_tool_rss_subscribe_schema_does_not_expose_legacy_params():
     assert "targets" in tool.parameters["properties"]
 
 
+def test_llm_subscription_option_documents_safe_card_keys_only():
+    deps = _build_deps()
+    _, plugin_ctx = _make_ctx()
+    tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    tool = next(t for t in tools if t.name == "rss_set_subscription_option")
+
+    key_description = tool.parameters["properties"]["key"]["description"]
+    assert "send_card" in key_description
+    assert "card_send_original_content" in key_description
+    assert "template_id" in key_description
+    assert "不支持" in key_description
+
+
 def test_llm_tool_descriptions_guide_agent_decisions():
     deps = _build_deps()
     _, plugin_ctx = _make_ctx()

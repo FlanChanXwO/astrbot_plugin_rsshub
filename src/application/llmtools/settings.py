@@ -81,7 +81,13 @@ def build_setting_tools(*, deps: LLMToolDeps, plugin_context) -> list[FunctionTo
                 "type": "object",
                 "properties": {
                     "sub_id": {"type": "string", "description": "订阅 ID"},
-                    "key": {"type": "string", "description": "配置项名称"},
+                    "key": {
+                        "type": "string",
+                        "description": (
+                            "配置项名称；卡片相关只支持 send_card 和 "
+                            "card_send_original_content，不支持 template_id"
+                        ),
+                    },
                     "value": {"type": "string", "description": "配置项值"},
                 },
                 "required": ["sub_id", "key", "value"],

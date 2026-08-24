@@ -1234,6 +1234,73 @@ async def test_subscription_settings_rejects_invalid_handlers_mode():
 
 
 @pytest.mark.asyncio
+async def test_subscription_settings_parses_card_boolean_options():
+    from unittest.mock import AsyncMock
+
+    from astrbot_plugin_rsshub.src.application.commands.update_subscription_cmd import (
+        UpdateSubscriptionCommand,
+    )
+    from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
+
+    repo = AsyncMock()
+    card_management_service = AsyncMock()
+    repo.update_options.return_value = Subscription(
+        id=1,
+        user_id="u1",
+        feed_id=10,
+        send_card=True,
+        card_send_original_content=False,
+    )
+
+    result = await UpdateSubscriptionCommand(
+        repo,
+        card_management_service=card_management_service,
+    ).execute(
+        sub_id=1,
+        user_id="u1",
+        send_card="true",
+        card_send_original_content="false",
+    )
+
+    assert result.success is True
+    repo.update_options.assert_awaited_once_with(
+        1,
+        "u1",
+        send_card=True,
+        card_send_original_content=False,
+    )
+    assert result.data.send_card is True
+    assert result.data.card_send_original_content is False
+    card_management_service.validate_configuration.assert_awaited_once_with(
+        subscription_id=1,
+        user_id="u1",
+        send_card=True,
+        card_send_original_content=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscription_settings_rejects_free_form_template_id():
+    from unittest.mock import AsyncMock
+
+    from astrbot_plugin_rsshub.src.application.commands.update_subscription_cmd import (
+        UpdateSubscriptionCommand,
+    )
+
+    repo = AsyncMock()
+
+    result = await UpdateSubscriptionCommand(repo).execute(
+        sub_id=1,
+        user_id="u1",
+        template_id="astrbot_plugin_rsshub_card_arbitrary",
+    )
+
+    assert result.success is False
+    assert "template_id" in result.message
+    repo.update_options.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_subscription_settings_rejects_interval_below_configured_minimum(
     monkeypatch,
 ):

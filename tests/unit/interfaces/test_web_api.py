@@ -10,6 +10,9 @@ from astrbot_plugin_rsshub.src.application.dto.subscription_dto import Subscript
 from astrbot_plugin_rsshub.src.application.services.feed_polling_service import (
     FeedPollingResult,
 )
+from astrbot_plugin_rsshub.src.application.services.subscription_card_management_service import (
+    CardTemplateOption,
+)
 from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
 from astrbot_plugin_rsshub.src.interfaces import web_api
 from astrbot_plugin_rsshub.src.interfaces.web_api import WebApiHandler
@@ -46,6 +49,12 @@ def _handler(
     notification_dispatcher=None,
     sub_repo=None,
     user_repo=None,
+    card_management_service=None,
+    template_repository=None,
+    template_download_service=None,
+    template_management_service=None,
+    subscription_batch_delivery_service=None,
+    delivery_repository=None,
 ):
     return WebApiHandler(
         subscribe_cmd=subscribe_cmd or MagicMock(),
@@ -69,6 +78,12 @@ def _handler(
         route_knowledge_service=route_knowledge_service,
         config=config or MagicMock(),
         raw_config=raw_config,
+        card_management_service=card_management_service,
+        template_repository=template_repository,
+        template_download_service=template_download_service,
+        template_management_service=template_management_service,
+        subscription_batch_delivery_service=subscription_batch_delivery_service,
+        delivery_repository=delivery_repository,
     )
 
 
@@ -353,6 +368,9 @@ async def test_subscriptions_endpoint_uses_dashboard_filters():
                 display_entry_tags=0,
                 style=0,
                 display_media=0,
+                send_card=True,
+                template_id="astrbot_plugin_rsshub_card_juya",
+                card_send_original_content=True,
                 created_at=None,
                 updated_at=None,
             )
@@ -383,6 +401,9 @@ async def test_subscriptions_endpoint_uses_dashboard_filters():
     assert payload["total"] == 1
     assert payload["items"][0]["id"] == 3
     assert payload["items"][0]["feed_title"] == "Pixiv Feed"
+    assert payload["items"][0]["send_card"] is True
+    assert payload["items"][0]["template_id"] == "astrbot_plugin_rsshub_card_juya"
+    assert payload["items"][0]["card_send_original_content"] is True
     sub_repo.list_for_dashboard.assert_awaited_once_with(
         user_ids=["alice", "bob"],
         feed_ids=[12, 15],
@@ -1901,9 +1922,232 @@ async def test_update_subscription_passes_real_user_id():
     command.execute.assert_awaited_once_with(
         sub_id=12,
         user_id="alice",
+        allow_template_selection=True,
         handlers_mode="override",
         notify=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_template_options_endpoint_uses_owned_subscription_candidates():
+    service = AsyncMock()
+    service.list_template_options.return_value = [
+        CardTemplateOption(
+            id="astrbot_plugin_rsshub_card_juya",
+            name="Juya",
+            version="1.0.0",
+            author="tester",
+            description="desc",
+            repository="https://example.com/template",
+        )
+    ]
+    handler = _handler(
+        polling_service=MagicMock(),
+        card_management_service=service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/options?"
+        "owner_type=subscription&owner_id=7&user_id=alice",
+        method="GET",
+    ):
+        response = await handler.handle_template_options()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["items"][0]["id"] == "astrbot_plugin_rsshub_card_juya"
+    service.list_template_options.assert_awaited_once_with(
+        subscription_id=7,
+        user_id="alice",
+    )
+
+
+@pytest.mark.asyncio
+async def test_template_preview_endpoint_returns_base64_png():
+    service = AsyncMock()
+    service.preview.return_value = SimpleNamespace(
+        png=b"png-bytes",
+        entry_count=2,
+        template={
+            "id": "astrbot_plugin_rsshub_card_juya",
+            "name": "Juya",
+            "version": "1.0.0",
+            "author": "tester",
+        },
+        source_summary={
+            "feed_id": 3,
+            "feed_title": "Juya AI",
+            "entry_count": 2,
+        },
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        card_management_service=service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/preview",
+        method="POST",
+        json={
+            "owner_type": "subscription",
+            "owner_id": 7,
+            "user_id": "alice",
+            "template_id": "astrbot_plugin_rsshub_card_juya",
+        },
+    ):
+        response = await handler.handle_template_preview()
+
+    payload = await response.get_json()
+    assert payload == {
+        "ok": True,
+        "png_base64": "cG5nLWJ5dGVz",
+        "entry_count": 2,
+        "template": {
+            "id": "astrbot_plugin_rsshub_card_juya",
+            "name": "Juya",
+            "version": "1.0.0",
+            "author": "tester",
+        },
+        "source_summary": {
+            "feed_id": 3,
+            "feed_title": "Juya AI",
+            "entry_count": 2,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_template_preview_endpoint_returns_template_and_source_summary():
+    service = AsyncMock()
+    service.preview.return_value = SimpleNamespace(
+        png=b"png-bytes",
+        entry_count=2,
+        template={
+            "id": "astrbot_plugin_rsshub_card_juya",
+            "name": "Juya",
+            "version": "1.0.0",
+            "author": "tester",
+        },
+        source_summary={
+            "feed_id": 3,
+            "feed_title": "Juya AI",
+            "entry_count": 2,
+        },
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        card_management_service=service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/preview",
+        method="POST",
+        json={
+            "owner_type": "subscription",
+            "owner_id": 7,
+            "user_id": "alice",
+            "template_id": "astrbot_plugin_rsshub_card_juya",
+        },
+    ):
+        response = await handler.handle_template_preview()
+
+    payload = await response.get_json()
+    assert payload["template"]["id"] == "astrbot_plugin_rsshub_card_juya"
+    assert payload["source_summary"] == {
+        "feed_id": 3,
+        "feed_title": "Juya AI",
+        "entry_count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_template_install_rejects_string_http_confirmation():
+    download_service = AsyncMock()
+    handler = _handler(
+        polling_service=MagicMock(),
+        template_repository=MagicMock(),
+        template_download_service=download_service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/install",
+        method="POST",
+        json={
+            "url": "http://example.com/template.zip",
+            "allow_insecure_http": "false",
+        },
+    ):
+        response = await handler.handle_template_install()
+
+    payload = await response.get_json()
+    assert payload == {
+        "ok": False,
+        "error": "allow_insecure_http 必须是 boolean",
+    }
+    download_service.install_from_url.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retry_push_history_endpoint_uses_subscription_batch_path():
+    history_repo = MagicMock()
+    history_repo.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(id=12, batch_id=5, sub_id=7)
+    )
+    batch_service = AsyncMock()
+    batch_service.deliver.return_value = SimpleNamespace(
+        batch_id=5,
+        ready_to_confirm=True,
+    )
+    dispatcher = AsyncMock()
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=history_repo,
+        notification_dispatcher=dispatcher,
+        subscription_batch_delivery_service=batch_service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/retry",
+        method="POST",
+        json={"history_id": 12},
+    ):
+        response = await handler.handle_retry_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["batch_id"] == 5
+    batch_service.deliver.assert_awaited_once_with(7, retry_failed=True)
+    dispatcher.retry_push_history_once.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_discard_delivery_batch_endpoint_uses_transactional_repository():
+    delivery_repo = AsyncMock()
+    delivery_repo.discard_batch.return_value = SimpleNamespace(
+        id=5,
+        status="discarded",
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        delivery_repository=delivery_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/delivery-batches/discard",
+        method="POST",
+        json={"batch_id": 5, "reason": "用户确认"},
+    ):
+        response = await handler.handle_discard_delivery_batch()
+
+    payload = await response.get_json()
+    assert payload == {"ok": True, "batch_id": 5, "status": "discarded"}
+    delivery_repo.discard_batch.assert_awaited_once_with(5, reason="用户确认")
 
 
 @pytest.mark.asyncio

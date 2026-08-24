@@ -36,6 +36,10 @@ from .src.application.queries import (
 )
 from .src.application.services.agent_xml_push_service import AgentXmlPushService
 from .src.application.services.card_renderer import CardRenderer
+from .src.application.services.card_template_service import (
+    CardTemplateDownloadService,
+    CardTemplateManagementService,
+)
 from .src.application.services.content_handlers import ContentHandlerRuntime
 from .src.application.services.feed_polling_service import FeedPollingService
 from .src.application.services.notification_dispatcher import NotificationDispatcher
@@ -46,6 +50,9 @@ from .src.application.services.route_knowledge_service import (
 from .src.application.services.session_push_queue import SessionPushQueue
 from .src.application.services.subscription_batch_delivery_service import (
     SubscriptionBatchDeliveryService,
+)
+from .src.application.services.subscription_card_management_service import (
+    SubscriptionCardManagementService,
 )
 from .src.application.services.subscription_output_executor import (
     SubscriptionOutputExecutor,
@@ -92,8 +99,10 @@ from .src.infrastructure.rendering.font_manager import (
 )
 from .src.infrastructure.schedule import RSSScheduler
 from .src.infrastructure.templates import (
+    AiohttpCardTemplateArchiveDownloader,
     CardTemplatePackageRepository,
     CardTemplateService,
+    DatabaseCardTemplateReferenceLookup,
 )
 from .src.infrastructure.utils import (
     get_logger,
@@ -133,6 +142,11 @@ class PluginDeps(TypedDict, total=False):
     notification_dispatcher: NotificationDispatcher
     agent_xml_push_service: AgentXmlPushService
     subscription_batch_delivery_service: SubscriptionBatchDeliveryService
+    card_management_service: SubscriptionCardManagementService
+    template_repository: Any
+    template_download_service: CardTemplateDownloadService
+    template_management_service: CardTemplateManagementService
+    delivery_repository: Any
 
 
 @dataclass(slots=True)
@@ -439,11 +453,13 @@ async def _build_dependencies(
         subscription_defaults=app_settings.subscription_defaults,
         basic_settings=app_settings.basic,
     )
+    template_repository = CardTemplatePackageRepository()
     template_service = CardTemplateService()
+    image_renderer = AstrBotHtmlImageRenderer()
     card_renderer = CardRenderer(
         template_service=template_service,
         artifact_store=CardArtifactStore(),
-        image_renderer=AstrBotHtmlImageRenderer(),
+        image_renderer=image_renderer,
         history_repository=push_history_repo,
     )
     output_executor = SubscriptionOutputExecutor(
@@ -460,7 +476,7 @@ async def _build_dependencies(
         subscription_repository=sub_repo,
         feed_repository=feed_repo,
         user_repository=user_repo,
-        template_repository=CardTemplatePackageRepository(),
+        template_repository=template_repository,
         template_service=template_service,
         content_handler_runtime=content_handler_runtime,
         notification_dispatcher=notification_dispatcher,
@@ -479,6 +495,25 @@ async def _build_dependencies(
         delivery_repository=delivery_repo,
         subscription_batch_delivery_service=subscription_batch_delivery_service,
         history_entry_limit=app_settings.scheduler.history_entry_limit,
+    )
+    card_management_service = SubscriptionCardManagementService(
+        subscription_repository=sub_repo,
+        feed_repository=feed_repo,
+        template_repository=template_repository,
+        delivery_repository=delivery_repo,
+        polling_service=polling_service,
+        user_repository=user_repo,
+        content_handler_runtime=content_handler_runtime,
+        template_service=template_service,
+        image_renderer=image_renderer,
+    )
+    template_download_service = CardTemplateDownloadService(
+        template_repository,
+        AiohttpCardTemplateArchiveDownloader(),
+    )
+    template_management_service = CardTemplateManagementService(
+        template_repository,
+        DatabaseCardTemplateReferenceLookup(get_database()),
     )
     route_source = await build_route_knowledge_source(
         app_settings.route_knowledge,
@@ -506,13 +541,20 @@ async def _build_dependencies(
         unsubscribe_cmd=UnsubscribeFeedCommand(
             subscription_repo=sub_repo,
             feed_repo=feed_repo,
+            delivery_repo=delivery_repo,
         ),
         sub_state_cmd=SubStateCommand(subscription_repo=sub_repo),
-        update_sub_cmd=UpdateSubscriptionCommand(subscription_repo=sub_repo),
+        update_sub_cmd=UpdateSubscriptionCommand(
+            subscription_repo=sub_repo,
+            card_management_service=card_management_service,
+        ),
         list_query=GetFeedListQuery(subscription_repo=sub_repo, feed_repo=feed_repo),
         batch_activate_cmd=BatchActivateCommand(subscription_repo=sub_repo),
         batch_deactivate_cmd=BatchDeactivateCommand(subscription_repo=sub_repo),
-        batch_unsub_cmd=BatchUnsubscribeCommand(subscription_repo=sub_repo),
+        batch_unsub_cmd=BatchUnsubscribeCommand(
+            subscription_repo=sub_repo,
+            delivery_repo=delivery_repo,
+        ),
         export_cmd=ExportSubscriptionsCommand(
             subscription_repo=sub_repo,
             feed_repo=feed_repo,
@@ -521,6 +563,7 @@ async def _build_dependencies(
             subscription_repo=sub_repo,
             feed_repo=feed_repo,
             user_repo=user_repo,
+            card_management_service=card_management_service,
         ),
         get_user_settings_cmd=GetUserSettingsCommand(user_repo=user_repo),
         set_user_settings_cmd=SetUserSettingsCommand(user_repo=user_repo),
@@ -541,6 +584,11 @@ async def _build_dependencies(
         notification_dispatcher=notification_dispatcher,
         agent_xml_push_service=AgentXmlPushService(notification_dispatcher),
         subscription_batch_delivery_service=subscription_batch_delivery_service,
+        card_management_service=card_management_service,
+        template_repository=template_repository,
+        template_download_service=template_download_service,
+        template_management_service=template_management_service,
+        delivery_repository=delivery_repo,
     )
     return deps, notification_dispatcher
 
@@ -602,6 +650,12 @@ def _register_web_api(
         route_knowledge_service=deps["route_knowledge_service"],
         config=config,
         raw_config=raw_config,
+        card_management_service=deps["card_management_service"],
+        template_repository=deps["template_repository"],
+        template_download_service=deps["template_download_service"],
+        template_management_service=deps["template_management_service"],
+        subscription_batch_delivery_service=deps["subscription_batch_delivery_service"],
+        delivery_repository=deps["delivery_repository"],
     )
     web_api.register_all(context)
     logger.info("Web API 已注册")

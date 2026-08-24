@@ -34,3 +34,14 @@ def test_lazy_export_map_matches_real_module_exports(package_name: str) -> None:
         expected = _resolve_export_target(package, name, target)
 
         assert getattr(package, name) is expected
+
+
+def test_subscription_card_management_service_is_a_public_application_export() -> None:
+    services = import_module("astrbot_plugin_rsshub.src.application.services")
+
+    exported = services.SubscriptionCardManagementService
+
+    implementation = import_module(
+        "astrbot_plugin_rsshub.src.application.services.subscription_card_management_service"
+    )
+    assert exported is implementation.SubscriptionCardManagementService

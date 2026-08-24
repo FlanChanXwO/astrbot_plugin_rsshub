@@ -498,6 +498,71 @@ class TestUnsubscribeFeedCommand:
         assert result.success is False
         assert "无权限" in result.message
 
+    @pytest.mark.asyncio
+    async def test_unsubscribe_is_blocked_by_unresolved_delivery(self):
+        from astrbot_plugin_rsshub.src.application.commands.unsubscribe_feed_cmd import (
+            UnsubscribeFeedCommand,
+        )
+        from astrbot_plugin_rsshub.src.domain.entities.feed import Feed
+        from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
+        from astrbot_plugin_rsshub.src.domain.repositories.delivery_repository import (
+            DeliveryDeletionBlockedError,
+        )
+
+        subscription = Subscription(id=1, user_id="user123", feed_id=1)
+        sub_repo = MagicMock()
+        sub_repo.get_by_id = AsyncMock(return_value=subscription)
+        sub_repo.delete = AsyncMock()
+        feed_repo = MagicMock()
+        feed_repo.get_by_id = AsyncMock(
+            return_value=Feed(id=1, link="https://example.com/rss", title="Feed")
+        )
+        delivery_repo = AsyncMock()
+        delivery_repo.delete_owner.side_effect = DeliveryDeletionBlockedError(
+            {"pending_batch": 1}
+        )
+
+        result = await UnsubscribeFeedCommand(
+            sub_repo,
+            feed_repo,
+            delivery_repo=delivery_repo,
+        ).execute(sub_id=1, user_id="user123")
+
+        assert result.success is False
+        assert "尚未消费" in result.message
+        sub_repo.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_unsubscribe_reports_unresolved_delivery_as_failure():
+    from astrbot_plugin_rsshub.src.application.commands.batch_unsubscribe_cmd import (
+        BatchUnsubscribeCommand,
+    )
+    from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
+    from astrbot_plugin_rsshub.src.domain.repositories.delivery_repository import (
+        DeliveryDeletionBlockedError,
+    )
+
+    sub_repo = MagicMock()
+    sub_repo.get_by_id = AsyncMock(
+        return_value=Subscription(id=1, user_id="u1", feed_id=2)
+    )
+    sub_repo.delete = AsyncMock()
+    delivery_repo = AsyncMock()
+    delivery_repo.delete_owner.side_effect = DeliveryDeletionBlockedError(
+        {"pending_batch": 1}
+    )
+
+    result = await BatchUnsubscribeCommand(
+        sub_repo,
+        delivery_repo=delivery_repo,
+    ).execute([1], "u1")
+
+    assert result.success is False
+    assert result.data.items[0].success is False
+    assert "尚未消费" in result.data.items[0].message
+    sub_repo.delete.assert_not_awaited()
+
 
 class TestTestSubscriptionCommand:
     """测试订阅测试命令"""
@@ -553,6 +618,53 @@ class TestTestSubscriptionCommand:
             "https://example.com/rss.xml",
             verbose=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_test_subscription_returns_current_card_configuration(self):
+        from astrbot_plugin_rsshub.src.application.commands.test_subscription_cmd import (
+            TestSubscriptionCommand,
+        )
+        from astrbot_plugin_rsshub.src.application.services.feed_polling_service import (
+            FeedReadResult,
+        )
+        from astrbot_plugin_rsshub.src.domain.entities.feed import Feed
+        from astrbot_plugin_rsshub.src.domain.entities.subscription import Subscription
+        from astrbot_plugin_rsshub.src.infrastructure.fetcher.rss.parser import (
+            EntryParsed,
+        )
+
+        subscription = Subscription(
+            id=5,
+            user_id="user123",
+            feed_id=1,
+            send_card=True,
+            template_id="astrbot_plugin_rsshub_card_example",
+            card_send_original_content=True,
+        )
+        feed = Feed(id=1, link="https://example.com/rss.xml", title="Example")
+        sub_repo = MagicMock()
+        sub_repo.get_by_id = AsyncMock(return_value=subscription)
+        feed_repo = MagicMock()
+        feed_repo.get_by_id = AsyncMock(return_value=feed)
+        polling_service = AsyncMock()
+        polling_service.fetch_feed_entries.return_value = FeedReadResult(
+            success=True,
+            status="fetched",
+            message="ok",
+            entries=[EntryParsed(guid="guid-1", title="Entry")],
+            web_feed=MagicMock(rss_d=MagicMock(feed={"title": "Example"})),
+        )
+
+        result = await TestSubscriptionCommand(
+            subscription_repo=sub_repo,
+            feed_repo=feed_repo,
+            polling_service=polling_service,
+        ).execute(sub_id=5, user_id="user123")
+
+        dto = result.data["subscription"]
+        assert dto.send_card is True
+        assert dto.template_id == "astrbot_plugin_rsshub_card_example"
+        assert dto.card_send_original_content is True
 
     @pytest.mark.asyncio
     async def test_test_url_uses_polling_service_read_path(self):

@@ -396,7 +396,7 @@ textarea.select-input { resize: vertical; line-height: 1.5; }
   .compact-filter-value,
   .compact-clear-button,
   .compact-filter-row > .btn:not(.btn-icon) { grid-column: 1 / -1; width: 100%; }
-  .compact-filter-row > .btn-add-circle { grid-column: 1; width: 40px; justify-self: start; }
+  .compact-filter-row > .btn.btn-add-circle { grid-column: 1; width: 40px; flex: 0 0 40px; justify-self: start; }
   .compact-filter-row > .btn-icon { grid-column: 2; grid-row: auto; justify-self: end; }
   .compact-filter-chips { gap: 6px; }
   .filter-chip { max-width: 100%; }

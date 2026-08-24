@@ -1103,6 +1103,8 @@ class WebApiHandler:
         blocked_users: list[dict[str, Any]] = []
         for user_id in user_ids:
             if self._bundle_repository is not None:
+                # Bundle 通过 user_id 外键归属；本端点不做 Bundle 级联事务，
+                # 必须先阻断并让调用方显式删除 Bundle，避免用户删除后留下孤儿 owner。
                 bundles = await self._bundle_repository.get_by_user(user_id)
                 if bundles:
                     blocked_users.append(
@@ -1490,6 +1492,8 @@ class WebApiHandler:
             return jsonify({"ok": False, "error": "feed_id 或 feed_ids 不能为空"})
 
         if self._bundle_repository is not None:
+            # BundleFeed 对 Feed 使用 ON DELETE RESTRICT；删除前报告成员引用，
+            # 避免订阅已删而 Feed 在外键阶段失败，形成部分删除/不可诊断 500。
             bundle_member_counts: dict[int, int] = {}
             for bundle in await self._bundle_repository.get_all():
                 if getattr(bundle, "id", None) is None:

@@ -103,7 +103,12 @@ export async function ready() {
 
 async function handleResponse(result) {
   if (result && result.ok !== undefined) {
-    if (!result.ok) throw new Error(result.error || result.message || '操作失败');
+    if (!result.ok) {
+      const error = new Error(result.error || result.message || '操作失败');
+      error.code = result.error_code || '';
+      error.details = result.details;
+      throw error;
+    }
     return result;
   }
   return result;
@@ -139,6 +144,93 @@ export async function getSubscriptions(filters = {}) {
   setTextParam(params, 'keyword', filters.keyword);
   const r = await apiGet('subscriptions', params);
   return { items: r.items || [], total: r.total || 0 };
+}
+
+export async function getBundles({ userId = '', keyword = '', page = 1, pageSize = 20 } = {}) {
+  const params = { page, page_size: pageSize };
+  setTextParam(params, 'user_id', userId);
+  setTextParam(params, 'keyword', keyword);
+  const r = await apiGet('bundles', params);
+  return {
+    items: r.items || [],
+    total: r.total || 0,
+    page: r.page || page,
+    page_size: r.page_size || pageSize,
+  };
+}
+
+export async function getTemplateOptions(ownerType, ownerId, userId) {
+  const r = await apiGet('templates/options', {
+    owner_type: ownerType,
+    owner_id: ownerId,
+    user_id: userId,
+  });
+  return { items: r.items || [], total: r.total || 0 };
+}
+
+export async function getBundleDetail(bundleId, userId) {
+  return await apiGet('bundles/detail', { id: bundleId, user_id: userId });
+}
+
+export async function updateBundle(bundleId, userId, options = {}) {
+  return await apiPost('bundles/update', {
+    id: bundleId,
+    user_id: userId,
+    ...options,
+  });
+}
+
+export async function updateBundleMembers(bundleId, userId, feedIds) {
+  return await apiPost('bundles/members', {
+    id: bundleId,
+    user_id: userId,
+    feed_ids: feedIds,
+  });
+}
+
+export async function updateBundleHandlers(bundleId, userId, handlers) {
+  return await apiPost('bundles/handlers', {
+    id: bundleId,
+    user_id: userId,
+    handlers,
+  });
+}
+
+export async function setBundleState(bundleId, userId, state) {
+  return await apiPost('bundles/state', {
+    id: bundleId,
+    user_id: userId,
+    state,
+  });
+}
+
+export async function deleteBundle(bundleId, userId) {
+  return await apiPost('bundles/delete', { id: bundleId, user_id: userId });
+}
+
+export async function getTemplates() {
+  const r = await apiGet('templates');
+  return { items: r.items || [], total: r.total || 0 };
+}
+
+export async function installTemplateFromUrl(url, allowInsecureHttp = false) {
+  return await apiPost('templates/install', {
+    url,
+    allow_insecure_http: Boolean(allowInsecureHttp),
+  });
+}
+
+export async function previewTemplate({ ownerType, ownerId, userId, templateId }) {
+  return await apiPost('templates/preview', {
+    owner_type: ownerType,
+    owner_id: ownerId,
+    user_id: userId,
+    template_id: templateId,
+  });
+}
+
+export async function deleteTemplate(templateId) {
+  return await apiPost('templates/delete', { template_id: templateId });
 }
 
 export async function getFeeds(filters = {}) {
@@ -298,6 +390,12 @@ export async function deletePushHistoryBatch(historyIds) {
 
 export async function retryPushHistory(historyId) {
   return await apiPostRaw('push-history/retry', { history_id: historyId });
+}
+
+export async function discardDeliveryBatch(batchId, reason = '') {
+  const payload = { batch_id: batchId };
+  if (reason) payload.reason = reason;
+  return await apiPost('delivery-batches/discard', payload);
 }
 
 export async function cleanupPushHistory(days = 30) {

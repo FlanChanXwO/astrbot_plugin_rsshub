@@ -6,7 +6,9 @@ import {
   batchActivate,
   batchDeactivate,
   batchUnsubscribe,
-  getStats
+  getStats,
+  getTemplateOptions,
+  previewTemplate,
 } from '../../js/api.js';
 import {
   buildHandlersFromEditorState,
@@ -178,6 +180,72 @@ export const subscriptionsModule = {
     return subUserId || filterUserIds[0] || undefined;
   },
 
+  async loadSubscriptionTemplateOptions() {
+    if (!this.editForm?.id) return;
+    this.editForm.template_options_loading = true;
+    this.editForm.card_error = '';
+    try {
+      const result = await getTemplateOptions(
+        'subscription',
+        this.editForm.id,
+        this.currentSubUserId(),
+      );
+      this.editForm.template_options = result.items || [];
+      if (
+        this.editForm.send_card &&
+        !this.editForm.template_options.some((item) => item.id === this.editForm.template_id)
+      ) {
+        this.editForm.card_error = '当前订阅没有匹配的模板候选，不能启用或保存卡片配置。';
+      }
+    } catch (err) {
+      this.editForm.template_options = [];
+      this.editForm.card_error = err.message || '模板候选加载失败';
+    } finally {
+      this.editForm.template_options_loading = false;
+    }
+  },
+
+  subscriptionTemplateOptionsReady() {
+    return Boolean(this.editForm) && !this.editForm.template_options_loading;
+  },
+
+  subscriptionCardConfigurationValid() {
+    if (!this.editForm?.send_card) return true;
+    return Boolean(
+      this.editForm.template_id &&
+        (this.editForm.template_options || []).some(
+          (item) => item.id === this.editForm.template_id,
+        ),
+    );
+  },
+
+  subscriptionPreviewConfigurationValid() {
+    return Boolean(this.editForm?.send_card) && this.subscriptionCardConfigurationValid();
+  },
+
+  async previewSubscriptionCard() {
+    if (!this.editForm?.id || !this.subscriptionPreviewConfigurationValid()) {
+      if (this.editForm) this.editForm.card_error = '请先选择当前订阅的严格匹配模板候选。';
+      return;
+    }
+    const id = Number(this.editForm.id || 0);
+    await this.runPending(`sub:preview:${id}`, async () => {
+      const result = await previewTemplate({
+        ownerType: 'subscription',
+        ownerId: id,
+        userId: this.currentSubUserId(),
+        templateId: this.editForm.template_id,
+      });
+      this.editForm.card_preview = {
+        src: `data:image/png;base64,${result.png_base64}`,
+        entryCount: result.entry_count || 0,
+      };
+    }).catch((err) => {
+      this.editForm.card_error = err.message || '订阅卡片预览失败';
+      this.showToast(`订阅卡片预览失败: ${this.editForm.card_error}`, 'error');
+    });
+  },
+
   selectedSubsByUser() {
     const selected = new Set(this.selectedIds);
     return this.filteredSubs
@@ -223,6 +291,10 @@ export const subscriptionsModule = {
   },
 
   async handleEditSub() {
+    if (!this.subscriptionCardConfigurationValid()) {
+      this.editForm.card_error = '请先选择当前订阅的严格匹配模板候选。';
+      return;
+    }
     await this.runPending(`sub:save:${this.editForm.id}`, async () => {
       const options = {};
       if (this.editForm.title !== undefined) options.title = this.editForm.title;
@@ -246,6 +318,9 @@ export const subscriptionsModule = {
       options.display_entry_tags = this.editForm.display_entry_tags;
       options.style = this.editForm.style;
       options.display_media = this.editForm.display_media;
+      options.send_card = Boolean(this.editForm.send_card);
+      options.template_id = this.editForm.send_card ? this.editForm.template_id : null;
+      options.card_send_original_content = Boolean(this.editForm.card_send_original_content);
 
       await updateSubscription(this.editForm.id, options, this.currentSubUserId());
       this.showToast('订阅已更新');

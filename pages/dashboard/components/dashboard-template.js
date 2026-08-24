@@ -1,5 +1,7 @@
 import { overviewPageTemplate } from './pages/overview.js';
 import { subscriptionsActionsTemplate, subscriptionsPageTemplate } from './pages/subscriptions.js';
+import { bundlesActionsTemplate, bundlesPageTemplate } from './pages/bundles.js';
+import { templatesActionsTemplate, templatesPageTemplate } from './pages/templates.js';
 import { usersActionsTemplate, usersPageTemplate } from './pages/users.js';
 import { feedsActionsTemplate, feedsPageTemplate } from './pages/feeds.js';
 import { pushHistoryActionsTemplate, pushHistoryPageTemplate } from './pages/push-history.js';
@@ -18,6 +20,8 @@ const sidebarTemplate = String.raw`
       <nav class="dashboard-nav">
         <button class="dashboard-nav-item" :class="{ active: activeTab === 'overview' }" @click="openTab('overview')" type="button">概览</button>
         <button class="dashboard-nav-item" :class="{ active: activeTab === 'subs' }" @click="openTab('subs')" type="button">订阅列表</button>
+        <button class="dashboard-nav-item" :class="{ active: activeTab === 'bundles' }" @click="openTab('bundles')" type="button">聚合订阅</button>
+        <button class="dashboard-nav-item" :class="{ active: activeTab === 'templates' }" @click="openTab('templates')" type="button">卡片模板</button>
         <button class="dashboard-nav-item" :class="{ active: activeTab === 'users' }" @click="openTab('users')" type="button">用户</button>
         <button class="dashboard-nav-item" :class="{ active: activeTab === 'feeds' }" @click="openTab('feeds')" type="button">Feed 源</button>
         <button class="dashboard-nav-item" :class="{ active: activeTab === 'push-history' }" @click="openTab('push-history')" type="button">推送历史</button>
@@ -36,6 +40,8 @@ export const dashboardTemplate = [
   '    <main class="dashboard-main">',
   '      <div class="dashboard-toolbar-stack">',
   subscriptionsActionsTemplate,
+  bundlesActionsTemplate,
+  templatesActionsTemplate,
   usersActionsTemplate,
   feedsActionsTemplate,
   pushHistoryActionsTemplate,
@@ -43,6 +49,8 @@ export const dashboardTemplate = [
   '      <div class="dashboard-content">',
   overviewPageTemplate,
   subscriptionsPageTemplate,
+  bundlesPageTemplate,
+  templatesPageTemplate,
   usersPageTemplate,
   feedsPageTemplate,
   handlersPageTemplate,

@@ -180,6 +180,22 @@ class BundleRepositoryImpl:
             )
             return [self._to_member_entity(orm) for orm in result.scalars().all()]
 
+    async def count_members_by_feed_ids(
+        self, feed_ids: Sequence[int]
+    ) -> dict[int, int]:
+        """按 Feed 批量统计 BundleFeed 引用，避免 Dashboard 删除时 N+1 查询。"""
+        ids = sorted({int(feed_id) for feed_id in feed_ids if int(feed_id) > 0})
+        if not ids:
+            return {}
+
+        async with self._db.get_session() as session:
+            result = await session.execute(
+                select(BundleFeedORM.feed_id, func.count())
+                .where(BundleFeedORM.feed_id.in_(ids))
+                .group_by(BundleFeedORM.feed_id)
+            )
+            return {int(feed_id): int(count) for feed_id, count in result.all()}
+
     async def add_member(
         self,
         bundle_id: int,

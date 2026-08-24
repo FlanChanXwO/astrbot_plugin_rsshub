@@ -14,14 +14,14 @@ from astrbot_plugin_rsshub.src.domain.entities.push_history import PushHistory
 from astrbot_plugin_rsshub.src.domain.repositories.delivery_repository import (
     DeliveryConsistencyError,
 )
+from astrbot_plugin_rsshub.src.infrastructure.persistence.bundle_repository_impl import (
+    get_bundle_mutation_lock,
+)
 from astrbot_plugin_rsshub.src.infrastructure.persistence.database import (
     DatabaseManager,
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.delivery_repository_impl import (
     DeliveryRepositoryImpl,
-)
-from astrbot_plugin_rsshub.src.infrastructure.persistence.bundle_repository_impl import (
-    get_bundle_mutation_lock,
 )
 from astrbot_plugin_rsshub.src.infrastructure.persistence.migrations import (
     MigrationRunner,
@@ -100,10 +100,8 @@ async def test_delete_user_blocks_existing_bundle_owner_before_mutation():
 
 @pytest.mark.asyncio
 async def test_delete_feed_blocks_bundle_member_reference_before_mutation():
-    bundle = MagicMock(id=7)
     bundle_repository = MagicMock()
-    bundle_repository.get_all = AsyncMock(return_value=[bundle])
-    bundle_repository.list_members = AsyncMock(return_value=[MagicMock(feed_id=9)])
+    bundle_repository.count_members_by_feed_ids = AsyncMock(return_value={9: 1})
     sub_repository = MagicMock()
     sub_repository.list_for_dashboard = AsyncMock(return_value=[])
     delivery_repository = MagicMock()
@@ -139,7 +137,7 @@ async def test_delete_feed_serializes_bundle_mutation_while_deleting():
     mutation_lock = get_bundle_mutation_lock()
     mutation_entered = asyncio.Event()
     bundle_repository = MagicMock()
-    bundle_repository.get_all = AsyncMock(return_value=[])
+    bundle_repository.count_members_by_feed_ids = AsyncMock(return_value={})
     feed_repository = MagicMock()
 
     async def delete_many(_feed_ids):

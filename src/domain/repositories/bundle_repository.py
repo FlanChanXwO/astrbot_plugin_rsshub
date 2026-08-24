@@ -35,6 +35,10 @@ class BundleRepository(Protocol):
 
     async def list_members(self, bundle_id: int) -> list[BundleFeed]: ...
 
+    async def count_members_by_feed_ids(
+        self, feed_ids: Sequence[int]
+    ) -> dict[int, int]: ...
+
     async def add_member(
         self,
         bundle_id: int,

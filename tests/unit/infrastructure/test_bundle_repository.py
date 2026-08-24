@@ -84,6 +84,7 @@ async def test_bundle_repository_crud_and_atomic_member_reordering(tmp_path) -> 
         2,
         1,
     ]
+    assert await repository.count_members_by_feed_ids([1, 2, 3, 99]) == {1: 1, 2: 1}
     await database.close()
 
 

@@ -1508,17 +1508,9 @@ class WebApiHandler:
         if self._bundle_repository is not None:
             # BundleFeed 对 Feed 使用 ON DELETE RESTRICT；删除前报告成员引用，
             # 避免订阅已删而 Feed 在外键阶段失败，形成部分删除/不可诊断 500。
-            bundle_member_counts: dict[int, int] = {}
-            for bundle in await self._bundle_repository.get_all():
-                if getattr(bundle, "id", None) is None:
-                    continue
-                members = await self._bundle_repository.list_members(bundle.id)
-                for member in members:
-                    feed_id = int(getattr(member, "feed_id", 0) or 0)
-                    if feed_id in feed_ids:
-                        bundle_member_counts[feed_id] = (
-                            bundle_member_counts.get(feed_id, 0) + 1
-                        )
+            bundle_member_counts = (
+                await self._bundle_repository.count_members_by_feed_ids(feed_ids)
+            )
             if bundle_member_counts:
                 blocked_feeds = [
                     {

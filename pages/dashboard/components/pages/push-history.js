@@ -63,8 +63,8 @@ export const pushHistoryPageTemplate = String.raw`
                     <div>
                       <strong>{{ group.batchId ? '可靠批次 #' + group.batchId : '单条输出' }}</strong>
                       <span v-if="group.batchId">{{ group.items.length }} 条输出 · {{ group.hasUnresolvedOutput ? '仍有未完成输出' : '输出已完成或已丢弃' }}</span>
-                      <span v-if="group.template">模板：{{ group.template.id || group.template.name || '已固化模板' }}</span>
-                      <span v-if="group.sourceContext && group.sourceContext.bundle_id">Bundle #{{ group.sourceContext.bundle_id }}</span>
+                      <span v-if="group.template">模板：{{ group.template.metadata?.id || group.template.id || group.template.name || '已固化模板' }}</span>
+                      <span v-if="group.bundleId">Bundle #{{ group.bundleId }}{{ group.memberCount ? ' · ' + group.memberCount + ' 个成员' : '' }}</span>
                     </div>
                     <button v-if="group.batchId && group.hasUnresolvedOutput" class="btn btn-danger btn-small" type="button" :class="{ 'is-loading': isPending('delivery-batch:discard:' + group.batchId) }" :disabled="isPending('delivery-batch:discard:' + group.batchId)" @click.stop="discardPushHistoryBatch(group.batchId)">丢弃批次</button>
                   </div>

@@ -5,12 +5,52 @@
 不包含任何 ORM 或持久化逻辑。
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
 MAX_FAIL_REASON_LENGTH = 512
+
+
+@dataclass(frozen=True, slots=True)
+class PushHistoryDeletionSkip:
+    """一条因可靠批次尚未解决而被保留的历史记录。"""
+
+    history_id: int
+    batch_id: int
+    status: str | None
+    reason: str = "未解决投递批次不能删除，请重试或丢弃批次"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "history_id": self.history_id,
+            "batch_id": self.batch_id,
+            "status": self.status,
+            "reason": self.reason,
+        }
+
+
+class PushHistoryDeletionResult(int):
+    """兼容旧整数返回值，同时携带批量删除的跳过明细。"""
+
+    def __new__(
+        cls,
+        removed_count: int,
+        skipped: tuple[PushHistoryDeletionSkip, ...] = (),
+    ) -> Self:
+        result = int.__new__(cls, removed_count)
+        result.skipped = tuple(skipped)
+        return result
+
+    @property
+    def removed_count(self) -> int:
+        return int(self)
+
+    @property
+    def skipped_count(self) -> int:
+        return len(self.skipped)
 
 
 def normalize_fail_reason(
@@ -58,6 +98,10 @@ class PushHistory(BaseModel):
     id: int | None = Field(default=None, description="数据库ID")
     sub_id: int | None = Field(default=None, description="订阅ID")
     batch_id: int | None = Field(default=None, description="投递批次 ID")
+    batch_status: str | None = Field(
+        default=None,
+        description="查询时关联的投递批次状态，不落库",
+    )
     bundle_id: int | None = Field(default=None, description="Bundle ID")
     user_id: str = Field(..., description="用户ID")
     feed_id: int | None = Field(default=None, description="FeedID")

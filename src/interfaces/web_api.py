@@ -2375,36 +2375,7 @@ class WebApiHandler:
 
         data = []
         for h in items:
-            data.append(
-                {
-                    "id": h.id,
-                    "sub_id": h.sub_id,
-                    "user_id": h.user_id,
-                    "feed_id": h.feed_id,
-                    "source_type": h.source_type,
-                    "source_key": h.source_key,
-                    "content": h.content,
-                    "raw_xml": h.raw_xml,
-                    "media_urls": h.media_urls,
-                    "handler_trace": getattr(h, "handler_trace", None),
-                    "entry_title": h.entry_title,
-                    "entry_link": h.entry_link,
-                    "entry_guid": h.entry_guid,
-                    "feed_title": h.feed_title,
-                    "feed_link": h.feed_link,
-                    "platform_name": h.platform_name,
-                    "target_session": h.target_session,
-                    "status": h.status,
-                    "retry_count": h.retry_count,
-                    "max_retries": h.max_retries,
-                    "fail_reason": h.fail_reason,
-                    "created_at": h.created_at.isoformat() if h.created_at else None,
-                    "updated_at": h.updated_at.isoformat() if h.updated_at else None,
-                    "completed_at": h.completed_at.isoformat()
-                    if h.completed_at
-                    else None,
-                }
-            )
+            data.append(_serialize_push_history_item(h))
 
         return jsonify(
             {
@@ -2434,28 +2405,35 @@ class WebApiHandler:
         if not history_ids:
             return jsonify({"ok": False, "error": "history_id 或 history_ids 不能为空"})
 
-        if len(history_ids) == 1:
-            ok = await self._push_history_repo.delete(history_ids[0])
-            if ok:
-                self._bump_counter()
-            return jsonify(
-                {
-                    "ok": ok,
-                    "removed_count": 1 if ok else 0,
-                    "message": "已删除" if ok else "记录不存在",
-                }
-            )
-
-        removed_count = await self._push_history_repo.delete_many(history_ids)
+        deletion_result = await self._push_history_repo.delete_many(history_ids)
+        removed_count, skipped = _history_deletion_result_payload(deletion_result)
         if removed_count > 0:
             self._bump_counter()
+        if not removed_count and skipped:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "未解决投递批次不能删除，请重试或丢弃批次",
+                    "error_code": "PUSH_HISTORY_DELETE_BLOCKED",
+                    "removed_count": 0,
+                    "skipped_count": len(skipped),
+                    "skipped": skipped,
+                }
+            )
+        message = (
+            f"已删除 {removed_count} 条记录"
+            if removed_count > 0
+            else "没有匹配的记录被删除"
+        )
+        if skipped:
+            message += f"，跳过 {len(skipped)} 条未解决批次记录"
         return jsonify(
             {
                 "ok": removed_count > 0,
                 "removed_count": removed_count,
-                "message": f"已删除 {removed_count} 条记录"
-                if removed_count > 0
-                else "没有匹配的记录被删除",
+                "skipped_count": len(skipped),
+                "skipped": skipped,
+                "message": message,
             }
         )
 
@@ -2581,25 +2559,39 @@ class WebApiHandler:
         """清理旧推送历史"""
         data = await request.get_json()
         days = data.get("days", 30) if data else 30
-        count = await self._push_history_repo.delete_old_records(int(days))
-        self._bump_counter()
+        result = await self._push_history_repo.delete_old_records(int(days))
+        count, skipped = _history_deletion_result_payload(result)
+        if count > 0:
+            self._bump_counter()
+        message = f"已清理 {count} 条记录"
+        if skipped:
+            message += f"，跳过 {len(skipped)} 条未解决批次记录"
         return jsonify(
             {
                 "ok": True,
                 "removed_count": count,
-                "message": f"已清理 {count} 条记录",
+                "skipped_count": len(skipped),
+                "skipped": skipped,
+                "message": message,
             }
         )
 
     async def handle_clear_push_history(self):
         """清空推送历史。"""
-        count = await self._push_history_repo.delete_all()
-        self._bump_counter()
+        result = await self._push_history_repo.delete_all()
+        count, skipped = _history_deletion_result_payload(result)
+        if count > 0:
+            self._bump_counter()
+        message = f"已清空 {count} 条记录"
+        if skipped:
+            message += f"，跳过 {len(skipped)} 条未解决批次记录"
         return jsonify(
             {
                 "ok": True,
                 "removed_count": count,
-                "message": f"已清空 {count} 条记录",
+                "skipped_count": len(skipped),
+                "skipped": skipped,
+                "message": message,
             }
         )
 
@@ -2713,6 +2705,76 @@ def _delivery_batch_summary(batch: Any | None) -> dict[str, Any] | None:
         "output_count": len(outputs),
         "output_statuses": [getattr(output, "status", None) for output in outputs],
     }
+
+
+def _serialize_push_history_item(history: Any) -> dict[str, Any]:
+    """序列化历史行及其批次快照，供页面分组和详情展示。"""
+    source_context = getattr(history, "source_context", None)
+    if not isinstance(source_context, dict):
+        source_context = None
+    document_snapshot = (
+        source_context.get("document_snapshot") if source_context else None
+    )
+    template_snapshot = (
+        source_context.get("template_snapshot") if source_context else None
+    )
+    document = (
+        document_snapshot.get("document")
+        if isinstance(document_snapshot, dict)
+        else None
+    )
+    input_xml = document.get("rss_xml") if isinstance(document, dict) else None
+
+    return {
+        "id": history.id,
+        "sub_id": history.sub_id,
+        "batch_id": getattr(history, "batch_id", None),
+        "batch_status": getattr(history, "batch_status", None),
+        "bundle_id": getattr(history, "bundle_id", None),
+        "user_id": history.user_id,
+        "feed_id": history.feed_id,
+        "source_type": history.source_type,
+        "source_key": history.source_key,
+        "content": history.content,
+        "raw_xml": history.raw_xml,
+        "output_xml": history.raw_xml,
+        "input_xml": input_xml,
+        "media_urls": history.media_urls,
+        "handler_trace": getattr(history, "handler_trace", None),
+        "output_kind": getattr(history, "output_kind", "standard"),
+        "output_order": getattr(history, "output_order", 0),
+        "source_context": source_context,
+        "template_snapshot": template_snapshot,
+        "document_snapshot": document_snapshot,
+        "entry_title": history.entry_title,
+        "entry_link": history.entry_link,
+        "entry_guid": history.entry_guid,
+        "feed_title": history.feed_title,
+        "feed_link": history.feed_link,
+        "platform_name": history.platform_name,
+        "target_session": history.target_session,
+        "status": history.status,
+        "retry_count": history.retry_count,
+        "max_retries": history.max_retries,
+        "fail_reason": history.fail_reason,
+        "created_at": history.created_at.isoformat() if history.created_at else None,
+        "updated_at": history.updated_at.isoformat() if history.updated_at else None,
+        "completed_at": history.completed_at.isoformat()
+        if history.completed_at
+        else None,
+    }
+
+
+def _history_deletion_result_payload(result: Any) -> tuple[int, list[dict[str, Any]]]:
+    """将兼容整数返回值转换为页面可展示的删除报告。"""
+    removed_count = int(result or 0)
+    skipped: list[dict[str, Any]] = []
+    for item in getattr(result, "skipped", ()) or ():
+        if hasattr(item, "as_dict"):
+            skipped.append(item.as_dict())
+        elif isinstance(item, dict):
+            skipped.append(dict(item))
+    return removed_count, skipped
 
 
 def _query_values(name: str) -> list[str]:

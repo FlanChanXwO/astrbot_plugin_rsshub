@@ -23,6 +23,8 @@ export const pushHistoryModule = {
         groups.set(key, {
           key,
           batchId: batchId > 0 ? batchId : null,
+          bundleId: null,
+          memberCount: 0,
           items: [],
           hasUnresolvedOutput: false,
           template: null,
@@ -33,11 +35,23 @@ export const pushHistoryModule = {
       group.items.push(item);
       if (batchId > 0) {
         const status = String(item?.status || '').toLowerCase();
-        if (!['success', 'skipped', 'discarded'].includes(status)) {
+        const batchStatus = String(item?.batch_status || '').toLowerCase();
+        if (
+          !['success', 'skipped', 'discarded'].includes(status) ||
+          (batchStatus && !['confirmed', 'discarded'].includes(batchStatus))
+        ) {
           group.hasUnresolvedOutput = true;
         }
         group.template ||= item?.source_context?.template_snapshot || item?.template_snapshot || null;
         group.sourceContext ||= item?.source_context || null;
+        const bundleId = Number(
+          item?.bundle_id || item?.source_context?.bundle?.id || 0,
+        );
+        if (bundleId > 0) group.bundleId ||= bundleId;
+        const members = item?.source_context?.feeds;
+        if (Array.isArray(members)) {
+          group.memberCount = Math.max(group.memberCount, members.length);
+        }
       }
     }
     for (const group of groups.values()) {

@@ -151,25 +151,36 @@ export const mainPanelTemplate = String.raw`
     <div v-else-if="panelMode === 'history-detail' && historyDetail" class="form">
       <div class="panel-section">
         <h4>基础信息</h4>
-        <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="historyDetail.status">{{ historyDetail.status }}</span></span></div>
-        <div class="detail-row"><span class="detail-label">来源</span><span class="detail-value">{{ historyDetail.source_type || 'feed' }} / {{ historyDetail.source_key || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">用户</span><span class="detail-value">{{ historyDetail.user_id }}</span></div>
-        <div class="detail-row"><span class="detail-label">Feed</span><span class="detail-value">{{ historyDetail.feed_title || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">条目</span><span class="detail-value">{{ historyDetail.entry_title || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">链接</span><span class="detail-value cell-wrap">{{ historyDetail.entry_link || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">GUID</span><span class="detail-value cell-wrap">{{ historyDetail.entry_guid || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">目标</span><span class="detail-value">{{ historyDetail.target_session || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">平台</span><span class="detail-value">{{ historyDetail.platform_name || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">重试</span><span class="detail-value">{{ historyDetail.retry_count }}/{{ historyDetail.max_retries }}</span></div>
-        <div class="detail-row"><span class="detail-label">创建时间</span><span class="detail-value">{{ formatDate(historyDetail.created_at) }}</span></div>
-        <div class="detail-row"><span class="detail-label">完成时间</span><span class="detail-value">{{ formatDate(historyDetail.completed_at) }}</span></div>
+        <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="historyDetail?.status">{{ historyDetail?.status }}</span></span></div>
+        <div class="detail-row"><span class="detail-label">来源</span><span class="detail-value">{{ historyDetail?.source_type || 'feed' }} / {{ historyDetail?.source_key || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">用户</span><span class="detail-value">{{ historyDetail?.user_id }}</span></div>
+        <div class="detail-row"><span class="detail-label">Feed</span><span class="detail-value">{{ historyDetail?.feed_title || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">条目</span><span class="detail-value">{{ historyDetail?.entry_title || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">链接</span><span class="detail-value cell-wrap">{{ historyDetail?.entry_link || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">GUID</span><span class="detail-value cell-wrap">{{ historyDetail?.entry_guid || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">目标</span><span class="detail-value">{{ historyDetail?.target_session || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">平台</span><span class="detail-value">{{ historyDetail?.platform_name || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">重试</span><span class="detail-value">{{ historyDetail?.retry_count }}/{{ historyDetail?.max_retries }}</span></div>
+        <div class="detail-row"><span class="detail-label">创建时间</span><span class="detail-value">{{ formatDate(historyDetail?.created_at) }}</span></div>
+        <div class="detail-row"><span class="detail-label">完成时间</span><span class="detail-value">{{ formatDate(historyDetail?.completed_at) }}</span></div>
+      </div>
+      <div class="panel-section" v-if="historyDetail?.batch_id">
+        <h4>可靠投递批次</h4>
+        <div class="detail-row"><span class="detail-label">批次</span><span class="detail-value">#{{ historyDetail?.batch_id }}</span></div>
+        <div class="detail-row"><span class="detail-label">输出</span><span class="detail-value">{{ historyDetail?.output_kind || 'standard' }} · 顺序 {{ historyDetail?.output_order ?? 0 }}</span></div>
+        <div class="detail-row" v-if="historyDetail?.bundle_id"><span class="detail-label">Bundle</span><span class="detail-value">#{{ historyDetail?.bundle_id }}</span></div>
+        <div class="detail-row"><span class="detail-label">模板快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.template_snapshot) }}</span></div>
+        <div class="detail-row"><span class="detail-label">成员快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.source_context?.feeds) }}</span></div>
+        <div class="detail-row"><span class="detail-label">文档快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.document_snapshot) }}</span></div>
+        <div class="detail-row"><span class="detail-label">来源快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.source_context) }}</span></div>
       </div>
       <div class="panel-section">
         <h4>正文与来源</h4>
-        <div class="detail-row"><span class="detail-label">正文</span><span class="detail-value cell-wrap">{{ historyDetail.content || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">原始 XML</span><span class="detail-value cell-wrap">{{ historyDetail.raw_xml || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">媒体</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail.media_urls) }}</span></div>
-        <div class="detail-row"><span class="detail-label">错误</span><span class="detail-value error-block">{{ historyDetail.fail_reason || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">正文</span><span class="detail-value cell-wrap">{{ historyDetail?.content || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">输入 XML</span><span class="detail-value cell-wrap">{{ historyDetail?.input_xml || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">输出 XML</span><span class="detail-value cell-wrap">{{ historyDetail?.output_xml || historyDetail?.raw_xml || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">媒体</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.media_urls) }}</span></div>
+        <div class="detail-row"><span class="detail-label">错误</span><span class="detail-value error-block">{{ historyDetail?.fail_reason || '-' }}</span></div>
       </div>
       <div class="panel-section">
         <h4>调用链</h4>
@@ -183,7 +194,7 @@ export const mainPanelTemplate = String.raw`
           </div>
           <div class="trace-raw-block">
             <div class="trace-raw-title">原始 Trace JSON</div>
-            <pre class="trace-raw-json">{{ prettyJson(historyDetail.handler_trace) }}</pre>
+            <pre class="trace-raw-json">{{ prettyJson(historyDetail?.handler_trace) }}</pre>
           </div>
         </div>
       </div>

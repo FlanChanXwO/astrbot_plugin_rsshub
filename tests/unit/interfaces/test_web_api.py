@@ -13,6 +13,10 @@ from astrbot_plugin_rsshub.src.application.services.feed_polling_service import 
 from astrbot_plugin_rsshub.src.application.services.subscription_card_management_service import (
     CardTemplateOption,
 )
+from astrbot_plugin_rsshub.src.domain.entities.push_history import (
+    PushHistoryDeletionResult,
+    PushHistoryDeletionSkip,
+)
 from astrbot_plugin_rsshub.src.domain.repositories.delivery_repository import (
     DeliveryDeletionBlockedError,
 )
@@ -609,6 +613,74 @@ async def test_push_history_endpoint_keeps_empty_fail_reason_empty_for_success()
 
 
 @pytest.mark.asyncio
+async def test_push_history_endpoint_serializes_batch_output_snapshot():
+    push_history_repo = MagicMock()
+    push_history_repo.get_all = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                id=31,
+                sub_id=None,
+                batch_id=23,
+                bundle_id=7,
+                user_id="alice",
+                feed_id=None,
+                source_type="bundle",
+                source_key="bundle:7",
+                content="聚合内容",
+                raw_xml="<rss version='2.0' />",
+                media_urls=["https://example.com/card.png"],
+                handler_trace=[{"name": "ai_filter", "status": "ok"}],
+                output_kind="card",
+                output_order=0,
+                source_context={
+                    "template_snapshot": {"id": "card-demo", "version": "1.0.0"},
+                    "document_snapshot": {
+                        "document": {"rss_xml": "<rss version='2.0' />"},
+                    },
+                    "feeds": [{"id": 1, "position": 0}],
+                },
+                entry_title="聚合卡片",
+                entry_link="https://example.com/bundle",
+                entry_guid=None,
+                feed_title="Bundle",
+                feed_link="https://example.com/one",
+                platform_name="aiocqhttp",
+                target_session="default:GroupMessage:1",
+                status="waiting",
+                batch_status="pending",
+                retry_count=0,
+                max_retries=3,
+                fail_reason=None,
+                created_at=None,
+                updated_at=None,
+                completed_at=None,
+            )
+        ]
+    )
+    push_history_repo.count_all = AsyncMock(return_value=1)
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history?page=1&page_size=20",
+        method="GET",
+    ):
+        response = await handler.handle_push_history()
+
+    item = (await response.get_json())["items"][0]
+    assert item["batch_id"] == 23
+    assert item["bundle_id"] == 7
+    assert item["output_kind"] == "card"
+    assert item["output_order"] == 0
+    assert item["batch_status"] == "pending"
+    assert item["source_context"]["template_snapshot"]["id"] == "card-demo"
+    assert item["source_context"]["feeds"][0]["position"] == 0
+
+
+@pytest.mark.asyncio
 async def test_delete_push_history_endpoint_supports_batch_delete():
     push_history_repo = MagicMock()
     push_history_repo.delete_many = AsyncMock(return_value=2)
@@ -647,6 +719,46 @@ async def test_delete_push_history_endpoint_supports_batch_delete():
     assert payload["ok"] is True
     assert payload["removed_count"] == 2
     push_history_repo.delete_many.assert_awaited_once_with([11, 12])
+
+
+@pytest.mark.asyncio
+async def test_delete_push_history_endpoint_reports_skipped_pending_batch_rows():
+    push_history_repo = MagicMock()
+    push_history_repo.delete_many = AsyncMock(
+        return_value=PushHistoryDeletionResult(
+            1,
+            (
+                PushHistoryDeletionSkip(
+                    history_id=12,
+                    batch_id=9,
+                    status="waiting",
+                ),
+            ),
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/delete",
+        method="POST",
+        json={"history_ids": [11, 12]},
+    ):
+        response = await handler.handle_delete_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["removed_count"] == 1
+    assert payload["skipped_count"] == 1
+    assert payload["skipped"][0] == {
+        "history_id": 12,
+        "batch_id": 9,
+        "status": "waiting",
+        "reason": "未解决投递批次不能删除，请重试或丢弃批次",
+    }
 
 
 @pytest.mark.asyncio
@@ -754,6 +866,42 @@ async def test_clear_push_history_endpoint_deletes_all_history_rows():
     assert payload["removed_count"] == 9607
     assert payload["message"] == "已清空 9607 条记录"
     push_history_repo.delete_all.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_clear_push_history_endpoint_reports_preserved_pending_batch_rows():
+    push_history_repo = MagicMock()
+    push_history_repo.delete_all = AsyncMock(
+        return_value=PushHistoryDeletionResult(
+            0,
+            (
+                PushHistoryDeletionSkip(
+                    history_id=19,
+                    batch_id=4,
+                    status="failed",
+                ),
+            ),
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/clear",
+        method="POST",
+        json={},
+    ):
+        response = await handler.handle_clear_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["removed_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert payload["skipped"][0]["batch_id"] == 4
+    assert "跳过 1 条" in payload["message"]
 
 
 @pytest.mark.asyncio

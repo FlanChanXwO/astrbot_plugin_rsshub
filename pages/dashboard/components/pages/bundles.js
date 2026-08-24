@@ -104,8 +104,8 @@ export const bundlesPageTemplate = String.raw`
               <button class="btn btn-primary btn-small" type="button" :class="{ 'is-loading': isPending('bundle:card:' + bundleDetail.id) }" :disabled="!bundleCardConfigurationValid() || isPending('bundle:card:' + bundleDetail.id)" @click="saveBundleCardConfiguration()">保存卡片配置</button>
             </div>
             <div v-if="bundlePreview" class="preview-result">
-              <img :src="bundlePreview.src" alt="Bundle 卡片预览" />
-              <p>预览包含 {{ bundlePreview.entryCount }} 条处理后条目；不会写入水位、inbox、批次或历史。</p>
+              <img :src="bundlePreview?.src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='" alt="Bundle 卡片预览" />
+              <p>预览包含 {{ bundlePreview?.entryCount ?? 0 }} 条处理后条目；不会写入水位、inbox、批次或历史。</p>
             </div>
           </section>
 

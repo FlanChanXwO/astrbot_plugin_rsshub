@@ -101,7 +101,7 @@ export const mainPanelTemplate = String.raw`
         <div class="inline-actions">
           <button type="button" class="btn btn-secondary btn-small" :class="{ 'is-loading': isPending('sub:preview:' + editForm.id) }" :disabled="!subscriptionPreviewConfigurationValid() || isPending('sub:preview:' + editForm.id)" @click="previewSubscriptionCard()">预览卡片</button>
         </div>
-        <div v-if="editForm.card_preview" class="preview-result"><img :src="editForm.card_preview.src" alt="订阅卡片预览" /><p>预览包含 {{ editForm.card_preview.entryCount }} 条处理后条目；不会写入业务状态。</p></div>
+        <div v-if="editForm.card_preview" class="preview-result"><img :src="editForm.card_preview?.src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='" alt="订阅卡片预览" /><p>预览包含 {{ editForm.card_preview?.entryCount ?? 0 }} 条处理后条目；不会写入业务状态。</p></div>
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-danger" :class="{ 'is-loading': isPending('sub:delete:' + editForm.id) }" :disabled="isPending('sub:delete:' + editForm.id)" @click="handleDeleteSub()">删除订阅</button>

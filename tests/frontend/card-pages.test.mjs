@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { deleteTemplate, getBundles, getTemplateOptions } from '../../pages/dashboard/js/api.js';
+import { bundlesPageTemplate } from '../../pages/dashboard/components/pages/bundles.js';
+import { mainPanelTemplate } from '../../pages/dashboard/components/overlays/main-panel.js';
 import { bundlesModule } from '../../pages/dashboard/store/modules/bundles.js';
 import {
   safeTemplateRepositoryUrl,
@@ -190,4 +192,11 @@ test('模板仓库链接只允许 HTTP(S) 协议', () => {
   assert.equal(safeTemplateRepositoryUrl('http://example.com/repo'), 'http://example.com/repo');
   assert.equal(safeTemplateRepositoryUrl('javascript:alert(1)'), '');
   assert.equal(safeTemplateRepositoryUrl('data:text/html,<script>alert(1)</script>'), '');
+});
+
+test('预览抽屉卸载期间的绑定必须允许预览对象暂时为空', () => {
+  assert.match(bundlesPageTemplate, /bundlePreview\?\.src/);
+  assert.match(bundlesPageTemplate, /bundlePreview\?\.entryCount/);
+  assert.match(mainPanelTemplate, /editForm\.card_preview\?\.src/);
+  assert.match(mainPanelTemplate, /editForm\.card_preview\?\.entryCount/);
 });

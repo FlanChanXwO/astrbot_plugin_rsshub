@@ -2344,34 +2344,17 @@ class WebApiHandler:
         keywords.extend(_query_values("feed_link"))
         page = request.args.get("page", 1, type=int)
         page_size = request.args.get("page_size", 20, type=int)
-        offset = (page - 1) * page_size
-
-        if user_id:
-            items = await self._push_history_repo.get_by_user(
-                user_id=user_id,
-                limit=page_size,
-                offset=offset,
-                target_session=target_session,
-                status=status,
-                keywords=keywords or None,
-            )
-            total = await self._push_history_repo.count_by_user(
-                user_id=user_id,
-                target_session=target_session,
-                status=status,
-                keywords=keywords or None,
-            )
-        else:
-            items = await self._push_history_repo.get_all(
-                limit=page_size,
-                offset=offset,
-                status=status,
-                keywords=keywords or None,
-            )
-            total = await self._push_history_repo.count_all(
-                status=status,
-                keywords=keywords or None,
-            )
+        grouped_page = await self._push_history_repo.get_grouped_page(
+            page=page,
+            page_size=page_size,
+            user_id=user_id,
+            target_session=target_session,
+            status=status,
+            keywords=keywords or None,
+        )
+        items = grouped_page.items
+        total = grouped_page.total
+        group_total = grouped_page.group_total
 
         data = []
         for h in items:
@@ -2382,6 +2365,7 @@ class WebApiHandler:
                 "ok": True,
                 "items": data,
                 "total": total,
+                "group_total": group_total,
                 "page": page,
                 "page_size": page_size,
             }

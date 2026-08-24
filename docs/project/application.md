@@ -77,6 +77,8 @@ Subscription card 批次会在 `document_snapshot.input_entries` 保存本批所
 
 ## 推送历史与重试
 
+Dashboard 历史列表按可靠批次分页：批次是一个逻辑展示单元，普通历史行各自占一个单元。API 的 `total` 保留历史行数，`group_total` 用于页数；批次输出数量超过 `page_size` 时完整返回批次输出，页面不截断、不复制批次标题。历史行继续携带关联 `batch_status`，因此状态筛选不会解除未解决批次的删除保护。
+
 | 行为 | 当前语义 | 备注 |
 | --- | --- | --- |
 | `PushHistory.fail_reason` | 必须保持在模型和数据库限制内，当前上限为 512 字符 | 仓储读取历史脏数据时要能截断过长失败原因。 |

@@ -247,3 +247,16 @@ class PushHistory(BaseModel):
     def is_failed(self) -> bool:
         """检查是否推送失败"""
         return self.status == "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class PushHistoryPage:
+    """按 Dashboard 展示单元分页的推送历史结果。
+
+    ``total`` 继续表示历史记录行数；``group_total`` 表示可翻页的逻辑
+    展示单元数量。可靠批次是一组展示单元，普通历史记录各自占一个展示单元。
+    """
+
+    items: list[PushHistory]
+    total: int
+    group_total: int

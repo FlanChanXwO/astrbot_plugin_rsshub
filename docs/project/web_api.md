@@ -86,10 +86,22 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | 插件设置读取 | `GET /plugin-settings` | 无 | 读取启动级和默认订阅级配置。 | 不承担订阅创建、导入、导出。 |
 | 插件设置保存 | `POST /plugin-settings` | 设置 payload | 保存允许编辑的插件设置。 | 推送历史自动清理范围不通过这里保存。 |
 
+### 推送历史分页契约
+
+`GET /push-history` 的 `page_size` 按 Dashboard 的逻辑展示单元分页：每个 `batch_id` 是一个批次单元，没有批次的历史记录各自是一个单条单元。批次输出超过 `page_size` 时，`items` 会完整返回该批次的所有匹配输出，因此响应条数可以大于 `page_size`，不会静默截断或把同一批次拆到两页。
+
+- `total` 是筛选后的历史记录行数，用于页面顶部的记录总数。
+- `group_total` 是筛选后的逻辑展示单元数，用于计算页数；普通历史记录只有单条单元时，`group_total` 与 `total` 相同。
+- `items` 在批次内按 `output_order` 和历史 ID 保持稳定顺序；每条批次输出仍带 `batch_status`，页面可据此保持未解决批次的丢弃/删除保护。
+- `page` 与 `page_size` 仍原样返回。筛选条件继续作用于历史输出行，不改变普通历史的状态、关键词和会话筛选语义。
+
 ## 推送历史返回字段
 
 | 字段 | 含义 | 备注 |
 | --- | --- | --- |
+| `total` | 筛选后的历史记录行数 | 兼容原有记录总数语义。 |
+| `group_total` | 筛选后的逻辑展示单元数 | Dashboard 分页使用；批次不会因输出条数跨页而重复分组。 |
+| `page` / `page_size` | 当前逻辑单元页码 / 请求大小 | 大批次完整返回时，`items` 数量可以超过 `page_size`。 |
 | `content` | 最终可发送文本 | 不应泄漏原始 HTML 标签。 |
 | `raw_xml` | 历史记录兼容 XML 字段 | 普通历史保存处理后的条目 XML；批次历史保存最终输出 XML。 |
 | `input_xml` | handler 处理前的 XML | 单条 Subscription standard 或 Bundle 聚合文档可用；旧快照无法还原时为 `null`。 |

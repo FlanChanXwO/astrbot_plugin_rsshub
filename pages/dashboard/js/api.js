@@ -363,6 +363,7 @@ export async function getPushHistory({
   return {
     items: r.items || [],
     total: r.total || 0,
+    group_total: r.group_total ?? r.total ?? 0,
     page: r.page || 1,
     page_size: r.page_size || pageSize,
   };

@@ -8,13 +8,24 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import String, cast, delete, func, or_, text
+from sqlalchemy import (
+    Integer,
+    String,
+    cast,
+    delete,
+    func,
+    literal,
+    or_,
+    text,
+    union_all,
+)
 from sqlmodel import asc, desc, select
 
 from ...domain.entities.push_history import (
     PushHistory,
     PushHistoryDeletionResult,
     PushHistoryDeletionSkip,
+    PushHistoryPage,
     normalize_fail_reason,
     normalize_fail_reason_for_status,
 )
@@ -70,6 +81,23 @@ def _apply_history_keyword_filters(stmt, keywords: list[str] | None):
     if not clauses:
         return stmt
     return stmt.where(or_(*clauses))
+
+
+def _apply_history_scope_filters(
+    stmt,
+    *,
+    user_id: str | None = None,
+    target_session: str | None = None,
+    status: str | None = None,
+    keywords: list[str] | None = None,
+):
+    if user_id:
+        stmt = stmt.where(PushHistoryORM.user_id == user_id)
+    if target_session is not None:
+        stmt = stmt.where(PushHistoryORM.target_session == target_session)
+    if status:
+        stmt = stmt.where(PushHistoryORM.status == status)
+    return _apply_history_keyword_filters(stmt, keywords)
 
 
 def _history_last_activity_expr():
@@ -335,6 +363,139 @@ class PushHistoryRepositoryImpl:
                 self._to_entity(orm, batch_status=batch_status)
                 for orm, batch_status in result.all()
             ]
+
+    async def get_grouped_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        user_id: str | None = None,
+        target_session: str | None = None,
+        status: str | None = None,
+        keywords: list[str] | None = None,
+    ) -> PushHistoryPage:
+        """按批次/单条输出分页，避免批次在页面边界产生重复分组。"""
+        db = get_database()
+        async with db.get_session() as session:
+            filtered_stmt = _apply_history_scope_filters(
+                select(
+                    PushHistoryORM.id.label("history_id"),
+                    PushHistoryORM.batch_id.label("batch_id"),
+                    _history_last_activity_expr().label("last_activity"),
+                ),
+                user_id=user_id,
+                target_session=target_session,
+                status=status,
+                keywords=keywords,
+            )
+            filtered_rows = filtered_stmt.subquery("filtered_history")
+
+            total_result = await session.execute(
+                select(func.count()).select_from(filtered_rows)
+            )
+            total = int(total_result.scalar_one() or 0)
+
+            batch_groups = (
+                select(
+                    filtered_rows.c.batch_id,
+                    literal(None).cast(Integer).label("history_id"),
+                    func.max(filtered_rows.c.last_activity).label("last_activity"),
+                    literal(1).label("is_batch"),
+                )
+                .where(filtered_rows.c.batch_id.is_not(None))
+                .group_by(filtered_rows.c.batch_id)
+            )
+            single_groups = select(
+                literal(None).cast(Integer).label("batch_id"),
+                filtered_rows.c.history_id,
+                filtered_rows.c.last_activity,
+                literal(0).label("is_batch"),
+            ).where(filtered_rows.c.batch_id.is_(None))
+            grouped_rows = union_all(batch_groups, single_groups).subquery(
+                "history_groups"
+            )
+
+            group_total_result = await session.execute(
+                select(func.count()).select_from(grouped_rows)
+            )
+            group_total = int(group_total_result.scalar_one() or 0)
+
+            group_offset = (page - 1) * page_size
+            group_page_result = await session.execute(
+                select(
+                    grouped_rows.c.batch_id,
+                    grouped_rows.c.history_id,
+                    grouped_rows.c.is_batch,
+                )
+                .order_by(
+                    grouped_rows.c.last_activity.desc(),
+                    grouped_rows.c.is_batch.desc(),
+                    func.coalesce(
+                        grouped_rows.c.batch_id, grouped_rows.c.history_id
+                    ).desc(),
+                )
+                .offset(group_offset)
+                .limit(page_size)
+            )
+            group_rows = group_page_result.all()
+            if not group_rows:
+                return PushHistoryPage(items=[], total=total, group_total=group_total)
+
+            batch_ids = [
+                int(row.batch_id) for row in group_rows if row.batch_id is not None
+            ]
+            history_ids = [
+                int(row.history_id) for row in group_rows if row.history_id is not None
+            ]
+            group_conditions = []
+            if batch_ids:
+                group_conditions.append(PushHistoryORM.batch_id.in_(batch_ids))
+            if history_ids:
+                group_conditions.append(PushHistoryORM.id.in_(history_ids))
+
+            item_stmt = _apply_history_scope_filters(
+                select(PushHistoryORM, DeliveryBatchORM.status)
+                .outerjoin(
+                    DeliveryBatchORM,
+                    PushHistoryORM.batch_id == DeliveryBatchORM.id,
+                )
+                .where(or_(*group_conditions)),
+                user_id=user_id,
+                target_session=target_session,
+                status=status,
+                keywords=keywords,
+            )
+            item_result = await session.execute(item_stmt)
+            entities = [
+                self._to_entity(orm, batch_status=batch_status)
+                for orm, batch_status in item_result.all()
+            ]
+
+            group_order = {}
+            for index, row in enumerate(group_rows):
+                if row.batch_id is not None:
+                    group_order[("batch", int(row.batch_id))] = index
+                else:
+                    group_order[("history", int(row.history_id))] = index
+
+            def sort_key(history: PushHistory):
+                key = (
+                    ("batch", int(history.batch_id))
+                    if history.batch_id is not None
+                    else ("history", int(history.id or 0))
+                )
+                return (
+                    group_order.get(key, len(group_order)),
+                    history.output_order if history.batch_id is not None else 0,
+                    int(history.id or 0),
+                )
+
+            entities.sort(key=sort_key)
+            return PushHistoryPage(
+                items=entities,
+                total=total,
+                group_total=group_total,
+            )
 
     async def count_by_user(
         self,

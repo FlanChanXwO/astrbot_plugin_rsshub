@@ -108,6 +108,7 @@ export function createDashboardInitialState() {
     pushHistoryLoading: false,
     pushHistoryFilter: createEmptyPushHistoryFilters(),
     pushHistoryTotal: 0,
+    pushHistoryGroupTotal: 0,
     pushHistoryEditMode: false,
     selectedPushHistoryIds: [],
     routeKbLoading: false,

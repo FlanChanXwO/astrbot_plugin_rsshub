@@ -6,7 +6,7 @@
 from datetime import datetime
 from typing import Protocol
 
-from ..entities.push_history import PushHistory
+from ..entities.push_history import PushHistory, PushHistoryPage
 
 
 class PushHistoryRepository(Protocol):
@@ -113,6 +113,19 @@ class PushHistoryRepository(Protocol):
         keywords: list[str] | None = None,
     ) -> int:
         """统计全部推送历史条数，可按状态和关键词过滤。"""
+        ...
+
+    async def get_grouped_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        user_id: str | None = None,
+        target_session: str | None = None,
+        status: str | None = None,
+        keywords: list[str] | None = None,
+    ) -> PushHistoryPage:
+        """按逻辑展示单元分页，保证可靠批次不会被页边界拆开。"""
         ...
 
     async def count_retryable_failures(self) -> int:

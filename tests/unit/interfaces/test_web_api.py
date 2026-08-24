@@ -450,45 +450,48 @@ async def test_subscriptions_endpoint_accepts_array_style_filter_params():
 @pytest.mark.asyncio
 async def test_push_history_endpoint_filters_by_user_session_and_status():
     push_history_repo = MagicMock()
-    push_history_repo.get_by_user = AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                id=11,
-                user_id="alice",
-                feed_id=None,
-                source_type="agent",
-                source_key="daily:ai-news",
-                content="hello",
-                raw_xml="<entry><p>Hello</p></entry>",
-                media_urls=["https://example.com/a.jpg"],
-                handler_trace=[
-                    {
-                        "id": "builtin.ai_filter.default",
-                        "name": "ai_filter",
-                        "status": "ok",
-                        "allow": False,
-                        "reason": "广告",
-                    }
-                ],
-                entry_title="日报",
-                entry_link="https://example.com/post",
-                entry_guid="guid-11",
-                feed_title="AI Daily",
-                feed_link="https://example.com/feed",
-                platform_name="aiocqhttp",
-                target_session="default:GroupMessage:1",
-                status="failed",
-                retry_count=1,
-                max_retries=3,
-                fail_reason="boom",
-                created_at=None,
-                updated_at=None,
-                completed_at=None,
-                sub_id=None,
-            )
-        ]
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    id=11,
+                    user_id="alice",
+                    feed_id=None,
+                    source_type="agent",
+                    source_key="daily:ai-news",
+                    content="hello",
+                    raw_xml="<entry><p>Hello</p></entry>",
+                    media_urls=["https://example.com/a.jpg"],
+                    handler_trace=[
+                        {
+                            "id": "builtin.ai_filter.default",
+                            "name": "ai_filter",
+                            "status": "ok",
+                            "allow": False,
+                            "reason": "广告",
+                        }
+                    ],
+                    entry_title="日报",
+                    entry_link="https://example.com/post",
+                    entry_guid="guid-11",
+                    feed_title="AI Daily",
+                    feed_link="https://example.com/feed",
+                    platform_name="aiocqhttp",
+                    target_session="default:GroupMessage:1",
+                    status="failed",
+                    retry_count=1,
+                    max_retries=3,
+                    fail_reason="boom",
+                    created_at=None,
+                    updated_at=None,
+                    completed_at=None,
+                    sub_id=None,
+                )
+            ],
+            total=1,
+            group_total=1,
+        )
     )
-    push_history_repo.count_by_user = AsyncMock(return_value=1)
     handler = WebApiHandler(
         subscribe_cmd=MagicMock(),
         unsubscribe_cmd=MagicMock(),
@@ -522,19 +525,14 @@ async def test_push_history_endpoint_filters_by_user_session_and_status():
     payload = await response.get_json()
     assert payload["ok"] is True
     assert payload["total"] == 1
+    assert payload["group_total"] == 1
     assert payload["items"][0]["raw_xml"] == "<entry><p>Hello</p></entry>"
     assert payload["items"][0]["handler_trace"][0]["name"] == "ai_filter"
     assert payload["items"][0]["fail_reason"] == "boom"
     assert payload["items"][0]["sub_id"] is None
-    push_history_repo.get_by_user.assert_awaited_once_with(
-        user_id="alice",
-        limit=20,
-        offset=0,
-        target_session="default:GroupMessage:1",
-        status="failed",
-        keywords=["https://example.com/feed"],
-    )
-    push_history_repo.count_by_user.assert_awaited_once_with(
+    push_history_repo.get_grouped_page.assert_awaited_once_with(
+        page=1,
+        page_size=20,
         user_id="alice",
         target_session="default:GroupMessage:1",
         status="failed",
@@ -545,37 +543,40 @@ async def test_push_history_endpoint_filters_by_user_session_and_status():
 @pytest.mark.asyncio
 async def test_push_history_endpoint_keeps_empty_fail_reason_empty_for_success():
     push_history_repo = MagicMock()
-    push_history_repo.get_by_user = AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                id=12,
-                user_id="alice",
-                feed_id=1,
-                source_type="feed",
-                source_key=None,
-                content="ok",
-                raw_xml=None,
-                media_urls=None,
-                handler_trace=None,
-                entry_title="成功记录",
-                entry_link="https://example.com/post",
-                entry_guid="guid-12",
-                feed_title="AI Daily",
-                feed_link="https://example.com/feed",
-                platform_name="aiocqhttp",
-                target_session="default:GroupMessage:1",
-                status="success",
-                retry_count=0,
-                max_retries=3,
-                fail_reason=None,
-                created_at=None,
-                updated_at=None,
-                completed_at=None,
-                sub_id=1,
-            )
-        ]
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    id=12,
+                    user_id="alice",
+                    feed_id=1,
+                    source_type="feed",
+                    source_key=None,
+                    content="ok",
+                    raw_xml=None,
+                    media_urls=None,
+                    handler_trace=None,
+                    entry_title="成功记录",
+                    entry_link="https://example.com/post",
+                    entry_guid="guid-12",
+                    feed_title="AI Daily",
+                    feed_link="https://example.com/feed",
+                    platform_name="aiocqhttp",
+                    target_session="default:GroupMessage:1",
+                    status="success",
+                    retry_count=0,
+                    max_retries=3,
+                    fail_reason=None,
+                    created_at=None,
+                    updated_at=None,
+                    completed_at=None,
+                    sub_id=1,
+                )
+            ],
+            total=1,
+            group_total=1,
+        )
     )
-    push_history_repo.count_by_user = AsyncMock(return_value=1)
     handler = WebApiHandler(
         subscribe_cmd=MagicMock(),
         unsubscribe_cmd=MagicMock(),
@@ -615,52 +616,57 @@ async def test_push_history_endpoint_keeps_empty_fail_reason_empty_for_success()
 @pytest.mark.asyncio
 async def test_push_history_endpoint_serializes_batch_output_snapshot():
     push_history_repo = MagicMock()
-    push_history_repo.get_all = AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                id=31,
-                sub_id=None,
-                batch_id=23,
-                bundle_id=7,
-                user_id="alice",
-                feed_id=None,
-                source_type="bundle",
-                source_key="bundle:7",
-                content="聚合内容",
-                raw_xml="<rss><item>after</item></rss>",
-                media_urls=["https://example.com/card.png"],
-                handler_trace=[{"name": "ai_filter", "status": "ok"}],
-                output_kind="card",
-                output_order=0,
-                source_context={
-                    "template_snapshot": {"id": "card-demo", "version": "1.0.0"},
-                    "document_snapshot": {
-                        "input_document": {
-                            "document": {"rss_xml": "<rss><item>before</item></rss>"}
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    id=31,
+                    sub_id=None,
+                    batch_id=23,
+                    bundle_id=7,
+                    user_id="alice",
+                    feed_id=None,
+                    source_type="bundle",
+                    source_key="bundle:7",
+                    content="聚合内容",
+                    raw_xml="<rss><item>after</item></rss>",
+                    media_urls=["https://example.com/card.png"],
+                    handler_trace=[{"name": "ai_filter", "status": "ok"}],
+                    output_kind="card",
+                    output_order=0,
+                    source_context={
+                        "template_snapshot": {"id": "card-demo", "version": "1.0.0"},
+                        "document_snapshot": {
+                            "input_document": {
+                                "document": {
+                                    "rss_xml": "<rss><item>before</item></rss>"
+                                }
+                            },
+                            "document": {"rss_xml": "<rss><item>after</item></rss>"},
                         },
-                        "document": {"rss_xml": "<rss><item>after</item></rss>"},
+                        "feeds": [{"id": 1, "position": 0}],
                     },
-                    "feeds": [{"id": 1, "position": 0}],
-                },
-                entry_title="聚合卡片",
-                entry_link="https://example.com/bundle",
-                entry_guid=None,
-                feed_title="Bundle",
-                feed_link="https://example.com/one",
-                platform_name="aiocqhttp",
-                target_session="default:GroupMessage:1",
-                status="waiting",
-                batch_status="pending",
-                retry_count=0,
-                max_retries=3,
-                fail_reason=None,
-                created_at=None,
-                updated_at=None,
-                completed_at=None,
-            )
-        ]
+                    entry_title="聚合卡片",
+                    entry_link="https://example.com/bundle",
+                    entry_guid=None,
+                    feed_title="Bundle",
+                    feed_link="https://example.com/one",
+                    platform_name="aiocqhttp",
+                    target_session="default:GroupMessage:1",
+                    status="waiting",
+                    batch_status="pending",
+                    retry_count=0,
+                    max_retries=3,
+                    fail_reason=None,
+                    created_at=None,
+                    updated_at=None,
+                    completed_at=None,
+                )
+            ],
+            total=1,
+            group_total=1,
+        )
     )
-    push_history_repo.count_all = AsyncMock(return_value=1)
     handler = _handler(
         polling_service=MagicMock(),
         push_history_repo=push_history_repo,
@@ -683,6 +689,79 @@ async def test_push_history_endpoint_serializes_batch_output_snapshot():
     assert item["source_context"]["feeds"][0]["position"] == 0
     assert item["input_xml"] == "<rss><item>before</item></rss>"
     assert item["output_xml"] == "<rss><item>after</item></rss>"
+
+
+@pytest.mark.asyncio
+async def test_push_history_endpoint_returns_grouped_page_contract_for_large_batch():
+    def build_history(output_order):
+        return SimpleNamespace(
+            id=100 + output_order,
+            sub_id=None,
+            batch_id=77,
+            bundle_id=9,
+            user_id="alice",
+            feed_id=None,
+            source_type="bundle",
+            source_key="bundle:9",
+            content=f"output-{output_order}",
+            raw_xml=None,
+            media_urls=None,
+            handler_trace=None,
+            output_kind="card" if output_order == 0 else "standard",
+            output_order=output_order,
+            source_context={"bundle": {"id": 9}, "feeds": [{"id": 1}, {"id": 2}]},
+            entry_title=f"输出 {output_order}",
+            entry_link="https://example.com/bundle",
+            entry_guid=None,
+            feed_title="Bundle",
+            feed_link="https://example.com/feed",
+            platform_name="aiocqhttp",
+            target_session=(
+                "default:GroupMessage:1"
+                if output_order % 2 == 0
+                else "default:GroupMessage:2"
+            ),
+            status="waiting" if output_order == 0 else "success",
+            batch_status="pending",
+            retry_count=0,
+            max_retries=3,
+            fail_reason=None,
+            created_at=None,
+            updated_at=None,
+            completed_at=None,
+        )
+
+    items = [build_history(output_order) for output_order in range(21)]
+    push_history_repo = MagicMock()
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(items=items, total=21, group_total=1)
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history?page=1&page_size=20",
+        method="GET",
+    ):
+        response = await handler.handle_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["total"] == 21
+    assert payload["group_total"] == 1
+    assert len(payload["items"]) == 21
+    assert [item["output_order"] for item in payload["items"]] == list(range(21))
+    push_history_repo.get_grouped_page.assert_awaited_once_with(
+        page=1,
+        page_size=20,
+        user_id=None,
+        target_session=None,
+        status=None,
+        keywords=None,
+    )
 
 
 def test_push_history_serializer_preserves_multiple_subscription_input_xmls() -> None:

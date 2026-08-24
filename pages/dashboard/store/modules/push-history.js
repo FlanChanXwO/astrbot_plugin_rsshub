@@ -84,6 +84,7 @@ export const pushHistoryModule = {
         this.pushHistory.some((item) => item.id === id)
       );
       this.pushHistoryTotal = result.total || 0;
+      this.pushHistoryGroupTotal = result.group_total ?? this.pushHistoryTotal;
       if (
         this.pushHistory.length === 0 &&
         this.pushHistoryTotal > 0 &&
@@ -277,11 +278,13 @@ export const pushHistoryModule = {
 
   pushHistoryTotalPages() {
     const pageSize = this.pushHistoryFilter.pageSize || 20;
-    return Math.max(1, Math.ceil(this.pushHistoryTotal / pageSize));
+    const groupTotal = this.pushHistoryGroupTotal ?? this.pushHistoryTotal;
+    return Math.max(1, Math.ceil(groupTotal / pageSize));
   },
 
   showPushHistoryPagination() {
-    return this.pushHistoryTotal > (this.pushHistoryFilter.pageSize || 20);
+    const groupTotal = this.pushHistoryGroupTotal ?? this.pushHistoryTotal;
+    return groupTotal > (this.pushHistoryFilter.pageSize || 20);
   },
 
   async openPushHistorySubscriptions(item) {

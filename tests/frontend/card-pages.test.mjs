@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { deleteTemplate, getBundles, getTemplateOptions } from '../../pages/dashboard/js/api.js';
+import {
+  deleteTemplate,
+  getBundles,
+  getPushHistory,
+  getTemplateOptions,
+} from '../../pages/dashboard/js/api.js';
 import { bundlesPageTemplate } from '../../pages/dashboard/components/pages/bundles.js';
 import { pushHistoryPageTemplate } from '../../pages/dashboard/components/pages/push-history.js';
 import { mainPanelTemplate } from '../../pages/dashboard/components/overlays/main-panel.js';
@@ -152,6 +157,87 @@ test('推送历史按 batch 分组并按 output_order 展示批次输出', () =>
   assert.equal(groups[0].bundleId, 4);
   assert.equal(groups[0].memberCount, 2);
   assert.equal(groups[0].hasUnresolvedOutput, true);
+});
+
+test('推送历史 API 暴露按逻辑分组分页的总数', async () => {
+  globalThis.window = {
+    AstrBotPluginPage: {
+      async apiGet(path, params) {
+        assert.equal(path, 'push-history');
+        assert.deepEqual(params, { page: 1, page_size: 20 });
+        return {
+          ok: true,
+          items: [{ id: 1, batch_id: 77 }],
+          total: 21,
+          group_total: 1,
+          page: 1,
+          page_size: 20,
+        };
+      },
+    },
+  };
+
+  const result = await getPushHistory({ page: 1, pageSize: 20 });
+
+  assert.equal(result.total, 21);
+  assert.equal(result.group_total, 1);
+});
+
+test('Dashboard 按批次分页结果保留完整输出并保持未解决保护', async () => {
+  const items = Array.from({ length: 21 }, (_, output_order) => ({
+    id: 100 + output_order,
+    batch_id: 77,
+    bundle_id: 9,
+    output_order,
+    output_kind: output_order === 0 ? 'card' : 'standard',
+    status: output_order === 0 ? 'waiting' : 'success',
+    batch_status: 'pending',
+    source_context: { bundle: { id: 9 }, feeds: [{ id: 1 }, { id: 2 }] },
+  }));
+  globalThis.window = {
+    AstrBotPluginPage: {
+      async apiGet(path, params) {
+        if (path === 'plugin-settings') return { history_retention_days: 30 };
+        assert.equal(path, 'push-history');
+        assert.equal(params.page, 1);
+        assert.equal(params.page_size, 20);
+        return { ok: true, items, total: 21, group_total: 1, page: 1, page_size: 20 };
+      },
+    },
+  };
+  const store = {
+    pushHistory: [],
+    pushHistoryLoading: false,
+    pushHistoryFilter: {
+      status: '',
+      feed_link: { values: [], input: '' },
+      keyword: '',
+      page: 1,
+      pageSize: 20,
+    },
+    pushHistoryTotal: 0,
+    pushHistoryGroupTotal: 0,
+    selectedPushHistoryIds: [],
+    historyRetentionDays: 30,
+    committedFilterTags: () => [],
+    showToast() {},
+    ...pushHistoryModule,
+  };
+
+  await store.loadPushHistory();
+
+  const groups = store.pushHistoryGroups();
+  assert.equal(store.pushHistoryTotal, 21);
+  assert.equal(store.pushHistoryGroupTotal, 1);
+  assert.equal(store.pushHistoryTotalPages(), 1);
+  assert.equal(store.showPushHistoryPagination(), false);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].items.length, 21);
+  assert.equal(groups[0].hasUnresolvedOutput, true);
+  assert.match(
+    pushHistoryPageTemplate,
+    /Boolean\(h\.batch_id && group\.hasUnresolvedOutput\)/,
+  );
 });
 
 test('推送历史详情展示批次快照、输入输出 XML 和输出顺序', () => {

@@ -615,6 +615,178 @@ async def test_history_queries_expose_current_batch_status(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_grouped_history_page_keeps_a_multi_output_batch_intact(
+    monkeypatch, tmp_path
+):
+    repo = PushHistoryRepositoryImpl()
+    outputs = []
+    for output_order in range(21):
+        output = _build_history_row(
+            user_id="batch-owner",
+            status="success" if output_order else "waiting",
+            retry_count=0,
+            max_retries=3,
+            batch_id=77,
+        )
+        output.bundle_id = 9
+        output.output_kind = "card" if output_order == 0 else "standard"
+        output.output_order = output_order
+        output.target_session = (
+            "test:Group:1" if output_order % 2 == 0 else "test:Group:2"
+        )
+        outputs.append(output)
+
+    db = await _build_test_database(
+        tmp_path / "push_history_grouped_page.db",
+        [
+            DeliveryBatchORM(
+                id=77,
+                owner_type="bundle",
+                owner_id=9,
+                status="pending",
+                target_sessions=["test:Group:1", "test:Group:2"],
+                output_manifest=[
+                    {
+                        "target_session": output.target_session,
+                        "output_kind": output.output_kind,
+                        "output_order": output.output_order,
+                    }
+                    for output in outputs
+                ],
+            ),
+            *outputs,
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    page = await repo.get_grouped_page(page=1, page_size=20)
+
+    assert page.total == 21
+    assert page.group_total == 1
+    assert len(page.items) == 21
+    assert [item.output_order for item in page.items] == list(range(21))
+    assert {item.output_kind for item in page.items} == {"card", "standard"}
+    assert {item.target_session for item in page.items} == {
+        "test:Group:1",
+        "test:Group:2",
+    }
+    assert all(item.batch_status == "pending" for item in page.items)
+
+    success_page = await repo.get_grouped_page(
+        page=1,
+        page_size=20,
+        status="success",
+    )
+
+    assert success_page.total == 20
+    assert success_page.group_total == 1
+    assert len(success_page.items) == 20
+    assert all(item.batch_status == "pending" for item in success_page.items)
+
+
+@pytest.mark.asyncio
+async def test_grouped_history_page_moves_to_the_next_logical_unit_without_duplicates(
+    monkeypatch, tmp_path
+):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 6, 1, 12, tzinfo=timezone.utc)
+    outputs = []
+    for output_order in range(21):
+        output = _build_history_row(
+            user_id="batch-owner",
+            status="success",
+            retry_count=0,
+            max_retries=3,
+            created_at=base,
+            updated_at=base,
+            completed_at=base,
+            batch_id=78,
+        )
+        output.output_kind = "card" if output_order == 0 else "standard"
+        output.output_order = output_order
+        outputs.append(output)
+
+    ordinary = _build_history_row(
+        user_id="legacy-owner",
+        status="success",
+        retry_count=0,
+        max_retries=3,
+        created_at=base - timedelta(days=1),
+        updated_at=base - timedelta(days=1),
+        completed_at=base - timedelta(days=1),
+    )
+    db = await _build_test_database(
+        tmp_path / "push_history_grouped_page_two_pages.db",
+        [
+            DeliveryBatchORM(
+                id=78,
+                owner_type="subscription",
+                owner_id=1,
+                status="confirmed",
+                target_sessions=["test:Group:1"],
+                output_manifest=[
+                    {
+                        "target_session": "test:Group:1",
+                        "output_kind": output.output_kind,
+                        "output_order": output.output_order,
+                    }
+                    for output in outputs
+                ],
+            ),
+            *outputs,
+            ordinary,
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    first_page = await repo.get_grouped_page(page=1, page_size=1)
+    second_page = await repo.get_grouped_page(page=2, page_size=1)
+
+    assert first_page.total == second_page.total == 22
+    assert first_page.group_total == second_page.group_total == 2
+    assert len(first_page.items) == 21
+    assert {item.batch_id for item in first_page.items} == {78}
+    assert [item.output_order for item in first_page.items] == list(range(21))
+    assert len(second_page.items) == 1
+    assert second_page.items[0].batch_id is None
+    assert second_page.items[0].user_id == "legacy-owner"
+
+
+@pytest.mark.asyncio
+async def test_grouped_history_page_preserves_singleton_row_pagination(
+    monkeypatch, tmp_path
+):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    rows = [
+        _build_history_row(
+            user_id=f"legacy-owner-{index}",
+            status="success",
+            retry_count=0,
+            max_retries=3,
+            created_at=base - timedelta(minutes=index),
+            updated_at=base - timedelta(minutes=index),
+            completed_at=base - timedelta(minutes=index),
+        )
+        for index in range(21)
+    ]
+    db = await _build_test_database(
+        tmp_path / "push_history_grouped_page_singletons.db",
+        rows,
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    first_page = await repo.get_grouped_page(page=1, page_size=20)
+    second_page = await repo.get_grouped_page(page=2, page_size=20)
+
+    assert first_page.total == second_page.total == 21
+    assert first_page.group_total == second_page.group_total == 21
+    assert len(first_page.items) == 20
+    assert len(second_page.items) == 1
+    assert all(item.batch_id is None for item in first_page.items + second_page.items)
+
+
+@pytest.mark.asyncio
 async def test_get_by_user_sorts_by_last_activity_timestamp(monkeypatch, tmp_path):
     repo = PushHistoryRepositoryImpl()
     base = datetime(2026, 5, 25, 12, tzinfo=timezone.utc)

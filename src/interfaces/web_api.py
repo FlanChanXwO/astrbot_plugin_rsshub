@@ -43,6 +43,7 @@ from ..application.services.route_knowledge_service import (
 )
 from ..domain.entities.handlers import list_handler_registry
 from ..domain.exceptions import DomainException
+from ..domain.repositories.delivery_repository import DeliveryDeletionBlockedError
 from ..domain.repositories.feed_repository import FeedRepository
 from ..domain.repositories.push_history_repository import PushHistoryRepository
 from ..domain.repositories.subscription_repository import SubscriptionRepository
@@ -765,8 +766,31 @@ class WebApiHandler:
         removed_count = 0
         deleted_subscriptions = 0
         deleted_push_history = 0
+        blocked_users: list[dict[str, Any]] = []
         for user_id in user_ids:
-            sub_deleted = await self._sub_repo.delete_all_by_user(user_id)
+            if self._delivery_repository is not None:
+                subscriptions = await self._sub_repo.get_by_user(user_id)
+                sub_ids = [
+                    int(subscription.id)
+                    for subscription in subscriptions
+                    if getattr(subscription, "id", None) is not None
+                ]
+                try:
+                    sub_deleted = (
+                        await self._delivery_repository.delete_subscription_owners(
+                            sub_ids
+                        )
+                    )
+                except DeliveryDeletionBlockedError as exc:
+                    blocked_users.append(
+                        {
+                            "user_id": user_id,
+                            "blockers": exc.owner_blockers or exc.blocker_counts,
+                        }
+                    )
+                    continue
+            else:
+                sub_deleted = await self._sub_repo.delete_all_by_user(user_id)
             history_deleted = 0
             if delete_push_history:
                 history_deleted = await self._push_history_repo.delete_by_user(user_id)
@@ -776,6 +800,20 @@ class WebApiHandler:
             if user_deleted or sub_deleted or history_deleted:
                 removed_count += 1
 
+        if blocked_users:
+            if removed_count > 0:
+                self._bump_counter()
+                asyncio.create_task(self._broadcast({"event": "data_changed"}))
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "存在未解决可靠投递数据，未删除受阻用户",
+                    "removed_count": removed_count,
+                    "deleted_subscriptions": deleted_subscriptions,
+                    "deleted_push_history": deleted_push_history,
+                    "blocked_users": blocked_users,
+                }
+            )
         if removed_count > 0:
             self._bump_counter()
             asyncio.create_task(self._broadcast({"event": "data_changed"}))
@@ -1108,7 +1146,49 @@ class WebApiHandler:
             return jsonify({"ok": False, "error": "feed_id 或 feed_ids 不能为空"})
 
         delete_push_history = bool(data.get("delete_push_history")) if data else False
-        deleted_subscriptions = await self._sub_repo.delete_all_by_feed_ids(feed_ids)
+        blocked_feeds: list[dict[str, Any]] = []
+        if self._delivery_repository is not None:
+            subscriptions = await self._sub_repo.list_for_dashboard(feed_ids=feed_ids)
+            sub_ids = [
+                int(subscription.id)
+                for subscription in subscriptions
+                if getattr(subscription, "id", None) is not None
+            ]
+            try:
+                deleted_subscriptions = (
+                    await self._delivery_repository.delete_subscription_owners(sub_ids)
+                )
+            except DeliveryDeletionBlockedError as exc:
+                feed_by_sub_id = {
+                    int(subscription.id): int(subscription.feed_id)
+                    for subscription in subscriptions
+                    if getattr(subscription, "id", None) is not None
+                    and getattr(subscription, "feed_id", None) is not None
+                }
+                blockers_by_feed: dict[int, dict[str, dict[str, int]]] = {}
+                for owner_id, blockers in exc.owner_blockers.items():
+                    feed_id = feed_by_sub_id.get(int(owner_id))
+                    if feed_id is not None:
+                        blockers_by_feed.setdefault(feed_id, {})[owner_id] = blockers
+                blocked_feeds = [
+                    {"feed_id": feed_id, "blockers": blockers}
+                    for feed_id, blockers in sorted(blockers_by_feed.items())
+                ]
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "存在未解决可靠投递数据，未删除受阻 Feed",
+                        "removed_count": 0,
+                        "deleted_subscriptions": 0,
+                        "deleted_push_history": 0,
+                        "blocked_feeds": blocked_feeds
+                        or [{"feed_ids": feed_ids, "blockers": exc.blocker_counts}],
+                    }
+                )
+        else:
+            deleted_subscriptions = await self._sub_repo.delete_all_by_feed_ids(
+                feed_ids
+            )
         deleted_push_history = 0
         if delete_push_history:
             deleted_push_history = await self._push_history_repo.delete_by_feed_ids(

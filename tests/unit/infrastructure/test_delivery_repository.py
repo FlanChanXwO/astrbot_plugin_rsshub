@@ -824,6 +824,188 @@ async def test_owner_and_bundle_member_deletion_report_unconsumed_inbox(
 
 
 @pytest.mark.asyncio
+async def test_bulk_subscription_deletion_checks_all_owners_before_mutation(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "bulk-subscription-delete-protection.db"))
+    async with database.get_session() as session:
+        session.add(UserORM(id="user-1"))
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.flush()
+        subscriptions = [
+            SubORM(user_id="user-1", feed_id=1, send_card=True),
+            SubORM(user_id="user-1", feed_id=1, send_card=False),
+        ]
+        session.add_all(subscriptions)
+        await session.commit()
+        for subscription in subscriptions:
+            await session.refresh(subscription)
+
+    repository = DeliveryRepositoryImpl(database)
+    blocked_owner = DeliveryOwner(
+        owner_type="subscription",
+        owner_id=subscriptions[0].id,
+    )
+    await repository.store_inbox_items(
+        blocked_owner,
+        [DeliveryInboxItemDraft(feed_id=1, item_key="entry-1", discovery_key="d1")],
+    )
+
+    with pytest.raises(DeliveryDeletionBlockedError) as exc_info:
+        await repository.delete_subscription_owners(
+            [subscription.id for subscription in subscriptions]
+        )
+
+    assert exc_info.value.owner_blockers == {
+        str(subscriptions[0].id): {"unclaimed_inbox": 1}
+    }
+    async with database.get_session() as session:
+        remaining = (
+            (await session.execute(select(SubORM).order_by(SubORM.id))).scalars().all()
+        )
+    assert [subscription.id for subscription in remaining] == [
+        subscription.id for subscription in subscriptions
+    ]
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_bulk_subscription_deletion_reports_pending_batch_and_claimed_inbox(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "bulk-subscription-delete-claimed.db"))
+    async with database.get_session() as session:
+        session.add(UserORM(id="user-1"))
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.flush()
+        subscription = SubORM(user_id="user-1", feed_id=1, send_card=True)
+        session.add(subscription)
+        await session.commit()
+        await session.refresh(subscription)
+
+    repository = DeliveryRepositoryImpl(database)
+    owner = DeliveryOwner(owner_type="subscription", owner_id=subscription.id)
+    await repository.store_inbox_items(
+        owner,
+        [DeliveryInboxItemDraft(feed_id=1, item_key="entry-1", discovery_key="d1")],
+    )
+    await repository.claim_batch(
+        owner,
+        DeliveryBatchDraft(target_sessions=["test:Group:1"]),
+        [
+            PushHistory(
+                user_id="user-1",
+                sub_id=subscription.id,
+                target_session="test:Group:1",
+                output_kind="card",
+                output_order=0,
+                status="pending",
+            )
+        ],
+    )
+
+    with pytest.raises(DeliveryDeletionBlockedError) as exc_info:
+        await repository.delete_subscription_owners([subscription.id])
+
+    assert exc_info.value.owner_blockers == {
+        str(subscription.id): {"claimed_inbox": 1, "pending_batch": 1}
+    }
+    async with database.get_session() as session:
+        assert await session.get(SubORM, subscription.id) is not None
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_bulk_subscription_deletion_releases_resolved_history_links(
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "bulk-subscription-delete-history.db"))
+    async with database.get_session() as session:
+        session.add(UserORM(id="user-1"))
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.flush()
+        subscriptions = [
+            SubORM(user_id="user-1", feed_id=1, send_card=True),
+            SubORM(user_id="user-1", feed_id=1, send_card=False),
+        ]
+        session.add_all(subscriptions)
+        await session.flush()
+        history = PushHistoryORM(
+            user_id="user-1",
+            sub_id=subscriptions[0].id,
+            feed_id=1,
+            status="success",
+            content="resolved history",
+        )
+        session.add(history)
+        await session.commit()
+        await session.refresh(history)
+
+    repository = DeliveryRepositoryImpl(database)
+    deleted = await repository.delete_subscription_owners(
+        [subscription.id for subscription in subscriptions]
+    )
+
+    assert deleted == 2
+    async with database.get_session() as session:
+        assert (await session.execute(select(SubORM))).scalars().all() == []
+        retained = await session.get(PushHistoryORM, history.id)
+        assert retained is not None
+        assert retained.sub_id is None
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_bulk_subscription_deletion_rolls_back_before_commit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    database = DatabaseManager()
+    await database.init(str(tmp_path / "bulk-subscription-delete-rollback.db"))
+    async with database.get_session() as session:
+        session.add(UserORM(id="user-1"))
+        session.add(FeedORM(id=1, link="https://example.com/feed", title="Feed"))
+        await session.flush()
+        subscription = SubORM(user_id="user-1", feed_id=1, send_card=True)
+        session.add(subscription)
+        await session.flush()
+        history = PushHistoryORM(
+            user_id="user-1",
+            sub_id=subscription.id,
+            feed_id=1,
+            status="success",
+            content="resolved history",
+        )
+        session.add(history)
+        await session.commit()
+        await session.refresh(history)
+
+    repository = DeliveryRepositoryImpl(database)
+
+    async def fail_before_commit(_session, _subscription_ids):
+        raise RuntimeError("injected bulk deletion failure")
+
+    monkeypatch.setattr(
+        repository,
+        "_after_subscription_owners_deleted",
+        fail_before_commit,
+        raising=False,
+    )
+    with pytest.raises(RuntimeError, match="injected bulk deletion failure"):
+        await repository.delete_subscription_owners([subscription.id])
+
+    async with database.get_session() as session:
+        assert await session.get(SubORM, subscription.id) is not None
+        retained = await session.get(PushHistoryORM, history.id)
+        assert retained is not None
+        assert retained.sub_id == subscription.id
+    await database.close()
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_exposes_partial_output_history(tmp_path) -> None:
     database = DatabaseManager()
     await database.init(str(tmp_path / "reconcile-partial-history.db"))

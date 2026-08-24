@@ -13,6 +13,9 @@ from astrbot_plugin_rsshub.src.application.services.feed_polling_service import 
 from astrbot_plugin_rsshub.src.application.services.subscription_card_management_service import (
     CardTemplateOption,
 )
+from astrbot_plugin_rsshub.src.domain.repositories.delivery_repository import (
+    DeliveryDeletionBlockedError,
+)
 from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
 from astrbot_plugin_rsshub.src.interfaces import web_api
 from astrbot_plugin_rsshub.src.interfaces.web_api import WebApiHandler
@@ -1654,6 +1657,89 @@ async def test_delete_feeds_endpoint_ok_when_only_related_data_was_removed():
 
 
 @pytest.mark.asyncio
+async def test_delete_feeds_endpoint_uses_guarded_subscription_deletion():
+    feed_repo = MagicMock()
+    feed_repo.delete_many = AsyncMock(return_value=1)
+    sub_repo = MagicMock()
+    sub_repo.list_for_dashboard = AsyncMock(
+        return_value=[
+            SimpleNamespace(id=21, feed_id=9),
+            SimpleNamespace(id=22, feed_id=9),
+        ]
+    )
+    sub_repo.delete_all_by_feed_ids = AsyncMock()
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_feed_ids = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(return_value=2)
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+    handler._feed_repo = feed_repo
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/feeds/delete",
+        method="POST",
+        json={"feed_id": 9},
+    ):
+        response = await handler.handle_delete_feeds()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["deleted_subscriptions"] == 2
+    delivery_repository.delete_subscription_owners.assert_awaited_once_with([21, 22])
+    sub_repo.delete_all_by_feed_ids.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_feeds_endpoint_reports_blockers_without_mutating_feed():
+    feed_repo = MagicMock()
+    feed_repo.delete_many = AsyncMock()
+    sub_repo = MagicMock()
+    sub_repo.list_for_dashboard = AsyncMock(
+        return_value=[SimpleNamespace(id=21, feed_id=9)]
+    )
+    sub_repo.delete_all_by_feed_ids = AsyncMock()
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_feed_ids = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(
+        side_effect=DeliveryDeletionBlockedError(
+            {"subscription:21:claimed_inbox": 1},
+            owner_blockers={"21": {"claimed_inbox": 1}},
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+    handler._feed_repo = feed_repo
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/feeds/delete",
+        method="POST",
+        json={"feed_id": 9, "delete_push_history": True},
+    ):
+        response = await handler.handle_delete_feeds()
+
+    payload = await response.get_json()
+    assert payload["ok"] is False
+    assert payload["blocked_feeds"] == [
+        {"feed_id": 9, "blockers": {"21": {"claimed_inbox": 1}}}
+    ]
+    feed_repo.delete_many.assert_not_awaited()
+    push_history_repo.delete_by_feed_ids.assert_not_awaited()
+    sub_repo.delete_all_by_feed_ids.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delete_user_endpoint_supports_batch_delete():
     sub_repo = MagicMock()
     sub_repo.delete_all_by_user = AsyncMock(return_value=1)
@@ -1761,6 +1847,130 @@ async def test_delete_user_endpoint_cleans_orphan_user_resources():
     assert payload["deleted_subscriptions"] == 1
     assert payload["message"] == "已清理用户 orphan 的关联数据"
     push_history_repo.delete_by_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_endpoint_uses_guarded_subscription_deletion():
+    sub_repo = MagicMock()
+    sub_repo.get_by_user = AsyncMock(
+        return_value=[SimpleNamespace(id=11, user_id="alice")]
+    )
+    sub_repo.delete_all_by_user = AsyncMock()
+    user_repo = MagicMock()
+    user_repo.delete = AsyncMock(return_value=True)
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_user = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(return_value=1)
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        user_repo=user_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/users/delete",
+        method="POST",
+        json={"user_id": "alice"},
+    ):
+        response = await handler.handle_delete_user()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["deleted_subscriptions"] == 1
+    delivery_repository.delete_subscription_owners.assert_awaited_once_with([11])
+    sub_repo.delete_all_by_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_endpoint_reports_blockers_without_mutating_target():
+    sub_repo = MagicMock()
+    sub_repo.get_by_user = AsyncMock(
+        return_value=[SimpleNamespace(id=11, user_id="alice")]
+    )
+    sub_repo.delete_all_by_user = AsyncMock()
+    user_repo = MagicMock()
+    user_repo.delete = AsyncMock()
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_user = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(
+        side_effect=DeliveryDeletionBlockedError(
+            {"subscription:11:unclaimed_inbox": 1},
+            owner_blockers={"11": {"unclaimed_inbox": 1}},
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        user_repo=user_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/users/delete",
+        method="POST",
+        json={"user_id": "alice", "delete_push_history": True},
+    ):
+        response = await handler.handle_delete_user()
+
+    payload = await response.get_json()
+    assert payload["ok"] is False
+    assert payload["blocked_users"] == [
+        {"user_id": "alice", "blockers": {"11": {"unclaimed_inbox": 1}}}
+    ]
+    user_repo.delete.assert_not_awaited()
+    push_history_repo.delete_by_user.assert_not_awaited()
+    sub_repo.delete_all_by_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_endpoint_broadcasts_successful_batch_members_when_blocked():
+    sub_repo = MagicMock()
+    sub_repo.get_by_user = AsyncMock(
+        side_effect=[
+            [SimpleNamespace(id=11, user_id="blocked")],
+            [SimpleNamespace(id=12, user_id="ok")],
+        ]
+    )
+    user_repo = MagicMock()
+    user_repo.delete = AsyncMock(return_value=True)
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(
+        side_effect=[
+            DeliveryDeletionBlockedError(
+                {"subscription:11:unclaimed_inbox": 1},
+                owner_blockers={"11": {"unclaimed_inbox": 1}},
+            ),
+            1,
+        ]
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        user_repo=user_repo,
+        delivery_repository=delivery_repository,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/users/delete",
+        method="POST",
+        json={"user_ids": ["blocked", "ok"]},
+    ):
+        response = await handler.handle_delete_user()
+
+    payload = await response.get_json()
+    assert payload["ok"] is False
+    assert payload["removed_count"] == 1
+    assert payload["deleted_subscriptions"] == 1
+    assert handler._change_counter == 1
+    user_repo.delete.assert_awaited_once_with("ok")
 
 
 @pytest.mark.asyncio

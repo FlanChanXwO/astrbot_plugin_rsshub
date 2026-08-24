@@ -497,6 +497,66 @@ class DeliveryRepositoryImpl:
         if counts:
             raise DeliveryDeletionBlockedError(counts)
 
+    async def delete_subscription_owners(
+        self,
+        subscription_ids: Sequence[int],
+    ) -> int:
+        """在同一事务内检查并删除一组 Subscription owner。"""
+        ids = sorted(
+            {
+                int(subscription_id)
+                for subscription_id in subscription_ids
+                if int(subscription_id) > 0
+            }
+        )
+        if not ids:
+            return 0
+
+        async with self._db.get_session() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                result = await session.execute(select(SubORM).where(SubORM.id.in_(ids)))
+                subscriptions = list(result.scalars().all())
+                owner_blockers: dict[str, dict[str, int]] = {}
+                for subscription in subscriptions:
+                    owner = DeliveryOwner(
+                        owner_type="subscription",
+                        owner_id=subscription.id,
+                    )
+                    counts = await self._owner_blockers(session, owner)
+                    if counts:
+                        owner_blockers[str(subscription.id)] = counts
+
+                if owner_blockers:
+                    flat_counts = {
+                        f"subscription:{owner_id}:{name}": count
+                        for owner_id, counts in owner_blockers.items()
+                        for name, count in counts.items()
+                    }
+                    raise DeliveryDeletionBlockedError(
+                        flat_counts,
+                        owner_blockers=owner_blockers,
+                    )
+
+                existing_ids = [subscription.id for subscription in subscriptions]
+                if not existing_ids:
+                    await session.commit()
+                    return 0
+                await session.execute(
+                    update(PushHistoryORM)
+                    .where(PushHistoryORM.sub_id.in_(existing_ids))
+                    .values(sub_id=None)
+                )
+                deleted = await session.execute(
+                    delete(SubORM).where(SubORM.id.in_(existing_ids))
+                )
+                await self._after_subscription_owners_deleted(session, existing_ids)
+                await session.commit()
+                return int(deleted.rowcount or 0)
+            except BaseException:
+                await session.rollback()
+                raise
+
     async def delete_owner(self, owner: DeliveryOwner) -> bool:
         """在同一写事务内检查可靠数据并删除 owner。"""
         async with self._db.get_session() as session:
@@ -594,6 +654,26 @@ class DeliveryRepositoryImpl:
             )
         ).all()
         return DeliveryRepositoryImpl._claim_state_counts(rows)
+
+    @classmethod
+    async def _owner_blockers(cls, session, owner):
+        pending_count = int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DeliveryBatchORM)
+                    .where(
+                        DeliveryBatchORM.owner_type == owner.owner_type,
+                        DeliveryBatchORM.owner_id == owner.owner_id,
+                        DeliveryBatchORM.status == "pending",
+                    )
+                )
+            ).scalar_one()
+        )
+        counts = await cls._owner_inbox_counts(session, owner)
+        if pending_count:
+            counts["pending_batch"] = pending_count
+        return counts
 
     @staticmethod
     def _claim_state_counts(rows):
@@ -844,6 +924,10 @@ class DeliveryRepositoryImpl:
 
     @staticmethod
     async def _after_subscription_discovery_owner(_session, _owner_index) -> None:
+        """故障注入接缝；生产实现不执行额外动作。"""
+
+    @staticmethod
+    async def _after_subscription_owners_deleted(_session, _subscription_ids) -> None:
         """故障注入接缝；生产实现不执行额外动作。"""
 
     @staticmethod

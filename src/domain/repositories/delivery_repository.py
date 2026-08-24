@@ -58,8 +58,14 @@ class DeliveryConsistencyError(RuntimeError):
 class DeliveryDeletionBlockedError(RuntimeError):
     """未解决批次或 inbox 阻止 owner/成员删除。"""
 
-    def __init__(self, blocker_counts: dict[str, int]) -> None:
+    def __init__(
+        self,
+        blocker_counts: dict[str, int],
+        *,
+        owner_blockers: dict[str, dict[str, int]] | None = None,
+    ) -> None:
         self.blocker_counts = blocker_counts
+        self.owner_blockers = owner_blockers or {}
         super().__init__(f"可靠投递数据尚未消费: {blocker_counts}")
 
 
@@ -112,6 +118,11 @@ class DeliveryRepository(Protocol):
     async def ensure_owner_deletable(self, owner: DeliveryOwner) -> None: ...
 
     async def ensure_bundle_member_removable(self, bundle_feed_id: int) -> None: ...
+
+    async def delete_subscription_owners(
+        self,
+        subscription_ids: Sequence[int],
+    ) -> int: ...
 
     async def delete_owner(self, owner: DeliveryOwner) -> bool: ...
 

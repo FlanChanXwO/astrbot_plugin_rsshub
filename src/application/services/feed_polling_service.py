@@ -296,6 +296,7 @@ class FeedPollingService:
         dispatched = 0
         acknowledged_entries: list[Any] = []
         card_subscriptions: list[Subscription] = []
+        active_standard_subscriptions: list[Subscription] = []
         standard_subscription_ids: list[int] | None = subscription_ids
         bootstrap_skipped = bool(
             notify_new_entries
@@ -319,11 +320,12 @@ class FeedPollingService:
                 for subscription in active_subscriptions
                 if subscription.send_card
             ]
-            standard_subscriptions = [
+            active_standard_subscriptions = [
                 subscription
                 for subscription in active_subscriptions
                 if not subscription.send_card
             ]
+            standard_subscriptions = list(active_standard_subscriptions)
             if subscription_ids is not None:
                 selected_ids = set(subscription_ids)
                 standard_subscriptions = [
@@ -350,7 +352,13 @@ class FeedPollingService:
             )
             dispatched = dispatch_result.dispatched
             acknowledged_entries = dispatch_result.acknowledged_entries
-        if card_subscriptions and not standard_subscription_ids:
+        # 只剩卡片消费者时才能直接确认全部新条目；未选中的普通订阅仍依赖
+        # 共享 Feed 水位，不能因本轮卡片到期而跳过它们。
+        if (
+            card_subscriptions
+            and not standard_subscription_ids
+            and not active_standard_subscriptions
+        ):
             acknowledged_entries = list(new_entries)
 
         if notify_new_entries and new_entries and not bootstrap_skipped:

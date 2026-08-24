@@ -906,6 +906,80 @@ async def test_selected_standard_poll_still_fans_out_to_every_active_card_owner(
 
 
 @pytest.mark.asyncio
+async def test_card_only_due_poll_preserves_watermark_for_unselected_standard():
+    previous_last_modified = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    feed = Feed(
+        id=1,
+        link="https://example.com/rss.xml",
+        entry_hashes=[["previous-entry"]],
+        etag="previous-etag",
+        last_modified=previous_last_modified,
+    )
+    entries = [
+        EntryParsed(guid="guid-1", title="One", link="https://example.com/1"),
+        EntryParsed(guid="guid-2", title="Two", link="https://example.com/2"),
+    ]
+    feed_repo = MagicMock()
+    feed_repo.get_by_id = AsyncMock(return_value=feed)
+    feed_repo.save = AsyncMock()
+    subscription_repo = MagicMock()
+    subscription_repo.get_active_by_feed_id = AsyncMock(
+        return_value=[
+            Subscription(
+                id=10,
+                user_id="standard-user",
+                feed_id=feed.id,
+                target_session="test:Group:10",
+            ),
+            Subscription(
+                id=20,
+                user_id="card-user",
+                feed_id=feed.id,
+                target_session="test:Group:20",
+                send_card=True,
+                template_id="astrbot_plugin_rsshub_card_test",
+            ),
+        ]
+    )
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = _web_feed(
+        etag="new-etag",
+        last_modified=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+    fetcher.close = AsyncMock()
+    parser = MagicMock()
+    parser.parse.return_value = (entries, None)
+    dispatcher = AsyncMock()
+    delivery_repository = AsyncMock()
+    delivery_repository.store_subscription_discovery.return_value = feed
+    card_delivery_service = AsyncMock()
+    service = FeedPollingService(
+        feed_repo=feed_repo,
+        subscription_repo=subscription_repo,
+        delivery_repository=delivery_repository,
+        subscription_batch_delivery_service=card_delivery_service,
+        fetcher_factory=MagicMock(return_value=fetcher),
+        parser=parser,
+        notification_dispatcher=dispatcher,
+        rss_settings=RSSSettings(bootstrap_skip_history=False),
+    )
+
+    result = await service.poll_feed_group(feed.id, [20])
+
+    assert result.success is True
+    dispatcher.dispatch_to_feed_subscribers.assert_not_awaited()
+    _persisted_feed, discoveries = (
+        delivery_repository.store_subscription_discovery.await_args.args
+    )
+    assert [discovery.owner.owner_id for discovery in discoveries] == [20]
+    assert [len(discovery.items) for discovery in discoveries] == [2]
+    assert feed.entry_hashes == [["previous-entry"]]
+    assert feed.etag == "previous-etag"
+    assert feed.last_modified == previous_last_modified
+    card_delivery_service.deliver.assert_awaited_once_with(20)
+
+
+@pytest.mark.asyncio
 async def test_card_subscription_bootstrap_skips_inbox_and_records_feed_history():
     feed = Feed(id=1, link="https://example.com/rss.xml")
     entry = EntryParsed(guid="guid-1", title="One")

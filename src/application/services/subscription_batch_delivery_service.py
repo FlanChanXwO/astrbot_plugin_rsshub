@@ -70,6 +70,7 @@ class SubscriptionBatchDeliveryService:
         subscription_id: int,
         *,
         retry_failed: bool = False,
+        force_retry: bool = False,
     ) -> SubscriptionBatchDeliveryResult:
         """创建或恢复一个批次，并推进当前可执行输出。"""
         lock = self._owner_locks.setdefault(subscription_id, asyncio.Lock())
@@ -77,7 +78,16 @@ class SubscriptionBatchDeliveryService:
             return await self._deliver_locked(
                 subscription_id,
                 retry_failed=retry_failed,
+                force_retry=force_retry,
             )
+
+    async def retry(self, subscription_id: int) -> SubscriptionBatchDeliveryResult:
+        """人工重试当前 Subscription 批次，允许重试次数已耗尽的失败输出。"""
+        return await self.deliver(
+            subscription_id,
+            retry_failed=True,
+            force_retry=True,
+        )
 
     async def retry_active_batches(self) -> None:
         """按现有调度周期推进所有启用卡片 Subscription 的批次或 backlog。"""
@@ -98,6 +108,7 @@ class SubscriptionBatchDeliveryService:
         subscription_id: int,
         *,
         retry_failed: bool,
+        force_retry: bool,
     ) -> SubscriptionBatchDeliveryResult:
         owner = DeliveryOwner(owner_type="subscription", owner_id=subscription_id)
         batch = await self._delivery_repository.get_pending_batch(owner)
@@ -106,10 +117,17 @@ class SubscriptionBatchDeliveryService:
             if batch is None:
                 return SubscriptionBatchDeliveryResult(None, False)
 
-        orchestration = await self._output_orchestrator.run(
-            batch,
-            retry_failed=retry_failed,
-        )
+        if force_retry:
+            orchestration = await self._output_orchestrator.run(
+                batch,
+                retry_failed=retry_failed,
+                force_retry=True,
+            )
+        else:
+            orchestration = await self._output_orchestrator.run(
+                batch,
+                retry_failed=retry_failed,
+            )
         if orchestration.ready_to_confirm:
             await self._delivery_repository.confirm_batch(batch.id)
         return SubscriptionBatchDeliveryResult(

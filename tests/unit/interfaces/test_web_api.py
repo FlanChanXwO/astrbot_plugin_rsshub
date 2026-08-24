@@ -2635,7 +2635,7 @@ async def test_retry_push_history_endpoint_uses_subscription_batch_path():
         return_value=SimpleNamespace(id=12, batch_id=5, sub_id=7)
     )
     batch_service = AsyncMock()
-    batch_service.deliver.return_value = SimpleNamespace(
+    batch_service.retry.return_value = SimpleNamespace(
         batch_id=5,
         ready_to_confirm=True,
     )
@@ -2658,7 +2658,7 @@ async def test_retry_push_history_endpoint_uses_subscription_batch_path():
     payload = await response.get_json()
     assert payload["ok"] is True
     assert payload["batch_id"] == 5
-    batch_service.deliver.assert_awaited_once_with(7, retry_failed=True)
+    batch_service.retry.assert_awaited_once_with(7)
     dispatcher.retry_push_history_once.assert_not_awaited()
 
 

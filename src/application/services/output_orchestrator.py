@@ -82,7 +82,7 @@ class OutputOrchestrator:
                     retry_failed=retry_failed,
                     force_retry=force_retry,
                 ):
-                    await self._attempt(card)
+                    await self._attempt(card, count_retry=not force_retry)
                     if card.id is not None:
                         attempted.append(card.id)
                 if card.status not in self._CONFIRMED_OUTPUT_STATUSES:
@@ -96,7 +96,7 @@ class OutputOrchestrator:
                     retry_failed=retry_failed,
                     force_retry=force_retry,
                 ):
-                    await self._attempt(standard)
+                    await self._attempt(standard, count_retry=not force_retry)
                     if standard.id is not None:
                         attempted.append(standard.id)
 
@@ -150,7 +150,7 @@ class OutputOrchestrator:
             return False
         return retry_failed and (force_retry or output.can_retry())
 
-    async def _attempt(self, output: PushHistory) -> None:
+    async def _attempt(self, output: PushHistory, *, count_retry: bool) -> None:
         is_retry = output.status in {"failed", "retrying"}
         output.status = "retrying" if is_retry else "pending"
         output.completed_at = None
@@ -165,9 +165,10 @@ class OutputOrchestrator:
         # 执行器是外部发送边界，必须把任意业务失败持久化后再继续同批其他输出。
         except Exception as exc:  # noqa: BLE001
             reason = f"{type(exc).__name__}: {exc}"
-            if is_retry:
+            if is_retry and count_retry:
                 output.record_retry_failure(reason)
             else:
+                # 人工强制重试不占用自动重试预算，失败仍保留在原历史上。
                 output.record_first_failure(reason)
             await self._history_repository.save(output)
             return
@@ -175,8 +176,9 @@ class OutputOrchestrator:
             output.mark_stopped(result.detail or "输出已取消")
         elif result.ok:
             output.mark_success()
-        elif is_retry:
+        elif is_retry and count_retry:
             output.record_retry_failure(result.detail or "输出执行失败")
         else:
+            # 人工强制重试不占用自动重试预算，失败仍保留在原历史上。
             output.record_first_failure(result.detail or "输出执行失败")
         await self._history_repository.save(output)

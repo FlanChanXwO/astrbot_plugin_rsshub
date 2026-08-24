@@ -2456,9 +2456,8 @@ class WebApiHandler:
                     or history.sub_id is None
                 ):
                     return jsonify({"ok": False, "error": "批次重试服务不可用"})
-                result = await self._subscription_batch_delivery_service.deliver(
-                    history.sub_id,
-                    retry_failed=True,
+                result = await self._subscription_batch_delivery_service.retry(
+                    history.sub_id
                 )
             self._bump_counter()
             asyncio.create_task(self._broadcast({"event": "data_changed"}))

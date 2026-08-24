@@ -203,6 +203,35 @@ async def test_retry_active_card_subscriptions_uses_batch_retry_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_manual_retry_forces_exhausted_subscription_outputs() -> None:
+    pending_batch = SimpleNamespace(id=19)
+    delivery_repository = MagicMock()
+    delivery_repository.get_pending_batch = AsyncMock(return_value=pending_batch)
+    orchestrator = MagicMock()
+    orchestrator.run = AsyncMock(return_value=SimpleNamespace(ready_to_confirm=False))
+    service = SubscriptionBatchDeliveryService(
+        delivery_repository=delivery_repository,
+        subscription_repository=MagicMock(),
+        feed_repository=MagicMock(),
+        user_repository=MagicMock(),
+        template_repository=MagicMock(),
+        template_service=MagicMock(),
+        content_handler_runtime=MagicMock(),
+        notification_dispatcher=MagicMock(),
+        output_orchestrator=orchestrator,
+    )
+
+    result = await service.retry(7)
+
+    assert result.batch_id == 19
+    orchestrator.run.assert_awaited_once_with(
+        pending_batch,
+        retry_failed=True,
+        force_retry=True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_original_outputs_use_newest_limit_and_frozen_dispatch_payload() -> None:
     owner = DeliveryOwner(owner_type="subscription", owner_id=7)
     old = DeliveryInboxItem(

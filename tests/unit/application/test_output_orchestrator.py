@@ -277,6 +277,25 @@ async def test_manual_retry_can_reuse_an_exhausted_output() -> None:
 
 
 @pytest.mark.asyncio
+async def test_manual_retry_failure_does_not_consume_automatic_retry_budget() -> None:
+    history = _history(1, "standard", 0, status="failed")
+    history.retry_count = history.max_retries
+    batch = _batch([history])
+    executor = ScriptedOutputExecutor({1: [SendResult(ok=False, detail="仍然失败")]})
+    orchestrator = OutputOrchestrator(
+        RecordingHistoryRepository(),
+        executor,
+        RecordingDeliveryRepository(batch),
+    )
+
+    result = await orchestrator.run(batch, retry_failed=True, force_retry=True)
+
+    assert result.ready_to_confirm is False
+    assert history.status == "failed"
+    assert history.retry_count == history.max_retries
+
+
+@pytest.mark.asyncio
 async def test_manual_retry_does_not_resend_resolved_outputs() -> None:
     history = _history(1, "standard", 0, status="success")
     batch = _batch([history])

@@ -726,10 +726,12 @@ async def test_card_subscription_persists_every_new_entry_without_standard_dispa
     dispatcher = AsyncMock()
     delivery_repository = AsyncMock()
     delivery_repository.store_subscription_discovery.return_value = feed
+    card_delivery_service = AsyncMock()
     service = FeedPollingService(
         feed_repo=feed_repo,
         subscription_repo=subscription_repo,
         delivery_repository=delivery_repository,
+        subscription_batch_delivery_service=card_delivery_service,
         fetcher_factory=MagicMock(return_value=fetcher),
         parser=parser,
         notification_dispatcher=dispatcher,
@@ -754,6 +756,7 @@ async def test_card_subscription_persists_every_new_entry_without_standard_dispa
     ]
     assert len({item.discovery_key for item in discoveries[0].items}) == 1
     dispatcher.dispatch_to_feed_subscribers.assert_not_awaited()
+    card_delivery_service.deliver.assert_awaited_once_with(10)
     feed_repo.save.assert_not_awaited()
 
 

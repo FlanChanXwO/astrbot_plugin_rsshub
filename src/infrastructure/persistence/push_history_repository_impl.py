@@ -143,6 +143,7 @@ class PushHistoryRepositoryImpl:
                 .where(
                     PushHistoryORM.status == "failed",
                     PushHistoryORM.retry_count < PushHistoryORM.max_retries,
+                    PushHistoryORM.batch_id.is_(None),
                 )
                 .order_by(asc(PushHistoryORM.created_at))
                 .limit(limit)
@@ -161,6 +162,7 @@ class PushHistoryRepositoryImpl:
                 .where(
                     PushHistoryORM.status.in_(("failed", "retrying")),
                     PushHistoryORM.retry_count < PushHistoryORM.max_retries,
+                    PushHistoryORM.batch_id.is_(None),
                 )
             )
             result = await session.execute(stmt)
@@ -188,6 +190,7 @@ class PushHistoryRepositoryImpl:
             fallback_stmt = select(PushHistoryORM).where(
                 PushHistoryORM.status == "retrying",
                 PushHistoryORM.updated_at < retrying_cutoff,
+                PushHistoryORM.batch_id.is_(None),
             )
             fallback_result = await session.execute(fallback_stmt)
             stale = list(fallback_result.scalars().all())
@@ -204,6 +207,7 @@ class PushHistoryRepositoryImpl:
                 .where(
                     PushHistoryORM.status == "failed",
                     PushHistoryORM.retry_count < PushHistoryORM.max_retries,
+                    PushHistoryORM.batch_id.is_(None),
                 )
                 .order_by(asc(PushHistoryORM.created_at))
                 .limit(limit)

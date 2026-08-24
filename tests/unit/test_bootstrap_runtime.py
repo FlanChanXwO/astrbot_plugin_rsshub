@@ -45,6 +45,7 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
         "delivery": object(),
     }
     captured_polling_kwargs: dict[str, object] = {}
+    card_delivery_service = object()
 
     def build_polling_service(**kwargs):
         captured_polling_kwargs.update(kwargs)
@@ -71,6 +72,11 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     monkeypatch.setattr(bootstrap, "FeedPollingService", build_polling_service)
     monkeypatch.setattr(
         bootstrap,
+        "SubscriptionBatchDeliveryService",
+        MagicMock(return_value=card_delivery_service),
+    )
+    monkeypatch.setattr(
+        bootstrap,
         "build_route_knowledge_source",
         AsyncMock(return_value=object()),
     )
@@ -84,6 +90,10 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     )
 
     assert captured_polling_kwargs["delivery_repository"] is repositories["delivery"]
+    assert (
+        captured_polling_kwargs["subscription_batch_delivery_service"]
+        is card_delivery_service
+    )
 
 
 def test_bot_self_id_provider_returns_only_a_unique_connected_account(monkeypatch):

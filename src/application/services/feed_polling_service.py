@@ -118,6 +118,7 @@ class FeedPollingService:
         delivery_repository: DeliveryRepository | None = None,
         media_fingerprint_service: MediaFingerprintService | None = None,
         history_entry_limit: int = 0,
+        subscription_batch_delivery_service: Any | None = None,
     ) -> None:
         self._feed_repo = feed_repo
         self._subscription_repo = subscription_repo
@@ -129,6 +130,7 @@ class FeedPollingService:
         self._delivery_repository = delivery_repository
         self._media_fingerprint_service = media_fingerprint_service
         self._history_entry_limit = max(0, history_entry_limit)
+        self._subscription_batch_delivery_service = subscription_batch_delivery_service
 
     async def fetch_feed_entries(
         self,
@@ -378,6 +380,12 @@ class FeedPollingService:
                 feed,
                 discoveries,
             )
+            if self._subscription_batch_delivery_service is not None:
+                for subscription in card_subscriptions:
+                    if subscription.id is not None:
+                        await self._subscription_batch_delivery_service.deliver(
+                            subscription.id
+                        )
         else:
             saved_feed = await self._feed_repo.save(feed)
 

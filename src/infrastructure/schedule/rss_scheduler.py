@@ -150,6 +150,7 @@ class RSSScheduler:
         feed_polling_service: FeedPollingService | None = None,
         notification_dispatcher: NotificationDispatcher | None = None,
         notification_service: NotificationService | None = None,
+        subscription_batch_delivery_service: Any | None = None,
         default_interval: int = 10,
         history_retention_days: int = 30,
         **_: Any,
@@ -157,6 +158,7 @@ class RSSScheduler:
         self._feed_polling_service = feed_polling_service
         self._notification_dispatcher = notification_dispatcher
         self._legacy_notification_service = notification_service
+        self._subscription_batch_delivery_service = subscription_batch_delivery_service
         self._stats = SchedulerStats()
         self._running = False
         self._bg_task: asyncio.Task | None = None
@@ -191,6 +193,7 @@ class RSSScheduler:
         if now.minute == 0:
             await self._cleanup_old_records()
 
+        await self._retry_subscription_batches()
         await self._dispatch_pending_retries()
 
         try:
@@ -220,6 +223,17 @@ class RSSScheduler:
                 logger.warning("数据库未初始化，跳过重试推送")
                 return
             logger.error("处理重试推送失败: %s", e, exc_info=True)
+
+    async def _retry_subscription_batches(self) -> None:
+        if self._subscription_batch_delivery_service is None:
+            return
+        try:
+            await self._subscription_batch_delivery_service.retry_active_batches()
+        except Exception as exc:
+            if _is_database_unavailable_error(exc):
+                logger.warning("数据库未初始化，跳过卡片 Subscription 批次重试")
+                return
+            logger.error("处理卡片 Subscription 批次重试失败: %s", exc, exc_info=True)
 
     async def _cleanup_old_records(self) -> None:
         """清理指定天数前的推送历史记录"""

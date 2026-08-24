@@ -121,13 +121,17 @@ async def test_scheduler_groups_due_subscriptions_by_feed_and_triggers_polling(
         "failed": 0,
         "skipped": 0,
     }
+    card_delivery_service = AsyncMock()
 
     scheduler = RSSScheduler(
         feed_polling_service=polling_service,
         notification_dispatcher=dispatcher,
+        subscription_batch_delivery_service=card_delivery_service,
         default_interval=10,
     )
     await scheduler.run_periodic_task()
+
+    card_delivery_service.retry_active_batches.assert_awaited_once_with()
 
     calls = polling_service.poll_feed_group.await_args_list
     assert len(calls) == 2

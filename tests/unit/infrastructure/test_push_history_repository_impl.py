@@ -208,10 +208,12 @@ def _build_history_row(
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
     completed_at: datetime | None = None,
+    batch_id: int | None = None,
 ) -> PushHistoryORM:
     now = datetime.now(timezone.utc)
     return PushHistoryORM(
         sub_id=sub_id,
+        batch_id=batch_id,
         user_id=user_id,
         feed_id=feed_id,
         content=status,
@@ -265,6 +267,13 @@ async def test_count_retryable_failures_counts_failed_and_retrying_only(
                 status="success",
                 retry_count=0,
                 max_retries=3,
+            ),
+            _build_history_row(
+                user_id="user-batch",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                batch_id=99,
             ),
         ],
     )

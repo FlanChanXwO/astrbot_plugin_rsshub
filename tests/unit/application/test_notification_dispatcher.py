@@ -122,6 +122,46 @@ class FakeProviderSelectorContext:
         return FakeProviderResponse(self.selected_provider.completion_text)
 
 
+@pytest.mark.asyncio
+async def test_prepare_subscription_entry_freezes_link_only_without_media() -> None:
+    dispatcher = NotificationDispatcher(
+        subscription_repo=AsyncMock(),
+        push_history_repo=AsyncMock(),
+        sender_provider=FakeSenderProvider(FakeSender()),
+    )
+    subscription = Subscription(
+        id=7,
+        user_id="user",
+        feed_id=3,
+        send_mode=-1,
+        display_media=1,
+    )
+    entry = EntryContentContext(
+        title="Title",
+        summary="Summary",
+        content="Content",
+        link="https://example.com/post",
+        author="Author",
+        feed_title="Feed",
+        feed_link="https://example.com/feed",
+        media_urls=("https://example.com/image.jpg",),
+        media_items=(("image", "https://example.com/image.jpg"),),
+        layout=(LayoutFragment(kind="image", url="https://example.com/image.jpg"),),
+    )
+
+    prepared = await dispatcher.prepare_subscription_entry(
+        subscription=subscription,
+        user=None,
+        entry=entry,
+    )
+
+    assert prepared.effective_content == "Title\nhttps://example.com/post"
+    assert prepared.effective_media_urls is None
+    assert prepared.effective_media_items is None
+    assert prepared.effective_layout is None
+    assert prepared.persisted_media_urls is None
+
+
 def test_content_handler_runtime_resolves_handlers_mode_semantics():
     runtime = ContentHandlerRuntime()
     user = User(id="user-1")
@@ -1874,6 +1914,38 @@ async def test_dispatch_pending_retries_marks_successful_retry_success():
     assert sender.requests[0][0].media == [("video", "https://example.com/video.mp4")]
     history_repo.get_and_mark_retrying.assert_awaited_once_with(5)
     history_repo.save.assert_awaited_once_with(history)
+
+
+@pytest.mark.asyncio
+async def test_retry_push_history_once_rejects_batch_output_without_plain_fallback():
+    history = PushHistory(
+        id=104,
+        batch_id=19,
+        sub_id=1,
+        user_id="user-1",
+        feed_id=10,
+        output_kind="card",
+        content="",
+        status="failed",
+    )
+    history_repo = AsyncMock()
+    history_repo.get_by_id.return_value = history
+    sender = FakeSender()
+    dispatcher = NotificationDispatcher(
+        subscription_repo=AsyncMock(),
+        push_history_repo=history_repo,
+        sender_provider=FakeSenderProvider(sender),
+    )
+
+    result = await dispatcher.retry_push_history_once(104)
+
+    assert result == {
+        "ok": False,
+        "error": "Batch output must be retried through its delivery batch",
+        "history": history,
+    }
+    assert sender.requests == []
+    history_repo.save.assert_not_awaited()
 
 
 @pytest.mark.asyncio

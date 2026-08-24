@@ -38,6 +38,8 @@ flowchart TD
   L --> O["保存 Feed 状态"]
 ```
 
+卡片 Subscription 是旁路的可靠批次分支：完整 `new_entries` 不受 `history_entry_limit` 影响，先与 Feed 水位在同一事务中扇出到各 owner inbox；普通 Subscription 仍走逐条 `NotificationDispatcher`。入箱成功后会立即尝试推进卡片批次，失败或 backlog 则由 scheduler 后续周期继续处理。
+
 ## 输入与输出
 
 ### 主要输入

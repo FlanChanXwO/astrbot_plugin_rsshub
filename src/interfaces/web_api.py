@@ -1102,6 +1102,16 @@ class WebApiHandler:
         deleted_push_history = 0
         blocked_users: list[dict[str, Any]] = []
         for user_id in user_ids:
+            if self._bundle_repository is not None:
+                bundles = await self._bundle_repository.get_by_user(user_id)
+                if bundles:
+                    blocked_users.append(
+                        {
+                            "user_id": user_id,
+                            "blockers": {"bundles": len(bundles)},
+                        }
+                    )
+                    continue
             if self._delivery_repository is not None:
                 subscriptions = await self._sub_repo.get_by_user(user_id)
                 sub_ids = [
@@ -1141,7 +1151,7 @@ class WebApiHandler:
             return jsonify(
                 {
                     "ok": False,
-                    "error": "存在未解决可靠投递数据，未删除受阻用户",
+                    "error": "存在未删除的 Bundle 或未解决可靠投递数据，未删除受阻用户",
                     "removed_count": removed_count,
                     "deleted_subscriptions": deleted_subscriptions,
                     "deleted_push_history": deleted_push_history,
@@ -1478,6 +1488,37 @@ class WebApiHandler:
         feed_ids = sorted({feed_id for feed_id in feed_ids if feed_id > 0})
         if not feed_ids:
             return jsonify({"ok": False, "error": "feed_id 或 feed_ids 不能为空"})
+
+        if self._bundle_repository is not None:
+            bundle_member_counts: dict[int, int] = {}
+            for bundle in await self._bundle_repository.get_all():
+                if getattr(bundle, "id", None) is None:
+                    continue
+                members = await self._bundle_repository.list_members(bundle.id)
+                for member in members:
+                    feed_id = int(getattr(member, "feed_id", 0) or 0)
+                    if feed_id in feed_ids:
+                        bundle_member_counts[feed_id] = (
+                            bundle_member_counts.get(feed_id, 0) + 1
+                        )
+            if bundle_member_counts:
+                blocked_feeds = [
+                    {
+                        "feed_id": feed_id,
+                        "blockers": {"bundle_members": count},
+                    }
+                    for feed_id, count in sorted(bundle_member_counts.items())
+                ]
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "Feed 仍被 Bundle 引用，未删除受阻 Feed",
+                        "removed_count": 0,
+                        "deleted_subscriptions": 0,
+                        "deleted_push_history": 0,
+                        "blocked_feeds": blocked_feeds,
+                    }
+                )
 
         delete_push_history = bool(data.get("delete_push_history")) if data else False
         blocked_feeds: list[dict[str, Any]] = []

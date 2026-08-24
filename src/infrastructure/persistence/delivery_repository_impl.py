@@ -907,6 +907,8 @@ class DeliveryRepositoryImpl:
         *,
         allow_resolved_inbox: bool = False,
     ) -> None:
+        if batch.status not in {"pending", "confirmed", "discarded"}:
+            raise DeliveryConsistencyError(f"投递批次状态异常: {batch.status}")
         if not histories:
             raise DeliveryConsistencyError("投递批次缺少输出历史")
         expected_outputs = [

@@ -465,6 +465,11 @@ async def test_bundle_fetch_handler_card_standard_retry_and_discard(
         document_snapshot = executor.card_contexts[0]["document_snapshot"]
         assert document_snapshot["document"]["text"] == "handler bundle text"
         assert document_snapshot["document"]["rss_xml"].startswith('<rss version="2.0"')
+        assert (
+            document_snapshot["input_document"]["document"]["text"]
+            != document_snapshot["document"]["text"]
+        )
+        assert document_snapshot["input_document"]["document"]["rss_xml"]
         assert document_snapshot["handler_trace"][0]["name"] == "ai_transform"
 
         extra = DeliveryInboxItemDraft(

@@ -91,7 +91,10 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | 字段 | 含义 | 备注 |
 | --- | --- | --- |
 | `content` | 最终可发送文本 | 不应泄漏原始 HTML 标签。 |
-| `raw_xml` | 原始条目 XML | 用于审计和重试排障。 |
+| `raw_xml` | 历史记录兼容 XML 字段 | 普通历史保存处理后的条目 XML；批次历史保存最终输出 XML。 |
+| `input_xml` | handler 处理前的 XML | 单条 Subscription standard 或 Bundle 聚合文档可用；旧快照无法还原时为 `null`。 |
+| `input_xmls` | 多条 Subscription card 输入 XML | 数组元素为 `{item_key, raw_xml}`；多条输入时 `input_xml` 保持 `null`，避免把多条 XML 无损性未知地拼接。 |
+| `output_xml` | handler 处理后的最终 XML | 优先取历史记录保存的输出；旧记录缺失时回退到当前快照中的输出文档。 |
 | `media_urls` | 推送时关联的媒体 URL | 媒体失败时重试会复用。 |
 | `handler_trace` | handler 执行摘要 | 不应泄漏 provider 内部 prompt。 |
 | `fail_reason` | 失败原因 | 需要保持在模型和数据库限制内。 |
@@ -103,7 +106,7 @@ Dashboard 的 ID/URL 筛选 UI 使用紧凑筛选栏：关键词框绑定 `keywo
 | `batch_id` | 可靠投递批次 ID | 同一 owner 的 card/standard history 以此分组。 |
 | `bundle_id` | Bundle 来源 ID | Bundle history 没有 `sub_id` 时使用。 |
 | `output_kind` / `output_order` | 输出类型与同 target 顺序 | `card` 固定为 order 0，standard 受 card gate 约束。 |
-| `source_context` | 模板、文档、发送参数和来源快照 | 重试必须复用，不重新读取当前配置。 |
+| `source_context` | 模板、文档、发送参数和来源快照 | 重试必须复用，不重新读取当前配置；批次文档快照同时保留 handler 前后的文档。 |
 
 ## Dashboard 图表口径
 

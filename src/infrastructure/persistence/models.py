@@ -361,7 +361,7 @@ class DeliveryBatchORM(RSSHubBaseModel, table=True):
     document_snapshot: dict[str, Any] | None = Field(
         default=None,
         sa_column=Column(JSON),
-        description="handler 后文档快照",
+        description="handler 前后文档快照",
     )
     output_manifest: list[dict[str, Any]] = Field(
         default_factory=list,

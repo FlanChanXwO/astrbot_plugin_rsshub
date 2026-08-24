@@ -293,6 +293,9 @@ async def test_document_plaintext_transform_updates_snapshot_and_trace() -> None
     assert result.trace[0]["scope"] == "plaintext"
     assert result.trace[0]["steps_used"] == 1
     assert result.trace[0]["fallback"] is False
+    snapshot = result.to_snapshot()
+    assert snapshot["input_document"]["document"]["text"] == "before"
+    assert snapshot["document"]["text"] == "after"
 
 
 @pytest.mark.asyncio
@@ -370,6 +373,10 @@ async def test_document_filter_rejects_whole_document_without_changing_input_key
         "original-two",
     )
     assert result.trace[0]["allow"] is False
+    assert (
+        result.to_snapshot()["input_document"]["document"]["rss_xml"]
+        == original.rss_xml
+    )
 
 
 @pytest.mark.asyncio
@@ -481,6 +488,9 @@ async def test_document_xml_transform_validates_output_and_keeps_input_identity(
     assert result.document.consumption_item_keys == ("input-key",)
     assert result.trace[0]["scope"] == "xml"
     assert result.trace[0]["fallback"] is False
+    snapshot = result.to_snapshot()
+    assert snapshot["input_document"]["document"]["rss_xml"] == original.rss_xml
+    assert snapshot["document"]["rss_xml"] == transformed
 
 
 @pytest.mark.asyncio

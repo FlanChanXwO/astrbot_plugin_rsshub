@@ -7,6 +7,10 @@
 - 完成 Feed 卡片与多源 Bundle 的跨层集成回归：覆盖 fixture 抓取、handler 后 JSON-safe 快照、SQLite inbox/batch/history、card→standard 前置门、失败恢复、重试和显式丢弃。
 - 补齐卡片模板与 Bundle 的公开文档：领域/仓储/轮询/分发/handler、命令、AI tools、Web API、Plugin Pages、测试和维护说明现在共享同一套 batch、snapshot、backlog 语义。
 
+### Fixed
+
+- 推送历史现在区分 handler 前后的 XML 快照；Subscription card 多输入保留逐条 `input_xmls`，旧历史缺少输入快照时不再把输出 XML 误报为输入。
+
 ### Notes
 
 - 集成测试使用真实 SQLite delivery repository 和应用服务；只有平台发送边界使用可控替身，因此不会访问外部 RSS、平台或模型服务。

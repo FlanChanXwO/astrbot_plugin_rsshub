@@ -2723,7 +2723,42 @@ def _serialize_push_history_item(history: Any) -> dict[str, Any]:
         if isinstance(document_snapshot, dict)
         else None
     )
-    input_xml = document.get("rss_xml") if isinstance(document, dict) else None
+    input_xml = None
+    input_xmls = None
+    if source_context:
+        raw_input_xml = source_context.get("input_xml")
+        if isinstance(raw_input_xml, str):
+            input_xml = raw_input_xml or None
+    if isinstance(document_snapshot, dict):
+        input_document = document_snapshot.get("input_document")
+        input_document_data = (
+            input_document.get("document") if isinstance(input_document, dict) else None
+        )
+        if isinstance(input_document_data, dict):
+            raw_input_xml = input_document_data.get("rss_xml")
+            if isinstance(raw_input_xml, str):
+                input_xml = raw_input_xml or None
+
+        raw_input_entries = document_snapshot.get("input_entries")
+        if isinstance(raw_input_entries, list):
+            input_xmls = [
+                {
+                    "item_key": entry.get("item_key"),
+                    "raw_xml": entry.get("raw_xml"),
+                }
+                for entry in raw_input_entries
+                if isinstance(entry, dict)
+            ] or None
+            if len(input_xmls or []) == 1:
+                raw_input_xml = input_xmls[0].get("raw_xml")
+                if isinstance(raw_input_xml, str):
+                    input_xml = raw_input_xml or None
+
+    output_xml = history.raw_xml
+    if not output_xml and isinstance(document, dict):
+        raw_output_xml = document.get("rss_xml")
+        if isinstance(raw_output_xml, str):
+            output_xml = raw_output_xml or None
 
     return {
         "id": history.id,
@@ -2737,8 +2772,9 @@ def _serialize_push_history_item(history: Any) -> dict[str, Any]:
         "source_key": history.source_key,
         "content": history.content,
         "raw_xml": history.raw_xml,
-        "output_xml": history.raw_xml,
+        "output_xml": output_xml,
         "input_xml": input_xml,
+        "input_xmls": input_xmls,
         "media_urls": history.media_urls,
         "handler_trace": getattr(history, "handler_trace", None),
         "output_kind": getattr(history, "output_kind", "standard"),

@@ -627,7 +627,7 @@ async def test_push_history_endpoint_serializes_batch_output_snapshot():
                 source_type="bundle",
                 source_key="bundle:7",
                 content="聚合内容",
-                raw_xml="<rss version='2.0' />",
+                raw_xml="<rss><item>after</item></rss>",
                 media_urls=["https://example.com/card.png"],
                 handler_trace=[{"name": "ai_filter", "status": "ok"}],
                 output_kind="card",
@@ -635,7 +635,10 @@ async def test_push_history_endpoint_serializes_batch_output_snapshot():
                 source_context={
                     "template_snapshot": {"id": "card-demo", "version": "1.0.0"},
                     "document_snapshot": {
-                        "document": {"rss_xml": "<rss version='2.0' />"},
+                        "input_document": {
+                            "document": {"rss_xml": "<rss><item>before</item></rss>"}
+                        },
+                        "document": {"rss_xml": "<rss><item>after</item></rss>"},
                     },
                     "feeds": [{"id": 1, "position": 0}],
                 },
@@ -678,6 +681,103 @@ async def test_push_history_endpoint_serializes_batch_output_snapshot():
     assert item["batch_status"] == "pending"
     assert item["source_context"]["template_snapshot"]["id"] == "card-demo"
     assert item["source_context"]["feeds"][0]["position"] == 0
+    assert item["input_xml"] == "<rss><item>before</item></rss>"
+    assert item["output_xml"] == "<rss><item>after</item></rss>"
+
+
+def test_push_history_serializer_preserves_multiple_subscription_input_xmls() -> None:
+    history = SimpleNamespace(
+        id=32,
+        sub_id=7,
+        batch_id=24,
+        bundle_id=None,
+        user_id="alice",
+        feed_id=3,
+        source_type="feed",
+        source_key="feed:3:sub:7",
+        content="聚合卡片",
+        raw_xml=None,
+        media_urls=None,
+        handler_trace=None,
+        output_kind="card",
+        output_order=0,
+        source_context={
+            "document_snapshot": {
+                "input_entries": [
+                    {"item_key": "one", "raw_xml": "<item>one</item>"},
+                    {"item_key": "two", "raw_xml": "<item>two</item>"},
+                ],
+                "document": {"text": "card", "rss_xml": ""},
+            }
+        },
+        entry_title="卡片",
+        entry_link="https://example.com/feed",
+        entry_guid=None,
+        feed_title="Feed",
+        feed_link="https://example.com/feed",
+        platform_name="test",
+        target_session="test:Group:1",
+        status="waiting",
+        retry_count=0,
+        max_retries=3,
+        fail_reason=None,
+        created_at=None,
+        updated_at=None,
+        completed_at=None,
+    )
+
+    item = web_api._serialize_push_history_item(history)
+
+    assert item["input_xml"] is None
+    assert item["input_xmls"] == [
+        {"item_key": "one", "raw_xml": "<item>one</item>"},
+        {"item_key": "two", "raw_xml": "<item>two</item>"},
+    ]
+    assert item["output_xml"] is None
+
+
+def test_push_history_serializer_does_not_call_legacy_output_input_xml() -> None:
+    history = SimpleNamespace(
+        id=33,
+        sub_id=None,
+        batch_id=25,
+        bundle_id=7,
+        user_id="alice",
+        feed_id=None,
+        source_type="bundle",
+        source_key="bundle:7",
+        content="legacy",
+        raw_xml="<rss><item>after</item></rss>",
+        media_urls=None,
+        handler_trace=None,
+        output_kind="standard",
+        output_order=0,
+        source_context={
+            "document_snapshot": {
+                "document": {"rss_xml": "<rss><item>after</item></rss>"}
+            }
+        },
+        entry_title="legacy",
+        entry_link="https://example.com/bundle",
+        entry_guid=None,
+        feed_title="Bundle",
+        feed_link="https://example.com/feed",
+        platform_name="test",
+        target_session="test:Group:1",
+        status="success",
+        retry_count=0,
+        max_retries=3,
+        fail_reason=None,
+        created_at=None,
+        updated_at=None,
+        completed_at=None,
+    )
+
+    item = web_api._serialize_push_history_item(history)
+
+    assert item["input_xml"] is None
+    assert item["input_xmls"] is None
+    assert item["output_xml"] == "<rss><item>after</item></rss>"
 
 
 @pytest.mark.asyncio

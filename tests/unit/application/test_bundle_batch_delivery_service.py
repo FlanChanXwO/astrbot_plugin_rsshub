@@ -94,9 +94,16 @@ async def test_deliver_claims_one_bundle_batch_with_card_and_aggregate_outputs()
         rss_xml="<rss version='2.0' />",
         consumption_item_keys=("one", "two"),
     )
+    input_document = BundleAggregateDocument(
+        entries=document.entries,
+        text="Before handler",
+        rss_xml="<rss><item>before</item></rss>",
+        consumption_item_keys=document.consumption_item_keys,
+    )
     handler_result = BundleDocumentHandlerResult(
         document=document,
         trace=({"name": "ai_transform", "status": "ok"},),
+        input_document=input_document,
     )
 
     delivery_repository = MagicMock()
@@ -144,6 +151,10 @@ async def test_deliver_claims_one_bundle_batch_with_card_and_aggregate_outputs()
     assert draft.target_sessions == bundle.target_sessions
     assert draft.config_snapshot["send_card"] is True
     assert draft.document_snapshot["document"]["text"] == "One"
+    assert draft.document_snapshot["input_document"]["document"] == {
+        "text": "Before handler",
+        "rss_xml": "<rss><item>before</item></rss>",
+    }
     outputs = claim.args[2]
     assert [
         (item.target_session, item.output_kind, item.output_order, item.status)

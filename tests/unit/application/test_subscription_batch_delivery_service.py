@@ -43,7 +43,24 @@ async def test_claims_post_handler_snapshot_for_card_only_batch(tmp_path) -> Non
             "summary": "原始摘要",
             "author": "作者",
         },
+        raw_xml="<item><title>原始标题</title></item>",
         published_at=datetime(2026, 8, 24, tzinfo=timezone.utc),
+    )
+    second_inbox = DeliveryInboxItem(
+        id=12,
+        owner=owner,
+        feed_id=3,
+        item_key="entry-2",
+        hash_group=["entry-2"],
+        discovery_key="discovery-1",
+        entry_payload={
+            "title": "第二标题",
+            "link": "https://example.com/posts/2",
+            "summary": "第二摘要",
+            "author": "作者",
+        },
+        raw_xml="<item><title>第二标题</title></item>",
+        published_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
     )
     subscription = Subscription(
         id=7,
@@ -81,7 +98,7 @@ async def test_claims_post_handler_snapshot_for_card_only_batch(tmp_path) -> Non
     )
     delivery_repository = MagicMock()
     delivery_repository.get_pending_batch = AsyncMock(return_value=None)
-    delivery_repository.list_inbox_items = AsyncMock(return_value=[inbox])
+    delivery_repository.list_inbox_items = AsyncMock(return_value=[inbox, second_inbox])
     delivery_repository.claim_batch = AsyncMock(
         side_effect=lambda _o, b, outputs: MagicMock(
             id=19,
@@ -128,9 +145,22 @@ async def test_claims_post_handler_snapshot_for_card_only_batch(tmp_path) -> Non
     assert batch_draft.document_snapshot["entries"][0]["media_items"] == [
         {"type": "image", "url": "https://example.com/transformed.jpg"}
     ]
-    assert batch_draft.document_snapshot["document"]["text"] == "变换后正文"
+    assert batch_draft.document_snapshot["document"]["text"] == (
+        "变换后正文\n\n变换后正文"
+    )
     assert batch_draft.document_snapshot["handler_traces"] == [
-        [{"name": "ai_transform", "status": "ok"}]
+        [{"name": "ai_transform", "status": "ok"}],
+        [{"name": "ai_transform", "status": "ok"}],
+    ]
+    assert batch_draft.document_snapshot["input_entries"] == [
+        {
+            "item_key": "entry-1",
+            "raw_xml": "<item><title>原始标题</title></item>",
+        },
+        {
+            "item_key": "entry-2",
+            "raw_xml": "<item><title>第二标题</title></item>",
+        },
     ]
     outputs = claim.args[2]
     assert [(item.output_kind, item.status) for item in outputs] == [
@@ -193,6 +223,7 @@ async def test_original_outputs_use_newest_limit_and_frozen_dispatch_payload() -
         hash_group=["new"],
         discovery_key="discovery",
         entry_payload={"title": "New", "link": "https://example.com/new"},
+        raw_xml="<item><title>New</title></item>",
         published_at=datetime(2026, 8, 24, tzinfo=timezone.utc),
     )
     subscription = Subscription(
@@ -280,3 +311,4 @@ async def test_original_outputs_use_newest_limit_and_frozen_dispatch_payload() -
         "send_mode": 1,
         "style": 2,
     }
+    assert outputs[1].source_context["input_xml"] == ("<item><title>New</title></item>")

@@ -185,6 +185,13 @@ class SubscriptionBatchDeliveryService:
                 allowed_entries.append((item, handled.entry, trace))
 
         document_snapshot = {
+            "input_entries": [
+                {
+                    "item_key": item.item_key,
+                    "raw_xml": item.raw_xml,
+                }
+                for item in inbox
+            ],
             "entries": entries,
             "handler_traces": handler_traces,
             "document": {
@@ -272,6 +279,7 @@ class SubscriptionBatchDeliveryService:
         output_order: int,
     ) -> PushHistory:
         source_context = {
+            "input_xml": item.raw_xml,
             "send": {
                 "content": prepared.effective_content,
                 "media_urls": prepared.effective_media_urls,
@@ -284,7 +292,7 @@ class SubscriptionBatchDeliveryService:
                 ],
                 "send_mode": prepared.effective_send_mode,
                 "style": prepared.effective_style,
-            }
+            },
         }
         return PushHistory(
             sub_id=subscription.id,

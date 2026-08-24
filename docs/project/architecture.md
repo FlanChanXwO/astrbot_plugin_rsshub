@@ -256,12 +256,14 @@ Plugin Pages 当前不负责：
 最重要的排障资产是 `push_history`：
 
 - `content`: 最终可发送文本
-- `raw_xml`: 原始条目 XML；JSON Feed 条目会保存插件合成的 RSS `<item>` 片段
+- `raw_xml`: 历史记录兼容 XML 字段；JSON Feed 条目会保存插件合成的 RSS `<item>` 片段，批次输出使用处理后的 XML
+- `input_xml` / `input_xmls`: handler 处理前的单条或多条 XML；多条 card 输入按 `{item_key, raw_xml}` 保留，不拼接
+- `output_xml`: handler 处理后的最终 XML；旧历史无法还原输入时只保留可观测的输出 XML
 - `media_urls`: 媒体链接
 - `handler_trace`: handler 执行摘要
 - `fail_reason`: 失败原因
 - `batch_id` / `output_kind` / `output_order`: 可靠批次和 card→standard 顺序
-- `source_context`: 模板、文档、发送参数和来源快照
+- `source_context`: 模板、文档、发送参数和来源快照；批次文档快照区分 `input_document` 与当前 `document`
 
 因此，任何内容链路改动都要优先保证 history 可读性不回退。
 

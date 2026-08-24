@@ -353,10 +353,13 @@ class BundleDocumentHandlerResult:
     allowed: bool = True
     reason: str = ""
     trace: tuple[dict[str, Any], ...] = ()
+    input_document: BundleAggregateDocument | None = None
 
     def to_snapshot(self) -> dict[str, Any]:
-        """返回供批次持久化使用的 handler 后文档快照。"""
+        """返回供批次持久化使用的 handler 前后文档快照。"""
         snapshot = self.document.to_json()
+        if self.input_document is not None:
+            snapshot["input_document"] = self.input_document.to_json()
         snapshot["handler_trace"] = [dict(item) for item in self.trace]
         snapshot["consumption_item_keys"] = list(self.document.consumption_item_keys)
         snapshot["allowed"] = self.allowed
@@ -378,6 +381,7 @@ class BundleDocumentHandlerRuntime:
         document: BundleAggregateDocument,
         session_id: str | None = None,
     ) -> BundleDocumentHandlerResult:
+        input_document = document
         current = document
         trace: list[dict[str, Any]] = []
         for spec in normalize_handlers(bundle.handlers):
@@ -420,6 +424,7 @@ class BundleDocumentHandlerRuntime:
                     if not allowed:
                         return BundleDocumentHandlerResult(
                             document=current,
+                            input_document=input_document,
                             allowed=False,
                             reason=reason,
                             trace=tuple(trace),
@@ -464,6 +469,7 @@ class BundleDocumentHandlerRuntime:
                 )
         return BundleDocumentHandlerResult(
             document=current,
+            input_document=input_document,
             trace=tuple(trace),
         )
 

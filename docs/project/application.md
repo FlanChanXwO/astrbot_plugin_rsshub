@@ -58,7 +58,9 @@ Bundle 的 `ai_filter` 与 `ai_transform` 在完整 channel 上运行，和现�
 
 ### Bundle 可靠投递与调度
 
-`BundleBatchDeliveryService` 以 `(owner_type=bundle, owner_id)` 为并发边界：先恢复并 reconciliation 现有 pending 批次，再从未认领 inbox 创建一个新批次。文档生成后只认领本批实际消费的 `item_key`，因此成员级 `history_entry_limit` 留下的 backlog 会进入后续批次；批次中的 document、template、send payload 和 Feed 上下文均为不可变快照。
+`BundleBatchDeliveryService` 以 `(owner_type=bundle, owner_id)` 为并发边界：先恢复并 reconciliation 现有 pending 批次，再从未认领 inbox 创建一个新批次。文档生成后只认领本批实际消费的 `item_key`，因此成员级 `history_entry_limit` 留下的 backlog 会进入后续批次；批次中的 input/output document、template、send payload 和 Feed 上下文均为不可变快照。历史详情使用 `input_xml` 展示 handler 前文档，`output_xml` 展示最终文档；只有旧批次快照时，输入 XML 才会明确显示为不可用。
+
+Subscription card 批次会在 `document_snapshot.input_entries` 保存本批所有 inbox 条目的 `{item_key, raw_xml}`，无论条目是否被 handler 过滤；对应的 standard history 在 `source_context.input_xml` 保存单条 handler 前 XML，`raw_xml` 保持处理后输出。多条 card 输入通过 API 的 `input_xmls` 展示，不把多个 XML 静默拼成一个输入值。
 
 `OutputOrchestrator` 对每个目标会话按 `card → standard` 编排：卡片失败、停止或未确认时不会发送同批 standard；卡片成功或规则性 skip 后才发送 standard。发送成功、规则性 skip、失败、取消停止、自动重试和显式 discard 都通过可靠投递仓储更新 history、batch 与 inbox。进程可能在发送后、confirm 前退出，下一次推进会先 reconciliation，已确认或已丢弃的历史批次不会被重新发送。
 

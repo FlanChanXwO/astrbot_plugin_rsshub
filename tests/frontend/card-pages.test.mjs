@@ -160,6 +160,7 @@ test('推送历史详情展示批次快照、输入输出 XML 和输出顺序', 
   assert.match(mainPanelTemplate, /historyDetail\?\.template_snapshot/);
   assert.match(mainPanelTemplate, /historyDetail\?\.document_snapshot/);
   assert.match(mainPanelTemplate, /historyDetail\?\.input_xml/);
+  assert.match(mainPanelTemplate, /historyDetail\?\.input_xmls/);
   assert.match(mainPanelTemplate, /historyDetail\?\.output_xml/);
   assert.match(mainPanelTemplate, /historyDetail\?\.source_context/);
   assert.match(pushHistoryPageTemplate, /group\.template\.metadata/);

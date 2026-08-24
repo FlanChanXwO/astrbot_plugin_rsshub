@@ -177,7 +177,7 @@ export const mainPanelTemplate = String.raw`
       <div class="panel-section">
         <h4>正文与来源</h4>
         <div class="detail-row"><span class="detail-label">正文</span><span class="detail-value cell-wrap">{{ historyDetail?.content || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">输入 XML</span><span class="detail-value cell-wrap">{{ historyDetail?.input_xml || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">输入 XML</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.input_xmls || historyDetail?.input_xml || '-') }}</span></div>
         <div class="detail-row"><span class="detail-label">输出 XML</span><span class="detail-value cell-wrap">{{ historyDetail?.output_xml || historyDetail?.raw_xml || '-' }}</span></div>
         <div class="detail-row"><span class="detail-label">媒体</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.media_urls) }}</span></div>
         <div class="detail-row"><span class="detail-label">错误</span><span class="detail-value error-block">{{ historyDetail?.fail_reason || '-' }}</span></div>

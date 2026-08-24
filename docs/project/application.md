@@ -19,6 +19,7 @@
 | `/sub_test <ID\|URL>` | 真实推送最新条目，不是预览；聊天命令不接受额外范围参数。 | 不要恢复“测试推送未进入正式链路”的泛化误判。 |
 | `/sub_status` | 展示当前会话运行中或排队中的推送任务。 | 不把全局队列无筛选暴露给普通用户。 |
 | `/sub_stop [job_id\|feed_id\|all]` | 支持精确停止和批量停止；无参数时停止当前运行任务。 | 不让停止语义绕过审计。 |
+| `/bundle` / `/聚合订阅` | 支持 `create/list/show/add/remove/move/set/state/test/retry/discard/delete`；名称支持引号，成员和配置修改由 Bundle 应用用例统一校验。 | 不在命令入口复制归属、模板或可靠投递保护规则；`test` 仅管理员可用且不写正常业务批次。 |
 | `/rsshelp` | 发送预生成帮助图；按 AstrBot `timezone` 选择日间/夜间主题，读不到或时区非法时回退系统本地时间。 | 不把帮助图生成放到运行时热路径。 |
 | `/rsshub_kb_init` / `/rsshub_kb_sync` / `/rsshub_kb_status` / `/rsshub_kb_task` | 管理 RSSHub Routes 知识库同步。 | 不恢复 route-search / route-build LLM tools。 |
 

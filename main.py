@@ -236,6 +236,95 @@ class RSSHubPlugin(Star):
         if result.get("plain"):
             yield event.plain_result(result["plain"])
 
+    @filter.command_group("bundle", alias={"聚合订阅"})
+    def bundle_group(self):
+        """多源聚合订阅命令组。"""
+
+    @bundle_group.command("create", alias={"创建"})
+    async def bundle_create(self, event: AstrMessageEvent, args: str = ""):
+        """创建聚合订阅；名称支持引号，剩余参数为 GreedyStr。"""
+        result = await _h.handle_bundle_create(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("list", alias={"列表"})
+    async def bundle_list(self, event: AstrMessageEvent, args: str = ""):
+        """查看当前用户的聚合订阅。"""
+        result = await _h.handle_bundle_list(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("show", alias={"查看"})
+    async def bundle_show(self, event: AstrMessageEvent, args: str = ""):
+        """查看聚合订阅详情。"""
+        result = await _h.handle_bundle_show(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("add", alias={"添加"})
+    async def bundle_add(self, event: AstrMessageEvent, args: str = ""):
+        """批量添加聚合订阅成员。"""
+        result = await _h.handle_bundle_add(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("remove", alias={"移除"})
+    async def bundle_remove(self, event: AstrMessageEvent, args: str = ""):
+        """批量移除聚合订阅成员。"""
+        result = await _h.handle_bundle_remove(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("move", alias={"移动"})
+    async def bundle_move(self, event: AstrMessageEvent, args: str = ""):
+        """调整聚合订阅成员顺序。"""
+        result = await _h.handle_bundle_move(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("set", alias={"设置"})
+    async def bundle_set(self, event: AstrMessageEvent, args: str = ""):
+        """设置聚合订阅配置。"""
+        result = await _h.handle_bundle_set(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("state", alias={"状态"})
+    async def bundle_state(self, event: AstrMessageEvent, args: str = ""):
+        """启用或停用聚合订阅。"""
+        result = await _h.handle_bundle_state(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @bundle_group.command("test", alias={"测试"})
+    async def bundle_test(self, event: AstrMessageEvent, args: str = ""):
+        """管理员只读测试聚合订阅。"""
+        result = await _h.handle_bundle_test(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("retry", alias={"重试"})
+    async def bundle_retry(self, event: AstrMessageEvent, args: str = ""):
+        """重试聚合订阅未完成投递。"""
+        result = await _h.handle_bundle_retry(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("discard", alias={"丢弃"})
+    async def bundle_discard(self, event: AstrMessageEvent, args: str = ""):
+        """显式丢弃聚合订阅当前未确认批次。"""
+        result = await _h.handle_bundle_discard(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
+    @bundle_group.command("delete", alias={"删除"})
+    async def bundle_delete(self, event: AstrMessageEvent, args: str = ""):
+        """删除聚合订阅；有未解决投递时由应用用例阻止。"""
+        result = await _h.handle_bundle_delete(event, str(args), self._deps)
+        if result.get("plain"):
+            yield event.plain_result(result["plain"])
+
     @filter.command("activate_subs", alias={"enable_subs", "启用全部订阅"})
     async def batch_activate(self, event: AstrMessageEvent, sub_ids: str = ""):
         """批量启用订阅。

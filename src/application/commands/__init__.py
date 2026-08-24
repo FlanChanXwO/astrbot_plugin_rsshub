@@ -3,6 +3,7 @@
 from .batch_activate_cmd import BatchActivateCommand
 from .batch_deactivate_cmd import BatchDeactivateCommand
 from .batch_unsubscribe_cmd import BatchUnsubscribeCommand
+from .bundle_cmd import BundleCommand, BundleManagementCommand
 from .export_subscriptions_cmd import ExportSubscriptionsCommand
 from .get_user_settings_cmd import GetUserSettingsCommand
 from .help_image_cmd import HelpImageCommand
@@ -18,6 +19,8 @@ __all__ = [
     "BatchActivateCommand",
     "BatchDeactivateCommand",
     "BatchUnsubscribeCommand",
+    "BundleCommand",
+    "BundleManagementCommand",
     "ExportSubscriptionsCommand",
     "GetUserSettingsCommand",
     "HelpImageCommand",

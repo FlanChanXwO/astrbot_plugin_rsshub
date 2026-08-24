@@ -18,6 +18,7 @@ from .src.application.commands import (
     BatchActivateCommand,
     BatchDeactivateCommand,
     BatchUnsubscribeCommand,
+    BundleCommand,
     ExportSubscriptionsCommand,
     GetUserSettingsCommand,
     ImportSubscriptionsCommand,
@@ -163,6 +164,7 @@ class PluginDeps(TypedDict, total=False):
     bundle_collection_service: BundleCollectionService
     bundle_document_service: BundleDocumentService
     bundle_batch_delivery_service: BundleBatchDeliveryService
+    bundle_cmd: BundleCommand
 
 
 @dataclass(slots=True)
@@ -545,6 +547,16 @@ async def _build_dependencies(
         history_entry_limit=app_settings.scheduler.history_entry_limit,
         max_retries=app_settings.basic.failed_queue_max_retries,
     )
+    bundle_command = BundleCommand(
+        bundle_repository=bundle_repo,
+        feed_repository=feed_repo,
+        user_repository=user_repo,
+        delivery_repository=delivery_repo,
+        template_repository=template_repository,
+        polling_service=polling_service,
+        bundle_batch_delivery_service=bundle_batch_delivery_service,
+        default_interval=app_settings.scheduler.default_interval,
+    )
     card_management_service = SubscriptionCardManagementService(
         subscription_repository=sub_repo,
         feed_repository=feed_repo,
@@ -642,6 +654,7 @@ async def _build_dependencies(
         bundle_collection_service=bundle_collection_service,
         bundle_document_service=bundle_document_service,
         bundle_batch_delivery_service=bundle_batch_delivery_service,
+        bundle_cmd=bundle_command,
     )
     return deps, notification_dispatcher
 

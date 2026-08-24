@@ -439,6 +439,18 @@ def test_main_command_signatures_use_str_args(monkeypatch):
         main.RSSHubPlugin.sub_profile_get,
         main.RSSHubPlugin.import_subs,
         main.RSSHubPlugin.test_sub,
+        main.RSSHubPlugin.bundle_create,
+        main.RSSHubPlugin.bundle_list,
+        main.RSSHubPlugin.bundle_show,
+        main.RSSHubPlugin.bundle_add,
+        main.RSSHubPlugin.bundle_remove,
+        main.RSSHubPlugin.bundle_move,
+        main.RSSHubPlugin.bundle_set,
+        main.RSSHubPlugin.bundle_state,
+        main.RSSHubPlugin.bundle_test,
+        main.RSSHubPlugin.bundle_retry,
+        main.RSSHubPlugin.bundle_discard,
+        main.RSSHubPlugin.bundle_delete,
     )
     for command in str_args_commands:
         assert command.__annotations__["args"] == "str"

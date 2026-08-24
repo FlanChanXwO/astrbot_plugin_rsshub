@@ -47,6 +47,7 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     captured_polling_kwargs: dict[str, object] = {}
     card_delivery_service = object()
     bundle_delivery_service = object()
+    bundle_command = object()
 
     def build_polling_service(**kwargs):
         captured_polling_kwargs.update(kwargs)
@@ -83,6 +84,12 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     )
     monkeypatch.setattr(
         bootstrap,
+        "BundleCommand",
+        MagicMock(return_value=bundle_command),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bootstrap,
         "build_route_knowledge_source",
         AsyncMock(return_value=object()),
     )
@@ -101,6 +108,7 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
         is card_delivery_service
     )
     assert deps["bundle_batch_delivery_service"] is bundle_delivery_service
+    assert deps["bundle_cmd"] is bundle_command
 
 
 @pytest.mark.asyncio

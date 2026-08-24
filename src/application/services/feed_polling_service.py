@@ -80,6 +80,19 @@ class FeedReadResult:
 
 
 @dataclass(frozen=True)
+class FeedEntrySnapshot:
+    """供可靠 inbox 使用的 JSON-safe 条目快照。"""
+
+    item_key: str
+    hash_group: list[str]
+    entry_payload: dict[str, Any]
+    raw_xml: str | None
+    media_items: list[dict[str, Any]]
+    published_at: datetime | None
+    entry_updated_at: datetime | None
+
+
+@dataclass(frozen=True)
 class FeedPollingResult:
     """Result of one feed polling run."""
 
@@ -422,6 +435,76 @@ class FeedPollingService:
             feed=saved_feed,
         )
 
+    def calculate_entry_update(
+        self,
+        old_groups: list[list[str]],
+        entries: list[Any],
+        *,
+        feed_link: str | None = None,
+    ) -> tuple[list[list[str]], list[Any]]:
+        """公开统一的条目去重计算，供 Bundle 私有水位复用。"""
+        return self._calculate_update(old_groups, entries, feed_link=feed_link)
+
+    def merge_entry_hash_history(
+        self,
+        old_groups: list[list[str]],
+        new_groups: list[list[str]],
+        entry_count: int,
+    ) -> list[list[str]] | None:
+        """公开统一的哈希历史合并，沿用现有 RSS 配置。"""
+        return self._merge_hash_history(old_groups, new_groups, entry_count)
+
+    def build_entry_snapshots(
+        self,
+        feed: Feed,
+        entries: list[Any],
+    ) -> list[FeedEntrySnapshot]:
+        """把解析条目转换为可持久化的稳定快照。"""
+        snapshots: list[FeedEntrySnapshot] = []
+        for entry in entries:
+            hash_group = self._hash_entry(entry, feed.link)
+            item_key = hash_group[0]
+            payload = to_jsonable_python(entry)
+            if not isinstance(payload, dict):
+                payload = {
+                    key: to_jsonable_python(self._entry_value(entry, key, None))
+                    for key in (
+                        "id",
+                        "guid",
+                        "entry_id",
+                        "title",
+                        "link",
+                        "author",
+                        "content",
+                        "summary",
+                        "tags",
+                        "enclosures",
+                        "published",
+                        "updated",
+                    )
+                }
+            media_items = to_jsonable_python(
+                self._entry_value(entry, "enclosures", []) or []
+            )
+            if not isinstance(media_items, list):
+                media_items = []
+            snapshots.append(
+                FeedEntrySnapshot(
+                    item_key=item_key,
+                    hash_group=hash_group,
+                    entry_payload=payload,
+                    raw_xml=(
+                        str(self._entry_value(entry, "raw_xml") or "").strip() or None
+                    ),
+                    media_items=[
+                        item for item in media_items if isinstance(item, dict)
+                    ],
+                    published_at=self._entry_value(entry, "published", None),
+                    entry_updated_at=self._entry_value(entry, "updated", None),
+                )
+            )
+        return snapshots
+
     async def poll_feed_group(
         self,
         feed_id: int,
@@ -515,30 +598,7 @@ class FeedPollingService:
     ) -> list[SubscriptionInboxDiscovery]:
         if feed.id is None:
             raise ValueError("持久化卡片 Subscription inbox 前 Feed 必须已有 ID")
-        item_snapshots: list[tuple[str, list[str], dict[str, Any], Any]] = []
-        for entry in entries:
-            hash_group = self._hash_entry(entry, feed.link)
-            item_key = hash_group[0]
-            payload = to_jsonable_python(entry)
-            if not isinstance(payload, dict):
-                payload = {
-                    key: to_jsonable_python(self._entry_value(entry, key, None))
-                    for key in (
-                        "id",
-                        "guid",
-                        "entry_id",
-                        "title",
-                        "link",
-                        "author",
-                        "content",
-                        "summary",
-                        "tags",
-                        "enclosures",
-                        "published",
-                        "updated",
-                    )
-                }
-            item_snapshots.append((item_key, hash_group, payload, entry))
+        snapshots = self.build_entry_snapshots(feed, entries)
 
         discoveries: list[SubscriptionInboxDiscovery] = []
         discovered_at = datetime.now(timezone.utc)
@@ -550,7 +610,7 @@ class FeedPollingService:
                 owner_id=subscription.id,
             )
             discovery_material = "\n".join(
-                sorted(item_key for item_key, *_rest in item_snapshots)
+                sorted(snapshot.item_key for snapshot in snapshots)
             )
             discovery_digest = hashlib.sha256(
                 f"{owner.owner_id}\n{feed.id}\n{discovery_material}".encode()
@@ -562,21 +622,17 @@ class FeedPollingService:
             items = [
                 DeliveryInboxItemDraft(
                     feed_id=feed.id,
-                    item_key=item_key,
-                    hash_group=hash_group,
+                    item_key=snapshot.item_key,
+                    hash_group=snapshot.hash_group,
                     discovery_key=discovery_key,
-                    entry_payload=payload,
-                    raw_xml=(
-                        str(self._entry_value(entry, "raw_xml") or "").strip() or None
-                    ),
-                    media_items=to_jsonable_python(
-                        self._entry_value(entry, "enclosures", []) or []
-                    ),
-                    published_at=self._entry_value(entry, "published", None),
-                    entry_updated_at=self._entry_value(entry, "updated", None),
+                    entry_payload=snapshot.entry_payload,
+                    raw_xml=snapshot.raw_xml,
+                    media_items=snapshot.media_items,
+                    published_at=snapshot.published_at,
+                    entry_updated_at=snapshot.entry_updated_at,
                     discovered_at=discovered_at,
                 )
-                for item_key, hash_group, payload, entry in item_snapshots
+                for snapshot in snapshots
             ]
             discoveries.append(SubscriptionInboxDiscovery(owner=owner, items=items))
         return discoveries

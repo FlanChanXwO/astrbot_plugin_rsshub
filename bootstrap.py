@@ -35,6 +35,9 @@ from .src.application.queries import (
     SearchFeedsQuery,
 )
 from .src.application.services.agent_xml_push_service import AgentXmlPushService
+from .src.application.services.bundle_collection_service import (
+    BundleCollectionService,
+)
 from .src.application.services.card_renderer import CardRenderer
 from .src.application.services.card_template_service import (
     CardTemplateDownloadService,
@@ -80,6 +83,7 @@ from .src.infrastructure.messaging import (
     set_bot_self_id_provider,
 )
 from .src.infrastructure.persistence import (
+    get_bundle_repository,
     get_database,
     get_delivery_repository,
     get_feed_repository,
@@ -147,6 +151,8 @@ class PluginDeps(TypedDict, total=False):
     template_download_service: CardTemplateDownloadService
     template_management_service: CardTemplateManagementService
     delivery_repository: Any
+    bundle_repository: Any
+    bundle_collection_service: BundleCollectionService
 
 
 @dataclass(slots=True)
@@ -438,6 +444,7 @@ async def _build_dependencies(
     user_repo = get_user_repository()
     push_history_repo = get_push_history_repository()
     delivery_repo = get_delivery_repository()
+    bundle_repo = get_bundle_repository()
 
     content_handler_runtime = ContentHandlerRuntime(
         context=context,
@@ -495,6 +502,13 @@ async def _build_dependencies(
         delivery_repository=delivery_repo,
         subscription_batch_delivery_service=subscription_batch_delivery_service,
         history_entry_limit=app_settings.scheduler.history_entry_limit,
+    )
+    bundle_collection_service = BundleCollectionService(
+        bundle_repository=bundle_repo,
+        feed_repository=feed_repo,
+        polling_service=polling_service,
+        delivery_repository=delivery_repo,
+        rss_settings=app_settings.rss,
     )
     card_management_service = SubscriptionCardManagementService(
         subscription_repository=sub_repo,
@@ -589,6 +603,8 @@ async def _build_dependencies(
         template_download_service=template_download_service,
         template_management_service=template_management_service,
         delivery_repository=delivery_repo,
+        bundle_repository=bundle_repo,
+        bundle_collection_service=bundle_collection_service,
     )
     return deps, notification_dispatcher
 

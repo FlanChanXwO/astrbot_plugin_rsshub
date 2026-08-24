@@ -19,7 +19,7 @@ from ...domain.entities.delivery import (
     InboxStoreResult,
     SubscriptionInboxDiscovery,
 )
-from ...domain.entities.feed import Feed
+from ...domain.entities.feed import Feed, normalize_entry_hashes
 from ...domain.entities.push_history import PushHistory, normalize_fail_reason
 from ...domain.repositories.delivery_repository import (
     DeliveryBatchConflictError,
@@ -188,6 +188,109 @@ class DeliveryRepositoryImpl:
                 created_at=feed_orm.created_at,
                 updated_at=feed_orm.updated_at,
             )
+
+    async def store_bundle_discovery(
+        self,
+        *,
+        owner: DeliveryOwner,
+        bundle_feed_id: int,
+        member_position: int,
+        items: Sequence[DeliveryInboxItemDraft],
+        entry_hashes: list[list[str]],
+        etag: str | None,
+        last_modified: datetime | None,
+        status: str,
+        checked_at: datetime,
+    ) -> InboxStoreResult:
+        """在同一事务中写入 Bundle inbox 与成员私有水位。"""
+        if owner.owner_type != "bundle":
+            raise DeliverySourceMismatchError("Bundle 发现 owner 必须是 bundle")
+        if bundle_feed_id <= 0 or member_position < 0:
+            raise DeliverySourceMismatchError("Bundle 发现成员引用无效")
+
+        async with self._db.get_session() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                bundle = await session.get(BundleORM, owner.owner_id)
+                member = await session.get(BundleFeedORM, bundle_feed_id)
+                if bundle is None:
+                    raise DeliveryOwnerNotFoundError(
+                        f"Bundle owner 不存在: {owner.owner_id}"
+                    )
+                if (
+                    member is None
+                    or member.bundle_id != bundle.id
+                    or member.position != member_position
+                ):
+                    raise DeliverySourceMismatchError("Bundle 发现成员来源不匹配")
+                await self._validate_sources(session, owner, items)
+
+                inserted_count = 0
+                for item in items:
+                    values = item.model_dump()
+                    values.update(
+                        owner_type=owner.owner_type,
+                        owner_id=owner.owner_id,
+                    )
+                    result = await session.execute(
+                        sqlite_insert(DeliveryInboxItemORM)
+                        .values(**values)
+                        .on_conflict_do_nothing(
+                            index_elements=(
+                                "owner_type",
+                                "owner_id",
+                                "feed_id",
+                                "item_key",
+                            )
+                        )
+                    )
+                    inserted_count += int(result.rowcount or 0)
+
+                await self._after_bundle_discovery(
+                    session,
+                    owner,
+                    bundle_feed_id,
+                )
+
+                member.entry_hashes = normalize_entry_hashes(entry_hashes) or []
+                member.etag = etag
+                member.last_modified = last_modified
+                member.last_check_status = status
+                member.last_checked_at = checked_at
+                session.add(member)
+                await session.commit()
+            except BaseException:
+                await session.rollback()
+                raise
+
+        return InboxStoreResult(
+            inserted_count=inserted_count,
+            duplicate_count=len(items) - inserted_count,
+        )
+
+    async def record_bundle_member_status(
+        self,
+        *,
+        bundle_feed_id: int,
+        status: str,
+        checked_at: datetime,
+    ) -> None:
+        """记录 304/失败状态，但不改动成员哈希与条件请求水位。"""
+        async with self._db.get_session() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                member = await session.get(BundleFeedORM, bundle_feed_id)
+                if member is None:
+                    raise DeliveryOwnerNotFoundError(
+                        f"Bundle 成员不存在: {bundle_feed_id}"
+                    )
+                member.last_check_status = status
+                member.last_checked_at = checked_at
+                session.add(member)
+                await session.commit()
+            except BaseException:
+                await session.rollback()
+                raise
 
     async def list_inbox_items(
         self,
@@ -613,6 +716,20 @@ class DeliveryRepositoryImpl:
                 if member is None:
                     await session.commit()
                     return False
+                bundle = await session.get(BundleORM, member.bundle_id)
+                member_count = int(
+                    (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(BundleFeedORM)
+                            .where(BundleFeedORM.bundle_id == member.bundle_id)
+                        )
+                    ).scalar_one()
+                )
+                if bundle is not None and bundle.state == 1 and member_count <= 2:
+                    raise DeliveryDeletionBlockedError(
+                        {"minimum_members": member_count}
+                    )
                 rows = (
                     await session.execute(
                         select(DeliveryInboxItemORM.batch_id, func.count())
@@ -637,6 +754,105 @@ class DeliveryRepositoryImpl:
                 )
                 await session.commit()
                 return True
+            except BaseException:
+                await session.rollback()
+                raise
+
+    async def replace_bundle_members(
+        self,
+        bundle_id: int,
+        feed_ids: Sequence[int],
+    ) -> list[int]:
+        """原子替换成员、校验删除保护并重新分配 position。"""
+        normalized = [int(feed_id) for feed_id in feed_ids]
+        if any(feed_id <= 0 for feed_id in normalized):
+            raise ValueError("Bundle 成员 Feed ID 必须为正整数")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Bundle 成员 Feed 不能重复")
+
+        async with self._db.get_session() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                bundle = await session.get(BundleORM, bundle_id)
+                if bundle is None:
+                    raise DeliveryOwnerNotFoundError(
+                        f"Bundle owner 不存在: {bundle_id}"
+                    )
+                if bundle.state == 1 and len(normalized) < 2:
+                    raise ValueError("启用 Bundle 至少需要两个不同 Feed")
+
+                current_result = await session.execute(
+                    select(BundleFeedORM)
+                    .where(BundleFeedORM.bundle_id == bundle_id)
+                    .order_by(asc(BundleFeedORM.position), asc(BundleFeedORM.id))
+                )
+                current = list(current_result.scalars().all())
+                normalized_set = set(normalized)
+                current_by_feed = {member.feed_id: member for member in current}
+                removed = [
+                    member for member in current if member.feed_id not in normalized_set
+                ]
+                owner_blockers: dict[str, dict[str, int]] = {}
+                for member in removed:
+                    rows = (
+                        await session.execute(
+                            select(DeliveryInboxItemORM.batch_id, func.count())
+                            .where(DeliveryInboxItemORM.bundle_feed_id == member.id)
+                            .group_by(DeliveryInboxItemORM.batch_id)
+                        )
+                    ).all()
+                    counts = self._claim_state_counts(rows)
+                    if counts:
+                        owner_blockers[str(member.id)] = counts
+                if owner_blockers:
+                    flat_counts = {
+                        f"bundle_feed:{member_id}:{name}": count
+                        for member_id, counts in owner_blockers.items()
+                        for name, count in counts.items()
+                    }
+                    raise DeliveryDeletionBlockedError(
+                        flat_counts,
+                        owner_blockers=owner_blockers,
+                    )
+
+                if normalized:
+                    feed_result = await session.execute(
+                        select(FeedORM.id).where(FeedORM.id.in_(normalized))
+                    )
+                    existing_feed_ids = {
+                        int(feed_id) for (feed_id,) in feed_result.all()
+                    }
+                    missing = [
+                        feed_id
+                        for feed_id in normalized
+                        if feed_id not in existing_feed_ids
+                    ]
+                    if missing:
+                        raise ValueError(f"Feed 不存在: {missing}")
+
+                for member in removed:
+                    await session.delete(member)
+                await session.flush()
+
+                offset = len(current) + len(normalized) + 1
+                ordered_members: list[BundleFeedORM] = []
+                for index, feed_id in enumerate(normalized):
+                    member = current_by_feed.get(feed_id)
+                    if member is None:
+                        member = BundleFeedORM(
+                            bundle_id=bundle_id,
+                            feed_id=feed_id,
+                            position=offset + index,
+                        )
+                        session.add(member)
+                    else:
+                        member.position = offset + index
+                    ordered_members.append(member)
+                await session.flush()
+                for index, member in enumerate(ordered_members):
+                    member.position = index
+                await session.commit()
+                return [member.feed_id for member in ordered_members]
             except BaseException:
                 await session.rollback()
                 raise
@@ -925,6 +1141,10 @@ class DeliveryRepositoryImpl:
     @staticmethod
     async def _after_subscription_discovery_owner(_session, _owner_index) -> None:
         """故障注入接缝；生产实现不执行额外动作。"""
+
+    @staticmethod
+    async def _after_bundle_discovery(_session, _owner, _bundle_feed_id) -> None:
+        """Bundle 发现事务的故障注入接缝。"""
 
     @staticmethod
     async def _after_subscription_owners_deleted(_session, _subscription_ids) -> None:

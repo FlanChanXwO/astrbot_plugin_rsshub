@@ -1,6 +1,7 @@
 """领域实体包"""
 
 from .bundle import Bundle
+from .bundle_feed import BundleFeed
 from .card_rendering import CardRenderContext
 from .card_template import CardTemplateMetadata
 from .content_types import (
@@ -34,6 +35,7 @@ from .user import User
 __all__ = [
     "AudioContent",
     "Bundle",
+    "BundleFeed",
     "CardRenderContext",
     "CardTemplateMetadata",
     "ContentNode",

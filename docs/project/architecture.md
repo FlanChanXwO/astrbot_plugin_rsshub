@@ -67,14 +67,15 @@ LLM tools 的入口仍由 `main.py` 注册；具体实现按主题放在 `src/ap
 
 ## 核心链路总览
 
-项目的核心运行面可以拆成六条主链：
+项目的核心运行面可以拆成七条主链：
 
 1. Feed 轮询与增量识别
-2. 分发与推送 history
-3. Handler 运行时
-4. 文本格式化与平台消息组件排序
-5. 会话级串行发送队列
-6. RSSHub Routes 知识库同步
+2. Bundle 成员采集与私有水位
+3. 分发与推送 history
+4. Handler 运行时
+5. 文本格式化与平台消息组件排序
+6. 会话级串行发送队列
+7. RSSHub Routes 知识库同步
 
 下面只给全景，细节分别下沉到独立章节。
 
@@ -108,7 +109,13 @@ LLM tools 的入口仍由 `main.py` 注册；具体实现按主题放在 `src/ap
 
 sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件顺序，是否拆成多次发送由具体 sender adapter 决定。`style=0` 使用平台自动/经典策略，`style=1` 是 RSSRT 排版策略，`style=2` 使用解析树 layout fragments 尽量保留原始图文顺序。QQ Official 单图会和文本合链，Weixin OC 不合链，OneBot auto/classic 合并转发失败后会回退为纯文本 Nodes。
 
-### 2. 测试推送
+### 2. Bundle 成员采集
+
+`BundleCollectionService` 复用 `FeedPollingService` 的抓取、解析和指纹快照能力，但不读取或修改共享 Feed 水位。它按 `BundleFeed.position` 串行发送私有条件请求；每个成员的成功发现、成员哈希/条件请求水位和通用 inbox 在同一事务提交。304 或失败只记录成员检查状态，失败成员不会推进自己的水位，后续成员仍继续采集。新成员首次成功 200 时沿用全局 `bootstrap_skip_history` 决定是否跳过历史。
+
+成员替换、重排和移除通过 `BundleRepository` / 可靠投递仓储的事务边界完成；移除成员前检查未认领或已认领 inbox，启用 Bundle 始终要求至少两个不同 Feed。相同 Feed 被多个 Bundle 或普通 Subscription 使用时，各消费者的条件请求和指纹水位相互隔离。
+
+### 3. 测试推送
 
 - 当目标是 `sub_id` 时，走正式 dispatcher 链路，应用订阅配置和 handlers。
 - 当目标是 URL 时，走轻量直发链路，不读取订阅配置。
@@ -118,7 +125,7 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 - 真实订阅回归验证
 - 临时 URL 手工测试
 
-### 3. Handler 处理链
+### 4. Handler 处理链
 
 - `subscription.handlers_mode` 决定继承、覆盖或禁用
 - builtin handler 当前支持：
@@ -132,7 +139,7 @@ sender 层仍保持平台差异隔离：`MessageComponentSorter` 只给出组件
 
 详见 [`handlers.md`](./handlers.md)。
 
-### 3. XML 即时推送
+### 5. XML 即时推送
 
 AI tool `rss_push_xml_entry` 不依赖 `sub_id`。它直接：
 
@@ -150,12 +157,17 @@ AI tool `rss_push_xml_entry` 不依赖 `sub_id`。它直接：
 ```mermaid
 flowchart TD
   A["Scheduler / Commands / Web API / LLM Tools"] --> B["FeedPollingService"]
+  A --> BUNDLE["BundleCollectionService"]
   A --> C["NotificationDispatcher"]
   A --> D["RouteKnowledgeSyncService"]
 
   B --> E["FeedFetcher + FeedParser"]
   B --> F["FeedRepository"]
   B --> C
+
+  BUNDLE --> E
+  BUNDLE --> F
+  BUNDLE --> BDEL["BundleRepository / DeliveryRepository"]
 
   C --> G["SubscriptionRepository / UserRepository"]
   C --> H["ContentHandlerRuntime"]

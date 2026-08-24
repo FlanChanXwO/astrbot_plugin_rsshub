@@ -3,6 +3,7 @@
 提供数据库连接、ORM 模型和仓库实现。
 """
 
+from .bundle_repository_impl import BundleRepositoryImpl, get_bundle_repository
 from .database import DatabaseManager, RSSHubBaseModel, get_database
 from .delivery_repository_impl import (
     DeliveryRepositoryImpl,
@@ -37,6 +38,7 @@ __all__ = [
     "INHERIT_VALUE",
     "BundleFeedORM",
     "BundleORM",
+    "BundleRepositoryImpl",
     # Database
     "DatabaseManager",
     "DeliveryBatchORM",
@@ -54,6 +56,7 @@ __all__ = [
     "SubscriptionRepositoryImpl",
     "UserORM",
     "UserRepositoryImpl",
+    "get_bundle_repository",
     "get_database",
     "get_delivery_repository",
     "get_feed_repository",

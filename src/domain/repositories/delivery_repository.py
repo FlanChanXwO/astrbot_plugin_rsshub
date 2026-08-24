@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Protocol
 
 from ..entities.delivery import (
@@ -84,6 +85,28 @@ class DeliveryRepository(Protocol):
         discoveries: Sequence[SubscriptionInboxDiscovery],
     ) -> Feed: ...
 
+    async def store_bundle_discovery(
+        self,
+        *,
+        owner: DeliveryOwner,
+        bundle_feed_id: int,
+        member_position: int,
+        items: Sequence[DeliveryInboxItemDraft],
+        entry_hashes: list[list[str]],
+        etag: str | None,
+        last_modified: datetime | None,
+        status: str,
+        checked_at: datetime,
+    ) -> InboxStoreResult: ...
+
+    async def record_bundle_member_status(
+        self,
+        *,
+        bundle_feed_id: int,
+        status: str,
+        checked_at: datetime,
+    ) -> None: ...
+
     async def list_inbox_items(
         self,
         owner: DeliveryOwner,
@@ -127,3 +150,9 @@ class DeliveryRepository(Protocol):
     async def delete_owner(self, owner: DeliveryOwner) -> bool: ...
 
     async def remove_bundle_member(self, bundle_feed_id: int) -> bool: ...
+
+    async def replace_bundle_members(
+        self,
+        bundle_id: int,
+        feed_ids: Sequence[int],
+    ) -> list[int]: ...

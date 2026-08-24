@@ -5,6 +5,7 @@
 
 from ..shared.constants import INHERIT_VALUE
 from .entities.bundle import Bundle
+from .entities.bundle_feed import BundleFeed
 from .entities.card_template import CardTemplateMetadata
 from .entities.feed import Feed
 from .entities.push_history import PushHistory
@@ -30,6 +31,7 @@ from .repositories.user_repository import UserRepository
 __all__ = [
     "INHERIT_VALUE",
     "Bundle",
+    "BundleFeed",
     "CardTemplateMetadata",
     "ConfigurationError",
     "DomainException",

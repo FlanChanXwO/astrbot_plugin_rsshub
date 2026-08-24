@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f6f7f9; color: #20242b; }
+    main { width: min(100%, 960px); margin: 0 auto; padding: 24px; }
+    .card { overflow: hidden; border: 1px solid #e0e4ea; border-radius: 20px; background: #fff; box-shadow: 0 12px 32px rgb(31 41 55 / 10%); }
+    .hero { padding: 28px; background: #202936; color: #fff; }
+    .eyebrow { margin: 0 0 8px; color: #aab9cb; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(24px, 5vw, 38px); line-height: 1.15; overflow-wrap: anywhere; }
+    .sources { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .source { min-width: 0; padding: 6px 10px; border: 1px solid #526276; border-radius: 999px; color: #dbe7f4; font-size: 12px; overflow-wrap: anywhere; }
+    .entries { display: grid; gap: 16px; padding: 20px; }
+    article { min-width: 0; padding: 20px; border: 1px solid #e5e8ed; border-radius: 15px; background: #fbfcfd; }
+    .entry-source { margin: 0 0 8px; color: #61758c; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+    h2 { margin: 0; color: #1f3f67; font-size: clamp(18px, 3vw, 24px); line-height: 1.3; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 10px 0 14px; color: #697789; font-size: 12px; overflow-wrap: anywhere; }
+    .summary { margin: 0 0 12px; color: #445264; line-height: 1.65; overflow-wrap: anywhere; }
+    .content { color: #2c3746; line-height: 1.7; overflow-wrap: anywhere; }
+    .content :where(img, video, iframe) { display: block; max-width: 100%; height: auto; }
+    .content :where(pre, code) { max-width: 100%; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .content a, .entry-link { overflow-wrap: anywhere; }
+    .entry-link { display: inline-block; margin-top: 14px; color: #1769aa; font-size: 13px; }
+    .empty, footer { padding: 20px; color: #697789; font-size: 13px; line-height: 1.6; }
+    footer { border-top: 1px solid #e5e8ed; }
+    @media (max-width: 640px) {
+      main { padding: 10px; }
+      .hero { padding: 22px 18px; }
+      .entries { padding: 12px; }
+      article { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <header class="hero">
+        <p class="eyebrow">RSSHub Bundle</p>
+        <h1>{{ bundle.name }}</h1>
+        {% if feeds %}
+        <div class="sources">
+          {% for feed in feeds %}<span class="source">{{ feed.title }}</span>{% endfor %}
+        </div>
+        {% endif %}
+      </header>
+      {% if entries %}
+      <section class="entries">
+        {% for entry in entries %}
+        <article>
+          <p class="entry-source">
+            {% for feed in feeds %}{% if feed.id == entry.feed_id %}{{ feed.title }}{% endif %}{% endfor %}
+          </p>
+          <h2>{{ entry.title }}</h2>
+          <div class="meta">
+            {% if entry.author %}<span>{{ entry.author }}</span>{% endif %}
+            {% if entry.published %}<time>{{ entry.published }}</time>{% endif %}
+          </div>
+          {% if entry.summary %}<p class="summary">{{ entry.summary }}</p>{% endif %}
+          {% if entry.content_html %}<div class="content">{{ entry.content_html | safe }}</div>{% endif %}
+          <a class="entry-link" href="{{ entry.link }}">阅读原文</a>
+        </article>
+        {% endfor %}
+      </section>
+      {% else %}
+      <p class="empty">本次没有可展示的内容。</p>
+      {% endif %}
+      <footer>{{ entries | length }} 条内容 · {{ feeds | length }} 个来源 · {{ template.name }} v{{ template.version }}</footer>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,9 @@
+id: astrbot_plugin_rsshub_card_bundle
+name: 通用多源聚合卡片
+version: 1.0.0
+author: FlanChanXwO
+description: 适用于任意多源 Bundle 的通用聚合卡片模板
+repository: https://github.com/FlanChanXwO/astrbot_plugin_rsshub
+targets:
+  - bundle
+feed_patterns: []

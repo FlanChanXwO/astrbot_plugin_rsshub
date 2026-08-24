@@ -119,6 +119,7 @@ from .src.infrastructure.templates import (
     CardTemplatePackageRepository,
     CardTemplateService,
     DatabaseCardTemplateReferenceLookup,
+    get_builtin_card_template_dirs,
 )
 from .src.infrastructure.utils import (
     get_logger,
@@ -476,7 +477,9 @@ async def _build_dependencies(
         subscription_defaults=app_settings.subscription_defaults,
         basic_settings=app_settings.basic,
     )
-    template_repository = CardTemplatePackageRepository()
+    template_repository = CardTemplatePackageRepository(
+        builtin_package_dirs=get_builtin_card_template_dirs(),
+    )
     template_service = CardTemplateService()
     image_renderer = AstrBotHtmlImageRenderer()
     card_renderer = CardRenderer(

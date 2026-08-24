@@ -1,5 +1,6 @@
 """卡片模板包的本地存储与安装能力。"""
 
+from .builtin import get_builtin_card_template_dirs
 from .download import (
     AiohttpCardTemplateArchiveDownloader,
     CardTemplateDownloadError,
@@ -30,4 +31,5 @@ __all__ = [
     "CardTemplateService",
     "CardTemplateSnapshot",
     "DatabaseCardTemplateReferenceLookup",
+    "get_builtin_card_template_dirs",
 ]

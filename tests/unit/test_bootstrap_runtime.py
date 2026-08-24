@@ -48,6 +48,8 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     card_delivery_service = object()
     bundle_delivery_service = object()
     bundle_command = object()
+    builtin_dirs = (object(), object())
+    template_repository = MagicMock()
 
     def build_polling_service(**kwargs):
         captured_polling_kwargs.update(kwargs)
@@ -72,6 +74,17 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
         raising=False,
     )
     monkeypatch.setattr(bootstrap, "FeedPollingService", build_polling_service)
+    template_repository_factory = MagicMock(return_value=template_repository)
+    monkeypatch.setattr(
+        bootstrap,
+        "CardTemplatePackageRepository",
+        template_repository_factory,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "get_builtin_card_template_dirs",
+        lambda: builtin_dirs,
+    )
     monkeypatch.setattr(
         bootstrap,
         "SubscriptionBatchDeliveryService",
@@ -109,6 +122,9 @@ async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
     )
     assert deps["bundle_batch_delivery_service"] is bundle_delivery_service
     assert deps["bundle_cmd"] is bundle_command
+    template_repository_factory.assert_called_once_with(
+        builtin_package_dirs=builtin_dirs,
+    )
 
 
 @pytest.mark.asyncio

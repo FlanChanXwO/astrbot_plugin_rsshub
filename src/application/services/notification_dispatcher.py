@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -26,6 +26,7 @@ from ...domain.repositories.push_history_repository import PushHistoryRepository
 from ...domain.repositories.subscription_repository import SubscriptionRepository
 from ...domain.repositories.user_repository import UserRepository
 from ...infrastructure.config import BasicSettings, SubscriptionDefaults
+from ...infrastructure import get_bot_self_id
 from ...infrastructure.pipeline import (
     EffectivePushOptions,
     EntryFormatInput,
@@ -43,6 +44,7 @@ from ...shared.constants import (
 )
 from ..ports import MessageContext, MessageSenderProvider, SendRequest
 from .content_handlers import ContentHandlerRuntime, EntryContentContext
+from .pipeline_comment import AiCommentTrigger, PipelineCommentRouter
 from .session_push_queue import PushJob, SessionPushQueue
 
 logger = get_logger()
@@ -78,6 +80,7 @@ class SendTarget:
     platform_name: str | None
     target_session: str | None
     sub_id: int | None = None
+    bot_self_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,8 @@ class PreparedSubscriptionDispatch:
     effective_media_items: list[tuple[str, str]] | None
     effective_layout: list[LayoutFragment] | None
     persisted_media_urls: list[str] | None
+    commentary: str = ""  # ai_comment 直连模式生成的评论正文；转发成功后单独发送
+    comment_trigger: AiCommentTrigger | None = None  # ai_comment 管道模式触发载荷
 
 
 def is_unrecoverable_error(error: str) -> bool:
@@ -267,6 +272,9 @@ class NotificationDispatcher:
         self._content_handler_runtime = (
             content_handler_runtime or ContentHandlerRuntime()
         )
+        self._pipeline_router = PipelineCommentRouter(
+            context=self._content_handler_runtime._context
+        )
         self._default_push_options = self._options_from_subscription_defaults(
             subscription_defaults or SubscriptionDefaults()
         )
@@ -277,11 +285,13 @@ class NotificationDispatcher:
 
     @staticmethod
     def _target_from_subscription(subscription) -> SendTarget:
+        platform_name = subscription.platform_name
         return SendTarget(
             user_id=subscription.user_id,
-            platform_name=subscription.platform_name,
+            platform_name=platform_name,
             target_session=subscription.target_session,
             sub_id=subscription.id,
+            bot_self_id=get_bot_self_id(platform_name or "") or "",
         )
 
     @staticmethod
@@ -641,6 +651,8 @@ class NotificationDispatcher:
                     handler_trace: list[dict[str, Any]] | None = None
                     handler_allowed = True
                     handler_reason = ""
+                    handler_commentary = ""
+                    handler_comment_trigger: AiCommentTrigger | None = None
                     if raw_entry is not None:
                         handler_result = await self._content_handler_runtime.process_entry_with_trace(
                             subscription=sub,
@@ -657,6 +669,10 @@ class NotificationDispatcher:
                         handler_allowed = handler_result.allow
                         handler_reason = handler_result.reason
                         handler_trace = list(handler_result.trace) or None
+                        handler_commentary = str(
+                            handler_result.commentary or ""
+                        ).strip()
+                        handler_comment_trigger = handler_result.comment_trigger
                     if processed_entry is not None and processed_entry.layout:
                         layouts_to_cleanup.append(processed_entry.layout)
 
@@ -813,6 +829,8 @@ class NotificationDispatcher:
                                 and persisted_media_urls
                                 else None
                             ),
+                            commentary=handler_commentary,
+                            comment_trigger=handler_comment_trigger,
                         )
                     )
 
@@ -931,6 +949,28 @@ class NotificationDispatcher:
                     if result["ok"]:
                         history.mark_success()
                         stats["success"] += 1
+                        # 5.1 AI 评论：仅在主推送转发成功后触发，绝不合并进伪造聊天记录；
+                        # 任何被 handler/通知/去重跳过的条目不产生评论也不读图。
+                        # 直连模式（ai_comment_pipeline=false）正文已在 handler 步生成；
+                        # 管道模式此时才把合成消息注入 AstrBot 消息管道，让其他插件、人格、记忆生效。
+                        # 评论失败不影响主推送历史。
+                        if prepared.commentary:
+                            await self._send_commentary_after_forward(
+                                prepared=prepared,
+                                target=self._target_from_subscription(sub),
+                                feed_id=feed_id,
+                                feed_title=feed_title,
+                                feed_link=feed_link,
+                                commentary=prepared.commentary,
+                            )
+                        elif prepared.comment_trigger:
+                            await self._dispatch_pipeline_comment(
+                                prepared=prepared,
+                                target=self._target_from_subscription(sub),
+                                feed_id=feed_id,
+                                feed_title=feed_title,
+                                feed_link=feed_link,
+                            )
                     elif result.get("cancelled"):
                         history.mark_stopped(
                             result.get("error", "Stopped by System or Command")
@@ -1121,6 +1161,7 @@ class NotificationDispatcher:
         send_mode: int | None = None,
         style: int = 0,
         sender_strategy: Any = None,
+        plain_text_only: bool = False,
     ) -> dict[str, Any]:
         return await self._send_to_session(
             target=target,
@@ -1138,6 +1179,7 @@ class NotificationDispatcher:
             send_mode=send_mode,
             style=style,
             sender_strategy=sender_strategy,
+            plain_text_only=plain_text_only,
         )
 
     async def _send_to_session(
@@ -1158,6 +1200,7 @@ class NotificationDispatcher:
         send_mode: int | None = None,
         style: int = 0,
         sender_strategy: Any = None,
+        plain_text_only: bool = False,
     ) -> dict[str, Any]:
         """
         发送通知到指定目标
@@ -1211,6 +1254,7 @@ class NotificationDispatcher:
                         send_mode=self._normalize_send_mode_value(send_mode),
                         style=style,
                         sender_strategy=sender_strategy,
+                        plain_text_only=plain_text_only,
                     ),
                 )
 
@@ -1260,6 +1304,154 @@ class NotificationDispatcher:
         except Exception as e:
             logger.error("发送通知失败: %s", e, exc_info=True)
             return {"ok": False, "error": str(e)}
+
+    async def _send_commentary_after_forward(
+        self,
+        *,
+        prepared: PreparedSubscriptionDispatch,
+        target: SendTarget,
+        feed_id: int | None,
+        feed_title: str,
+        feed_link: str,
+        commentary: str,
+    ) -> None:
+        """AI 评论：转发成功后作为独立普通消息单独发送，绝不合并进伪造聊天记录。
+
+        经 ``plain_text_only=True`` 走普通聊天文本发送（OneBot 不构造 Nodes）；
+        失败仅 warning，不计入 stats，不影响主推送历史状态。
+        """
+        commentary = str(commentary or "").strip()
+        if not commentary:
+            return
+        try:
+            comment_result = await self.send_to_session(
+                # 清空 bot_self_id：评论是 bot 自己说话，与转发节点身份无关；
+                # 配合 plain_text_only 双保险确保不进合并转发。
+                target=replace(target, bot_self_id=""),
+                content=commentary,
+                media_urls=None,
+                media_items=None,
+                layout=None,
+                job_description=(
+                    f"comment feed={feed_id}, sub={prepared.subscription.id}"
+                ),
+                channel_title=feed_title,
+                channel_link=feed_link,
+                entry_title=prepared.effective_title,
+                entry_link=prepared.effective_link,
+                feed_id=feed_id,
+                sub_id=prepared.subscription.id,
+                send_mode=prepared.effective_send_mode,
+                style=prepared.effective_style,
+                plain_text_only=True,
+            )
+        except Exception as exc:
+            logger.warning("ai_comment 评论发送异常: %s", exc)
+            return
+        if not comment_result.get("ok"):
+            logger.warning(
+                "ai_comment 评论发送失败: %s",
+                comment_result.get("error"),
+            )
+
+    async def _dispatch_pipeline_comment(
+        self,
+        *,
+        prepared: PreparedSubscriptionDispatch,
+        target: SendTarget,
+        feed_id: int | None,
+        feed_title: str,
+        feed_link: str,
+    ) -> None:
+        """管道模式 AI 评论：把合成消息注入 AstrBot 消息管道，像与 bot 对话一样生成评论。
+
+        由 AstrBot 管道完成插件消息交互、人格加载、记忆注入与平台投递；
+        注入失败（目标平台未连接 / 会话无法解析 / StarTools 不可用）时自动回退直连，
+        评论不静默丢失。失败仅 warning，不影响主推送历史。
+        """
+        trigger = prepared.comment_trigger
+        if trigger is None:
+            return
+        try:
+            result = await self._pipeline_router.inject(target, trigger)
+        except Exception as exc:
+            logger.warning("ai_comment 管道注入异常，回退直连: %s", exc)
+            await self._direct_comment_fallback(
+                prepared=prepared,
+                target=target,
+                feed_id=feed_id,
+                feed_title=feed_title,
+                feed_link=feed_link,
+                error=str(exc),
+            )
+            return
+        if not result.get("ok"):
+            if result.get("fallback"):
+                await self._direct_comment_fallback(
+                    prepared=prepared,
+                    target=target,
+                    feed_id=feed_id,
+                    feed_title=feed_title,
+                    feed_link=feed_link,
+                    error=str(result.get("error") or "") or "inject failed",
+                )
+            else:
+                logger.warning(
+                    "ai_comment 管道注入失败: %s", result.get("error")
+                )
+            return
+        logger.info(
+            "ai_comment 管道注入成功: feed=%s, sub=%s, message_id=%s"
+            "（评论由 AstrBot 管道异步生成，管道内失败不回流，"
+            "可凭 message_id 在核心日志追踪）",
+            feed_id,
+            prepared.subscription.id,
+            result.get("message_id") or "",
+        )
+
+    async def _direct_comment_fallback(
+        self,
+        *,
+        prepared: PreparedSubscriptionDispatch,
+        target: SendTarget,
+        feed_id: int | None,
+        feed_title: str,
+        feed_link: str,
+        error: str,
+    ) -> None:
+        """管道注入失败时的直连回退：用 trigger 的原始 entry/config 生成评论正文并发送。"""
+        trigger = prepared.comment_trigger
+        if trigger is None:
+            return
+        logger.warning(
+            "ai_comment 回退直连生成评论 (feed=%s, sub=%s): %s",
+            feed_id,
+            prepared.subscription.id,
+            error,
+        )
+        try:
+            comment_text, _trace = (
+                await self._content_handler_runtime.generate_comment_text(
+                    trigger.entry,
+                    trigger.config,
+                    session_id=str(target.target_session or "").strip() or None,
+                )
+            )
+        except Exception as exc:
+            logger.warning("ai_comment 直连回退生成评论异常: %s", exc)
+            return
+        comment_text = str(comment_text or "").strip()
+        if not comment_text:
+            logger.warning("ai_comment 直连回退未生成评论正文，丢弃")
+            return
+        await self._send_commentary_after_forward(
+            prepared=prepared,
+            target=target,
+            feed_id=feed_id,
+            feed_title=feed_title,
+            feed_link=feed_link,
+            commentary=comment_text,
+        )
 
     @staticmethod
     def _limit_original_layout_text(

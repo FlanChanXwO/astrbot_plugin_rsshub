@@ -81,6 +81,7 @@ from ...shared.constants import (
     HandlerType,
 )
 from .html_parser import HTMLParser
+from .pipeline_comment import AiCommentTrigger
 
 logger = get_logger()
 
@@ -201,6 +202,8 @@ class HandlerProcessResult:
     allow: bool = True
     reason: str = ""
     trace: tuple[dict[str, Any], ...] = ()
+    commentary: str = ""  # ai_comment 直连模式生成的评论正文；空表示无评论
+    comment_trigger: AiCommentTrigger | None = None  # ai_comment 管道模式触发载荷
 
 
 class ContentHandlerRuntime:
@@ -277,6 +280,8 @@ class ContentHandlerRuntime:
     ) -> HandlerProcessResult:
         result = entry
         trace: list[dict[str, Any]] = []
+        commentary = ""
+        comment_trigger: AiCommentTrigger | None = None
         for spec in self.resolve_handlers(subscription=subscription, user=user):
             if not is_handler_enabled(spec):
                 trace.append(
@@ -346,6 +351,45 @@ class ContentHandlerRuntime:
                             **transform_result["trace"],
                         }
                     )
+                elif spec.name == "ai_comment":
+                    # 评论针对改写前的原始条目生成（原文是怎样的就评论怎样的），
+                    # 而不是改写后的消息；评论内容不受 ai_transform 影响。
+                    if self._settings.ai_comment_pipeline:
+                        # 管道模式（默认）：不调 LLM、不读图，只构造触发载荷；
+                        # 评论正文由 AstrBot 消息管道在转发成功后生成并回复
+                        # （见 notification_dispatcher._dispatch_pipeline_comment）。
+                        comment_prompt = str(
+                            (spec.config or {}).get("prompt") or ""
+                        )
+                        comment_trigger = AiCommentTrigger(
+                            entry=entry,
+                            prompt=comment_prompt,
+                            with_media=self._normalize_with_media(
+                                (spec.config or {}).get("with_media")
+                            ),
+                            config=dict(spec.config or {}),
+                        )
+                        comment_trace: dict[str, Any] = {
+                            "mode": "pipeline",
+                            "with_media": comment_trigger.with_media,
+                            "prompt_present": bool(comment_prompt.strip()),
+                        }
+                    else:
+                        # 直连模式（ai_comment_pipeline=false）：
+                        # 插件直连 text_chat 生成正文，转发成功后单独发送。
+                        commentary, comment_trace = await self._run_ai_comment(
+                            entry,
+                            spec.config,
+                            session_id=session_id,
+                        )
+                    trace.append(
+                        {
+                            "id": spec.id,
+                            "name": spec.name,
+                            "status": HandlerTraceStatus.OK.value,
+                            **comment_trace,
+                        }
+                    )
                 else:
                     logger.debug("未知内置 handler，已跳过: %s", spec.name)
                     trace.append(
@@ -370,7 +414,12 @@ class ContentHandlerRuntime:
                         "reason": str(exc),
                     }
                 )
-        return HandlerProcessResult(entry=result, trace=tuple(trace))
+        return HandlerProcessResult(
+            entry=result,
+            trace=tuple(trace),
+            commentary=commentary,
+            comment_trigger=comment_trigger,
+        )
 
     async def _run_ai_transform(
         self,
@@ -807,3 +856,101 @@ class ContentHandlerRuntime:
         if prompt is None and isinstance(persona, dict):
             prompt = persona.get("prompt") or persona.get("system_prompt")
         return str(prompt or "").strip()
+
+    async def _run_ai_comment(
+        self,
+        entry: EntryContentContext,
+        config: dict[str, Any],
+        *,
+        session_id: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """生成一条 AI 评论（吐槽/观点/看法），失败时 fail-open 返回空串。
+
+        评论基于**改写前的原始条目**（调用方传入的 entry 应为 handler 链输入，
+        而非 ai_transform 之后的 result）。直连模式用上游单 provider
+        （``_resolve_provider`` + ``provider.text_chat``），不做回退 provider
+        链/指数退避；图片以 URL 列表形式拼进 prompt 文本（不做独立图片
+        描述调用），保证上游零额外依赖。返回 ``(评论正文, trace_dict)``。
+        """
+        prompt = str((config or {}).get("prompt") or "").strip()
+        if not prompt or self._context is None:
+            return "", {
+                "mode": "direct",
+                "fallback": True,
+                "fallback_reason": "missing prompt or context",
+            }
+
+        provider = self._resolve_provider(session_id=session_id)
+        if provider is None:
+            logger.warning("ai_comment 跳过：当前没有可用的对话模型 provider")
+            return "", {
+                "mode": "direct",
+                "fallback": True,
+                "fallback_reason": "provider unavailable",
+            }
+
+        source_payload: dict[str, Any] = {
+            "title": entry.title,
+            "summary": entry.summary,
+            "content": entry.content,
+            "link": entry.link,
+            "author": entry.author,
+            "feed_title": entry.feed_title,
+            "feed_link": entry.feed_link,
+            "media_urls": list(entry.media_urls),
+        }
+
+        with_media = self._normalize_with_media((config or {}).get("with_media"))
+        request_prompt = (
+            "你是 RSS 推送评论 agent。请像人一样和订阅群里的人们一起看这条推送，"
+            "写一段吐槽/观点/看法的评论。"
+            "只输出评论正文本身，不要解释、不要 Markdown、不要 JSON 包裹、不要引用字段名。"
+            f"\n用户要求:\n{prompt}"
+            f"\n\n条目数据:\n{json.dumps(source_payload, ensure_ascii=False)}"
+        )
+        response = await provider.text_chat(
+            prompt=request_prompt,
+            session_id=session_id or "rsshub-handlers",
+            contexts=[],
+            persist=False,
+            system_prompt=self._resolve_system_prompt(),
+        )
+        commentary = str(getattr(response, "completion_text", "") or "").strip()
+        comment_trace: dict[str, Any] = {
+            "mode": "direct",
+            "with_media": bool(with_media),
+            "commentary_present": bool(commentary),
+            "commentary_length": len(commentary),
+            "fallback": False,
+        }
+        return commentary, comment_trace
+
+    async def generate_comment_text(
+        self,
+        entry: EntryContentContext,
+        config: dict[str, Any],
+        *,
+        session_id: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """直连模式生成评论正文（公开 API）。
+
+        等价于 ``_run_ai_comment``：基于改写前的原始条目，失败 fail-open
+        返回 ``("", trace)``。供 dispatcher 在管道注入失败时做直连回退
+        （与 ``ai_comment_pipeline`` 开关无关）。
+        """
+        return await self._run_ai_comment(
+            entry,
+            config,
+            session_id=session_id,
+        )
+
+    def _normalize_with_media(self, value: Any) -> bool:
+        """防御性解析 with_media 布尔值（null/空串回退默认 True）。"""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value or "").strip().lower()
+        if text in {"0", "false", "no", "off", "禁用", "否"}:
+            return False
+        return True

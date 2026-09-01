@@ -388,6 +388,7 @@ def test_heal_astrbot_plugin_config_projects_dirty_config_to_schema():
     assert healed["content_handlers"] == {
         "ai_provider_id": "",
         "ai_persona_id": "",
+        "ai_comment_pipeline": True,
     }
     assert healed["sender_strategies"] == {
         "enabled_platforms": ["telegram", "aiocqhttp", "qq_official"],
@@ -585,6 +586,7 @@ def test_content_handler_ai_config_maps_to_runtime_settings_and_saves():
     assert astrbot_config["content_handlers"] == {
         "ai_provider_id": "provider-1",
         "ai_persona_id": "persona-1",
+        "ai_comment_pipeline": True,
     }
 
 

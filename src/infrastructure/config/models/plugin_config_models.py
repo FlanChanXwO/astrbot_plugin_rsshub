@@ -261,6 +261,10 @@ class ContentHandlersConfig(BaseModel):
 
     ai_provider_id: str = Field(default="", description="AI Provider ID")
     ai_persona_id: str = Field(default="", description="AI Persona ID")
+    ai_comment_pipeline: bool = Field(
+        default=True,
+        description="AI 评论管道模式开关：True=管道模式（默认），False=直连模式",
+    )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> ContentHandlersConfig:

@@ -124,6 +124,7 @@ class MessageContext:
     style: int = 0
     sender_strategy: Any = None
     event: Any = None  # AstrBot event object for platform-specific features (e.g., NapCat stream)
+    plain_text_only: bool = False  # AI 评论等场景：只按普通聊天文本发送，不构造合并转发节点
 
 
 @dataclass

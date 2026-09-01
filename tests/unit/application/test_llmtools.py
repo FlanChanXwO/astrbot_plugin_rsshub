@@ -89,7 +89,7 @@ async def test_llm_tool_list_handlers_returns_registry_schema():
 
     data = json.loads(result)
     names = {item["name"] for item in data["items"]}
-    assert names == {"ai_filter", "ai_transform"}
+    assert names == {"ai_filter", "ai_transform", "ai_comment"}
     ai_filter = next(item for item in data["items"] if item["name"] == "ai_filter")
     assert any(field["key"] == "input_scope" for field in ai_filter["schema"])
     ai_transform = next(

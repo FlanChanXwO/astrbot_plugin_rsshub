@@ -45,6 +45,7 @@ class InfrastructureMessageSenderAdapter:
                 if context and getattr(context, "sender_strategy", None) is not None
                 else self._sender_strategy
             ),
+            plain_text_only=getattr(context, "plain_text_only", False) if context else False,
         )
         result = await self._sender.send_to_user(
             InfraSendRequest(

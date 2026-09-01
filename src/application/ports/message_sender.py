@@ -20,6 +20,7 @@ class MessageContext:
     send_mode: int | None = None
     style: int = 0
     sender_strategy: Any = None
+    plain_text_only: bool = False
 
 
 @dataclass(frozen=True)

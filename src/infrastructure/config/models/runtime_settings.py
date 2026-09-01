@@ -103,6 +103,7 @@ class ContentHandlerSettings:
 
     ai_provider_id: str = ""
     ai_persona_id: str = ""
+    ai_comment_pipeline: bool = True
 
 
 @dataclass(frozen=True)

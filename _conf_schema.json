@@ -483,6 +483,12 @@
         "_special": "select_persona",
         "hint": "可选；选择后仅把该人格 system prompt 注入内置 AI handler，不改变会话人格",
         "default": ""
+      },
+      "ai_comment_pipeline": {
+        "type": "boolean",
+        "description": "AI 评论管道模式",
+        "hint": "开启=管道模式（默认）：评论由 AstrBot 消息管道生成，经过插件过滤/人格/记忆全链路；关闭=直连模式：插件直接调 LLM 生成评论后单独发送",
+        "default": true
       }
     }
   }

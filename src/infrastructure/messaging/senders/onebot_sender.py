@@ -124,6 +124,10 @@ class OneBotMessageSender(DefaultMessageSender):
 
         经典策略下每条消息/媒体各自一个 Node；失败后回退为纯文本 Nodes。
         """
+        if getattr(context, "plain_text_only", False):
+            # AI 评论等场景：只按普通聊天文本发送，绝不构造合并转发节点。
+            return await super().send_to_user(request, context)
+
         effective_prepared = None
         cleanup_owned = request.prepared_media is None
         try:

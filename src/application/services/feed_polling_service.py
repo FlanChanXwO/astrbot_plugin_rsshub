@@ -357,16 +357,23 @@ class FeedPollingService:
     async def poll_feed_group(
         self,
         feed_id: int,
-        subscription_ids: list[int],
+        subscription_ids: list[int] | None = None,
         *,
         notify_new_entries: bool = True,
         verbose: bool = False,
     ) -> FeedPollingResult:
-        """Poll one feed and dispatch only to the selected subscriptions."""
+        """Poll one feed and dispatch to the selected subscriptions.
+
+        subscription_ids 为 None 时，新条目分发给该 Feed 的所有活跃订阅
+        （由 per-sub dispatch guard 防重复）；传列表时只分发给指定订阅。
+        """
+        deduped = (
+            list(dict.fromkeys(subscription_ids)) if subscription_ids else None
+        )
         return await self.poll_feed(
             feed_id,
             notify_new_entries=notify_new_entries,
-            subscription_ids=list(dict.fromkeys(subscription_ids)),
+            subscription_ids=deduped,
             verbose=verbose,
         )
 

@@ -269,32 +269,51 @@ def _register_bot_client_provider(context: Context) -> None:
         return None
 
     def _resolve_bot_self_id(platform_name: str) -> str:
-        """从已连接的反向 WebSocket 客户端中解析 bot 的 self_id（QQ 号）。
+        """从平台上所有已连接实例汇总 bot 的 self_id（QQ 号）。
 
-        aiocqhttp 的 CQHttp 实例以 self_id 为键保存已连接的 API 客户端
-        （``_wsr_api_clients``）。只有连接中恰有一个非零 self_id 时才返回，
-        避免多 bot 平台把其他账号误写入合并转发节点；解析失败时返回空串，
-        由调用方保留 SDK 的默认值。
+        遍历 platform_manager 的所有实例，对每个匹配 platform_name 的实例
+        从其 ``_wsr_api_clients`` 收集非零 self_id，跨实例汇总后只有唯一一个
+        时才返回，否则返回空串。这同时覆盖"单实例多 bot"与"每 bot 一个独立
+        适配器实例"两种部署：多 bot 同平台时不再把其他账号误写入合并转发
+        节点（原实现 ``_resolve_bot_client`` 只取第一个匹配实例，多实例每
+        bot 一个适配器时返回 bot1 导致伪造转发身份），而是安全回退到纯文本
+        发送（OneBotMessageSender 收到空串时早退到基类）。解析失败返回空串，
+        由调用方保留 SDK 默认值。
         """
-        client = _resolve_bot_client(platform_name)
-        if client is None:
-            return ""
-        api_clients = getattr(client, "_wsr_api_clients", None)
-        if isinstance(api_clients, dict):
-            self_ids = [
-                str(self_id).strip()
-                for self_id in list(api_clients)
-                if str(self_id or "").strip() not in {"", "0"}
-            ]
-            if len(self_ids) == 1:
-                return self_ids[0]
-            if len(self_ids) > 1:
-                logger.warning(
-                    "无法唯一解析 bot self_id，保留合并转发节点默认值: "
-                    "platform=%s, candidates=%s",
-                    platform_name,
-                    self_ids,
+        self_ids: list[str] = []
+        try:
+            platform_manager = getattr(context, "platform_manager", None)
+            if platform_manager is None:
+                return ""
+            for inst in platform_manager.get_insts():
+                meta = inst.meta() if hasattr(inst, "meta") else None
+                inst_name = getattr(meta, "name", None) or getattr(
+                    inst, "platform_name", None
                 )
+                if inst_name != platform_name or not hasattr(inst, "get_client"):
+                    continue
+                client = inst.get_client()
+                api_clients = getattr(client, "_wsr_api_clients", None)
+                if not isinstance(api_clients, dict):
+                    continue
+                for self_id in list(api_clients):
+                    sid = str(self_id or "").strip()
+                    if sid and sid != "0" and sid not in self_ids:
+                        self_ids.append(sid)
+        except Exception as exc:
+            logger.debug(
+                "解析 bot self_id 失败: platform=%s, err=%s", platform_name, exc
+            )
+            return ""
+        if len(self_ids) == 1:
+            return self_ids[0]
+        if len(self_ids) > 1:
+            logger.warning(
+                "无法唯一解析 bot self_id，保留合并转发节点默认值: "
+                "platform=%s, candidates=%s",
+                platform_name,
+                self_ids,
+            )
         return ""
 
     set_bot_client_provider(_resolve_bot_client)

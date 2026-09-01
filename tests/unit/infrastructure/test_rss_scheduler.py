@@ -131,9 +131,10 @@ async def test_scheduler_groups_due_subscriptions_by_feed_and_triggers_polling(
 
     calls = polling_service.poll_feed_group.await_args_list
     assert len(calls) == 2
-    assert calls[0].args == (10, [1, 2])
+    # Bug2 修复后传 None（分发给该 Feed 所有活跃订阅），而非本次到期订阅 ID
+    assert calls[0].args == (10, None)
     assert calls[0].kwargs == {"notify_new_entries": True}
-    assert calls[1].args == (20, [3])
+    assert calls[1].args == (20, None)
     assert calls[1].kwargs == {"notify_new_entries": True}
 
     assert subs[0].next_check_time is not None
@@ -196,7 +197,7 @@ async def test_scheduler_still_updates_next_check_after_polling_error(monkeypatc
 
     polling_service.poll_feed_group.assert_awaited_once_with(
         10,
-        [1],
+        None,  # Bug2 修复后传 None（分发给该 Feed 所有活跃订阅）
         notify_new_entries=True,
     )
     assert subs[0].next_check_time is not None

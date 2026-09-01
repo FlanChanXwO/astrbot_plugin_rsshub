@@ -298,9 +298,15 @@ class RSSScheduler:
             if self._feed_polling_service is None:
                 raise RuntimeError("RSSScheduler requires FeedPollingService")
 
+            # 修复：传 None 而非本次到期订阅 ID，让新条目分发给该 Feed 的所有
+            # 活跃订阅（per-sub dispatch guard 防重复）。原实现只分发给本次到期
+            # 的订阅，多群订阅同一源时先到期的群触发抓取并记下 feed 级已见水位，
+            # 后到期的群条目全在已见列表 → 永远收不到（稳定漏推）。
+            # 各订阅 interval 语义从"我多久收一次"变为"我多久参与触发一次抓取"，
+            # 实际推送频率由最短间隔的订阅决定，对"同源推到多个群"是期望行为。
             result = await self._feed_polling_service.poll_feed_group(
                 feed_id,
-                [sub.id for sub in due_subs],
+                None,
                 notify_new_entries=True,
             )
             self._record_polling_result(result)

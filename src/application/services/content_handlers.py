@@ -85,8 +85,16 @@ from .html_parser import HTMLParser
 logger = get_logger()
 
 
-class _SyntheticHandlerEvent:
-    """Minimal event adapter for tool_loop_agent in non-chat paths."""
+class _SyntheticHandlerEvent(AstrMessageEvent):
+    """Minimal event adapter for tool_loop_agent in non-chat paths.
+
+    继承 AstrMessageEvent 以通过 AstrAgentContext 的 pydantic ``isinstance``
+    校验（修复 Web 测试推送/自动轮询路径下 scope=xml 的 ai_transform 因
+    ``Input should be an instance of AstrMessageEvent`` 永远失败、回退原文），
+    同时提供所有必要方法的最小实现，使 tool_loop_agent 在无真实事件时可用。
+    __init__ 不调用父类构造（框架父类可能要求复杂参数），只注入
+    tool_loop_agent 实际使用的最小子集。
+    """
 
     def __init__(
         self,
@@ -225,18 +233,15 @@ class ContentHandlerRuntime:
             active = []
         elif mode == HANDLERS_MODE_OVERRIDE:
             active = subscription.get_handlers()
-        else:
-            active = user.get_handlers() if user else []
-            if (
-                mode
-                not in {
-                    HANDLERS_MODE_INHERIT,
-                    HANDLERS_MODE_OVERRIDE,
-                    HANDLERS_MODE_DISABLED,
-                }
-                and subscription.get_handlers()
-            ):
-                active = subscription.get_handlers()
+        else:  # inherit
+            # inherit 语义：订阅自带 handlers 优先，未配置才回落用户级。
+            # 修复：原实现兜底条件 mode not in {INHERIT,...} 等价于"mode 是
+            # 未知值"，对 inherit（已知 mode）永远不成立，导致订阅自带
+            # handlers 被完全忽略，所有订阅都套用户级 handlers。
+            sub_handlers = subscription.get_handlers()
+            active = sub_handlers if sub_handlers else (
+                user.get_handlers() if user else []
+            )
         return normalize_handlers(active)
 
     async def process_entry(
@@ -787,7 +792,12 @@ class ContentHandlerRuntime:
             getter = getattr(self._context, "get_using_provider", None)
             if getter is None:
                 return None
-            provider = getter(session_id) if session_id else getter()
+            # 修复：非聊天路径（Web 测试推送/自动轮询）下 session_id 对应的会话
+            # 无活跃用户，getter(session_id) 返回 None；需回退到全局默认 provider，
+            # 否则 AI filter/transform 在 Web/自动推送路径静默跳过、原文直发。
+            provider = getter(session_id) if session_id else None
+            if provider is None:
+                provider = getter()  # 全局默认 provider
         return provider if callable(getattr(provider, "text_chat", None)) else None
 
     def _resolve_system_prompt(self) -> str:

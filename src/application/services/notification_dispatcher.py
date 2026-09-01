@@ -958,6 +958,59 @@ class NotificationDispatcher:
 
                 except Exception as e:
                     logger.error("发送订阅 %s 失败: %s", sub.id, e, exc_info=True)
+                    # 修复：per-sub 分发阶段抛异常时，补落一条 status=failed 的
+                    # PushHistory，保留已执行的 handler_trace，便于 Web 面板排查。
+                    # 原实现 except 只记日志+计数，异常若发生在 PushHistory 创建
+                    # 之前，handler_trace 随之丢失，Web 面板完全没痕迹。max_retries=0
+                    # 避免被失败队列自动重推（水位未确认，下轮轮询自然重试本条）。
+                    try:
+                        processed = getattr(prepared, "processed_entry", None)
+                        error_history = PushHistory(
+                            sub_id=sub.id,
+                            user_id=sub.user_id,
+                            feed_id=feed_id,
+                            source_type="feed",
+                            source_key=self._feed_source_key(feed_id, sub.id),
+                            content=str(
+                                getattr(prepared, "effective_content", "") or ""
+                            ),
+                            raw_xml=(
+                                str(
+                                    getattr(processed, "raw_xml", "") or ""
+                                ).strip()
+                                if processed is not None
+                                else None
+                            )
+                            or None,
+                            media_urls=getattr(
+                                prepared, "persisted_media_urls", None
+                            ),
+                            handler_trace=getattr(prepared, "handler_trace", None),
+                            entry_title=str(
+                                getattr(prepared, "effective_title", "") or ""
+                            ),
+                            entry_link=str(
+                                getattr(prepared, "effective_link", "") or ""
+                            ),
+                            entry_guid=entry_guid,
+                            feed_title=feed_title,
+                            feed_link=feed_link,
+                            platform_name=sub.platform_name,
+                            target_session=sub.target_session,
+                            status="failed",
+                            retry_count=0,
+                            max_retries=0,
+                        )
+                        error_history.record_first_failure(
+                            f"dispatch error: {e}"
+                        )
+                        await self._push_history_repo.save(error_history)
+                    except Exception as save_exc:
+                        logger.warning(
+                            "保存失败订阅审计记录失败: sub=%s, err=%s",
+                            sub.id,
+                            save_exc,
+                        )
                     stats["failed"] += 1
                     record_error_detail(e)
 

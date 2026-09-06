@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- 完成 Feed 卡片与多源 Bundle 的跨层集成回归：覆盖 fixture 抓取、handler 后 JSON-safe 快照、SQLite inbox/batch/history、card→standard 前置门、失败恢复、重试和显式丢弃。
+- 补齐卡片模板与 Bundle 的公开文档：领域/仓储/轮询/分发/handler、命令、AI tools、Web API、Plugin Pages、测试和维护说明现在共享同一套 batch、snapshot、backlog 语义。
+
+### Fixed
+
+- 推送历史现在区分 handler 前后的 XML 快照；Subscription card 多输入保留逐条 `input_xmls`，旧历史缺少输入快照时不再把输出 XML 误报为输入。
+- 推送历史分页改为按可靠批次逻辑单元计算；跨页批次完整返回所有输出，避免重复批次标题、丢失输出或误解除未解决批次的删除保护，同时保持普通历史分页总数语义。
+- Dashboard 删除用户或 Feed 时会先阻断仍有 Bundle owner / BundleFeed 成员引用的对象，并返回可定位的 blocker，避免外键失败造成部分清理或孤儿 owner。
+
+### Notes
+
+- 集成测试使用真实 SQLite delivery repository 和应用服务；只有平台发送边界使用可控替身，因此不会访问外部 RSS、平台或模型服务。
+- 内置卡片模板为 `astrbot_plugin_rsshub_card_juya`（Feed）和 `astrbot_plugin_rsshub_card_bundle`（Bundle）；模板预览仍是无副作用路径。
+
 ## [2.1.4] - 2026-07-25
 
 ### Added

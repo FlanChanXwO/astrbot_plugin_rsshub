@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from astrbot_plugin_rsshub.src.domain.entities.push_history import (
@@ -14,7 +13,10 @@ from astrbot_plugin_rsshub.src.infrastructure.persistence import (
 from astrbot_plugin_rsshub.src.infrastructure.persistence.database import (
     RSSHubBaseModel,
 )
-from astrbot_plugin_rsshub.src.infrastructure.persistence.models import PushHistoryORM
+from astrbot_plugin_rsshub.src.infrastructure.persistence.models import (
+    DeliveryBatchORM,
+    PushHistoryORM,
+)
 from astrbot_plugin_rsshub.src.infrastructure.persistence.push_history_repository_impl import (
     PushHistoryRepositoryImpl,
 )
@@ -151,26 +153,142 @@ def test_to_entity_preserves_agent_source_fields():
 
 
 @pytest.mark.asyncio
-async def test_delete_many_ignores_invalid_ids_and_returns_rowcount(monkeypatch):
+async def test_delete_many_ignores_invalid_ids_and_returns_rowcount(
+    monkeypatch, tmp_path
+):
     repo = PushHistoryRepositoryImpl()
-    session = AsyncMock()
-    execute_result = MagicMock()
-    execute_result.rowcount = 2
-    session.execute = AsyncMock(return_value=execute_result)
-
-    session_manager = AsyncMock()
-    session_manager.__aenter__.return_value = session
-    session_manager.__aexit__.return_value = False
-
-    db = MagicMock()
-    db.get_session.return_value = session_manager
+    rows = [
+        _build_history_row(
+            user_id="u1",
+            status="success",
+            retry_count=0,
+            max_retries=3,
+        ),
+        _build_history_row(
+            user_id="u2",
+            status="success",
+            retry_count=0,
+            max_retries=3,
+        ),
+    ]
+    rows[0].id = 3
+    rows[1].id = 5
+    db = await _build_test_database(tmp_path / "push_history_delete_many.db", rows)
     monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
 
     removed = await repo.delete_many([3, 0, -1, 5, 3])
 
     assert removed == 2
-    session.execute.assert_awaited_once()
-    session.commit.assert_awaited_once()
+    assert await repo.get_all(limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_delete_many_skips_every_output_of_pending_batch(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    db = await _build_test_database(
+        tmp_path / "push_history_delete_pending_batch.db",
+        [
+            DeliveryBatchORM(
+                id=77,
+                owner_type="subscription",
+                owner_id=1,
+                status="pending",
+                target_sessions=["test:Group:1"],
+                output_manifest=[
+                    {
+                        "target_session": "test:Group:1",
+                        "output_kind": "card",
+                        "output_order": 0,
+                    },
+                    {
+                        "target_session": "test:Group:1",
+                        "output_kind": "standard",
+                        "output_order": 1,
+                    },
+                ],
+            ),
+            _build_history_row(
+                user_id="pending-owner",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                batch_id=77,
+            ),
+            _build_history_row(
+                user_id="pending-owner",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                batch_id=77,
+            ),
+            _build_history_row(
+                user_id="legacy-owner",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    result = await repo.delete_many([1, 2, 3])
+
+    assert int(result) == 1
+    assert [item.history_id for item in result.skipped] == [1, 2]
+    assert [item.batch_id for item in result.skipped] == [77, 77]
+    assert sorted(item.id for item in await repo.get_all(limit=10)) == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_old_outputs_in_pending_batch(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    old = datetime.now(timezone.utc) - timedelta(days=40)
+    pending = DeliveryBatchORM(
+        id=88,
+        owner_type="bundle",
+        owner_id=3,
+        status="pending",
+        target_sessions=["test:Group:1"],
+        output_manifest=[
+            {
+                "target_session": "test:Group:1",
+                "output_kind": "standard",
+                "output_order": 0,
+            }
+        ],
+    )
+    protected = _build_history_row(
+        user_id="pending-bundle",
+        status="success",
+        retry_count=0,
+        max_retries=3,
+        created_at=old,
+        updated_at=old,
+        completed_at=old,
+        batch_id=88,
+    )
+    legacy = _build_history_row(
+        user_id="legacy",
+        status="success",
+        retry_count=0,
+        max_retries=3,
+        created_at=old,
+        updated_at=old,
+        completed_at=old,
+    )
+    protected.id = 1
+    legacy.id = 2
+    db = await _build_test_database(
+        tmp_path / "push_history_cleanup_pending_batch.db",
+        [pending, protected, legacy],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    result = await repo.delete_old_records(days=30)
+
+    assert int(result) == 1
+    assert [item.history_id for item in result.skipped] == [1]
+    assert [item.id for item in await repo.get_all(limit=10)] == [1]
 
 
 class _TestDatabase:
@@ -208,10 +326,12 @@ def _build_history_row(
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
     completed_at: datetime | None = None,
+    batch_id: int | None = None,
 ) -> PushHistoryORM:
     now = datetime.now(timezone.utc)
     return PushHistoryORM(
         sub_id=sub_id,
+        batch_id=batch_id,
         user_id=user_id,
         feed_id=feed_id,
         content=status,
@@ -265,6 +385,13 @@ async def test_count_retryable_failures_counts_failed_and_retrying_only(
                 status="success",
                 retry_count=0,
                 max_retries=3,
+            ),
+            _build_history_row(
+                user_id="user-batch",
+                status="failed",
+                retry_count=0,
+                max_retries=3,
+                batch_id=99,
             ),
         ],
     )
@@ -448,6 +575,215 @@ async def test_get_all_sorts_by_last_activity_timestamp(monkeypatch, tmp_path):
         "old-created-recent-updated",
         "new-created",
     ]
+
+
+@pytest.mark.asyncio
+async def test_history_queries_expose_current_batch_status(monkeypatch, tmp_path):
+    repo = PushHistoryRepositoryImpl()
+    db = await _build_test_database(
+        tmp_path / "push_history_batch_status.db",
+        [
+            DeliveryBatchORM(
+                id=91,
+                owner_type="bundle",
+                owner_id=8,
+                status="pending",
+                target_sessions=["test:Group:1"],
+                output_manifest=[
+                    {
+                        "target_session": "test:Group:1",
+                        "output_kind": "standard",
+                        "output_order": 0,
+                    }
+                ],
+            ),
+            _build_history_row(
+                user_id="batch-owner",
+                status="success",
+                retry_count=0,
+                max_retries=3,
+                batch_id=91,
+            ),
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    histories = await repo.get_all(limit=10)
+
+    assert histories[0].batch_id == 91
+    assert histories[0].batch_status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_grouped_history_page_keeps_a_multi_output_batch_intact(
+    monkeypatch, tmp_path
+):
+    repo = PushHistoryRepositoryImpl()
+    outputs = []
+    for output_order in range(21):
+        output = _build_history_row(
+            user_id="batch-owner",
+            status="success" if output_order else "waiting",
+            retry_count=0,
+            max_retries=3,
+            batch_id=77,
+        )
+        output.bundle_id = 9
+        output.output_kind = "card" if output_order == 0 else "standard"
+        output.output_order = output_order
+        output.target_session = (
+            "test:Group:1" if output_order % 2 == 0 else "test:Group:2"
+        )
+        outputs.append(output)
+
+    db = await _build_test_database(
+        tmp_path / "push_history_grouped_page.db",
+        [
+            DeliveryBatchORM(
+                id=77,
+                owner_type="bundle",
+                owner_id=9,
+                status="pending",
+                target_sessions=["test:Group:1", "test:Group:2"],
+                output_manifest=[
+                    {
+                        "target_session": output.target_session,
+                        "output_kind": output.output_kind,
+                        "output_order": output.output_order,
+                    }
+                    for output in outputs
+                ],
+            ),
+            *outputs,
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    page = await repo.get_grouped_page(page=1, page_size=20)
+
+    assert page.total == 21
+    assert page.group_total == 1
+    assert len(page.items) == 21
+    assert [item.output_order for item in page.items] == list(range(21))
+    assert {item.output_kind for item in page.items} == {"card", "standard"}
+    assert {item.target_session for item in page.items} == {
+        "test:Group:1",
+        "test:Group:2",
+    }
+    assert all(item.batch_status == "pending" for item in page.items)
+
+    success_page = await repo.get_grouped_page(
+        page=1,
+        page_size=20,
+        status="success",
+    )
+
+    assert success_page.total == 20
+    assert success_page.group_total == 1
+    assert len(success_page.items) == 20
+    assert all(item.batch_status == "pending" for item in success_page.items)
+
+
+@pytest.mark.asyncio
+async def test_grouped_history_page_moves_to_the_next_logical_unit_without_duplicates(
+    monkeypatch, tmp_path
+):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 6, 1, 12, tzinfo=timezone.utc)
+    outputs = []
+    for output_order in range(21):
+        output = _build_history_row(
+            user_id="batch-owner",
+            status="success",
+            retry_count=0,
+            max_retries=3,
+            created_at=base,
+            updated_at=base,
+            completed_at=base,
+            batch_id=78,
+        )
+        output.output_kind = "card" if output_order == 0 else "standard"
+        output.output_order = output_order
+        outputs.append(output)
+
+    ordinary = _build_history_row(
+        user_id="legacy-owner",
+        status="success",
+        retry_count=0,
+        max_retries=3,
+        created_at=base - timedelta(days=1),
+        updated_at=base - timedelta(days=1),
+        completed_at=base - timedelta(days=1),
+    )
+    db = await _build_test_database(
+        tmp_path / "push_history_grouped_page_two_pages.db",
+        [
+            DeliveryBatchORM(
+                id=78,
+                owner_type="subscription",
+                owner_id=1,
+                status="confirmed",
+                target_sessions=["test:Group:1"],
+                output_manifest=[
+                    {
+                        "target_session": "test:Group:1",
+                        "output_kind": output.output_kind,
+                        "output_order": output.output_order,
+                    }
+                    for output in outputs
+                ],
+            ),
+            *outputs,
+            ordinary,
+        ],
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    first_page = await repo.get_grouped_page(page=1, page_size=1)
+    second_page = await repo.get_grouped_page(page=2, page_size=1)
+
+    assert first_page.total == second_page.total == 22
+    assert first_page.group_total == second_page.group_total == 2
+    assert len(first_page.items) == 21
+    assert {item.batch_id for item in first_page.items} == {78}
+    assert [item.output_order for item in first_page.items] == list(range(21))
+    assert len(second_page.items) == 1
+    assert second_page.items[0].batch_id is None
+    assert second_page.items[0].user_id == "legacy-owner"
+
+
+@pytest.mark.asyncio
+async def test_grouped_history_page_preserves_singleton_row_pagination(
+    monkeypatch, tmp_path
+):
+    repo = PushHistoryRepositoryImpl()
+    base = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    rows = [
+        _build_history_row(
+            user_id=f"legacy-owner-{index}",
+            status="success",
+            retry_count=0,
+            max_retries=3,
+            created_at=base - timedelta(minutes=index),
+            updated_at=base - timedelta(minutes=index),
+            completed_at=base - timedelta(minutes=index),
+        )
+        for index in range(21)
+    ]
+    db = await _build_test_database(
+        tmp_path / "push_history_grouped_page_singletons.db",
+        rows,
+    )
+    monkeypatch.setattr(push_history_repository_impl, "get_database", lambda: db)
+
+    first_page = await repo.get_grouped_page(page=1, page_size=20)
+    second_page = await repo.get_grouped_page(page=2, page_size=20)
+
+    assert first_page.total == second_page.total == 21
+    assert first_page.group_total == second_page.group_total == 21
+    assert len(first_page.items) == 20
+    assert len(second_page.items) == 1
+    assert all(item.batch_id is None for item in first_page.items + second_page.items)
 
 
 @pytest.mark.asyncio

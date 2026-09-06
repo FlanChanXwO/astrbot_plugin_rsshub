@@ -36,6 +36,7 @@ def _build_deps():
         "agent_xml_push_service": AgentXmlPushService(
             notification_dispatcher=AsyncMock()
         ),
+        "bundle_cmd": MagicMock(),
     }
 
 
@@ -75,6 +76,14 @@ def test_build_llm_tools_names():
         "rss_get_handlers",
         "rss_set_subscription_handlers",
         "rss_set_user_handlers",
+        "rss_bundle_create",
+        "rss_bundle_list",
+        "rss_bundle_get",
+        "rss_bundle_update_members",
+        "rss_bundle_set_option",
+        "rss_bundle_set_handlers",
+        "rss_bundle_set_state",
+        "rss_bundle_delete",
     }
 
 
@@ -130,6 +139,19 @@ async def test_llm_tool_rss_subscribe_schema_does_not_expose_legacy_params():
     assert "url" not in tool.parameters["properties"]
     assert "interval" not in tool.parameters["properties"]
     assert "targets" in tool.parameters["properties"]
+
+
+def test_llm_subscription_option_documents_safe_card_keys_only():
+    deps = _build_deps()
+    _, plugin_ctx = _make_ctx()
+    tools = build_llm_tools(deps=deps, plugin_context=plugin_ctx)
+    tool = next(t for t in tools if t.name == "rss_set_subscription_option")
+
+    key_description = tool.parameters["properties"]["key"]["description"]
+    assert "send_card" in key_description
+    assert "card_send_original_content" in key_description
+    assert "template_id" in key_description
+    assert "不支持" in key_description
 
 
 def test_llm_tool_descriptions_guide_agent_decisions():

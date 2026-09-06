@@ -25,6 +25,16 @@ description: 使用 astrbot_plugin_rsshub 的 LLM tools 完成 RSS/RSSHub 订阅
 - `rss_set_user_handlers`: 给用户默认设置长期 AI 过滤/改写 handlers。
 - `rss_list_push_history`: 查看当前会话推送历史，用于排查 `status`、`fail_reason`、`handler_trace`、`raw_xml`、`media_urls`。
 - `rss_push_xml_entry`: 一次性解析 XML/HTML 并推送到当前会话；支持 `dry_run`，不创建长期订阅，也不注入 handlers。
+- `rss_bundle_create`: 在当前用户下创建停用的 Bundle；至少指定两个不同 Feed 和一个目标会话。
+- `rss_bundle_list`: 列出当前用户拥有的 Bundle。
+- `rss_bundle_get`: 查看当前用户 Bundle 的成员和状态详情。
+- `rss_bundle_update_members`: 按顺序原子替换 Bundle 成员。
+- `rss_bundle_set_option`: 修改 Bundle 的单个配置项，应用层负责模板和投递保护校验。
+- `rss_bundle_set_handlers`: 替换 Bundle 文档级 handlers。
+- `rss_bundle_set_state`: 启用或停用 Bundle。
+- `rss_bundle_delete`: 删除当前用户 Bundle；存在未解决投递数据时会被保护。
+
+Bundle 工具只操作当前事件所属用户；不暴露 `test`、`retry` 或 `discard` 等高风险运行时操作。
 
 外部能力：
 
@@ -65,6 +75,13 @@ XML/HTML 直推：
 1. 用户提供 XML/HTML 片段并要求发到当前会话时，调用 `rss_push_xml_entry`。
 2. 内容复杂或用户要预览时，先传 `dry_run=true`。
 3. dry run 成功后再正式发送。
+
+Bundle 管理：
+
+1. 先 `rss_bundle_list`，再用 `rss_bundle_get` 确认 Bundle ID 和成员。
+2. 创建使用 `rss_bundle_create`；替换成员使用 `rss_bundle_update_members`。
+3. 修改 handlers 前先 `rss_list_handlers`；启用前确认目标、至少两个 Feed 和匹配模板均已配置。
+4. 不要用 LLM tool 执行测试、重试或丢弃，遇到可靠投递积压转到聊天命令或管理页面。
 
 ## handlers JSON 模板
 

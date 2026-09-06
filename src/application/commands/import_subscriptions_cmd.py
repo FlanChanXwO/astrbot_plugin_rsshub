@@ -15,6 +15,9 @@ from ...domain.repositories.user_repository import UserRepository
 from ...domain.value_objects.feed_url import FeedUrl
 from ...infrastructure.config import validate_interval_value
 from ..dto.result_dto import CommandResult
+from ..services.subscription_card_management_service import (
+    SubscriptionCardConfigurationError,
+)
 
 IMPORT_UPLOAD_WAIT_SECONDS = 5 * 60
 
@@ -53,10 +56,12 @@ class ImportSubscriptionsCommand:
         subscription_repo: SubscriptionRepository,
         feed_repo: FeedRepository,
         user_repo: UserRepository | None = None,
+        card_management_service=None,
     ):
         self._subscription_repo = subscription_repo
         self._feed_repo = feed_repo
         self._user_repo = user_repo
+        self._card_management_service = card_management_service
 
     async def execute(
         self,
@@ -194,6 +199,17 @@ class ImportSubscriptionsCommand:
                         success=False,
                         message=f"已存在订阅 (ID: {existing.id})",
                     )
+                card_options = {
+                    key: value
+                    for key, value in record.options.items()
+                    if key in {"send_card", "template_id", "card_send_original_content"}
+                }
+                if card_options and self._card_management_service is not None:
+                    await self._card_management_service.validate_configuration(
+                        subscription_id=existing.id,
+                        user_id=user_id,
+                        **card_options,
+                    )
                 # 更新现有订阅的设置
                 for key, value in record.options.items():
                     if key == "interval":
@@ -233,6 +249,12 @@ class ImportSubscriptionsCommand:
                 if hasattr(subscription, key) and key not in ("title", "tags"):
                     setattr(subscription, key, value)
 
+            if self._card_management_service is not None:
+                await self._card_management_service.validate_owner_configuration(
+                    subscription,
+                    feed,
+                )
+
             subscription = await self._subscription_repo.save(subscription)
 
             return ImportItemResult(
@@ -242,6 +264,12 @@ class ImportSubscriptionsCommand:
                 subscription_id=subscription.id,
             )
 
+        except SubscriptionCardConfigurationError as e:
+            return ImportItemResult(
+                link=link,
+                success=False,
+                message=f"卡片配置无效: {e}",
+            )
         except ValueError as e:
             return ImportItemResult(
                 link=link,

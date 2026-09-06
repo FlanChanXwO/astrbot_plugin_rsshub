@@ -4,6 +4,9 @@
 """
 
 from ..shared.constants import INHERIT_VALUE
+from .entities.bundle import Bundle
+from .entities.bundle_feed import BundleFeed
+from .entities.card_template import CardTemplateMetadata
 from .entities.feed import Feed
 from .entities.push_history import PushHistory
 from .entities.subscription import Subscription
@@ -26,27 +29,26 @@ from .repositories.subscription_repository import SubscriptionRepository
 from .repositories.user_repository import UserRepository
 
 __all__ = [
-    # Constants
     "INHERIT_VALUE",
-    # Entities
-    "Feed",
-    "PushHistory",
-    "Subscription",
-    "User",
-    # Repositories (Protocol)
-    "FeedRepository",
-    "PushHistoryRepository",
-    "SubscriptionRepository",
-    "UserRepository",
-    # Exceptions
-    "DomainException",
-    "WebError",
-    "RSSFetchError",
-    "FeedNotFoundError",
-    "SubscriptionNotFoundError",
-    "UserNotFoundError",
+    "Bundle",
+    "BundleFeed",
+    "CardTemplateMetadata",
     "ConfigurationError",
-    "ValidationError",
+    "DomainException",
+    "Feed",
+    "FeedNotFoundError",
+    "FeedRepository",
     "PermissionDeniedError",
+    "PushHistory",
+    "PushHistoryRepository",
+    "RSSFetchError",
     "RateLimitError",
+    "Subscription",
+    "SubscriptionNotFoundError",
+    "SubscriptionRepository",
+    "User",
+    "UserNotFoundError",
+    "UserRepository",
+    "ValidationError",
+    "WebError",
 ]

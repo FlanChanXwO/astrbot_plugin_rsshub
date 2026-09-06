@@ -29,3 +29,4 @@ class LLMToolDeps(TypedDict):
     push_history_repo: Any
     export_cmd: Any
     agent_xml_push_service: Any
+    bundle_cmd: Any

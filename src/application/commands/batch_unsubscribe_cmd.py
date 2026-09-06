@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ...domain.entities.delivery import DeliveryOwner
+from ...domain.repositories.delivery_repository import DeliveryDeletionBlockedError
 from ...domain.repositories.subscription_repository import SubscriptionRepository
 from ..dto.result_dto import CommandResult
 
@@ -36,8 +38,9 @@ class BatchUnsubscribeCommand:
     处理用户批量取消订阅 RSS 源的业务用例。
     """
 
-    def __init__(self, subscription_repo: SubscriptionRepository):
+    def __init__(self, subscription_repo: SubscriptionRepository, delivery_repo=None):
         self._subscription_repo = subscription_repo
+        self._delivery_repo = delivery_repo
 
     async def execute(
         self,
@@ -126,7 +129,21 @@ class BatchUnsubscribeCommand:
                 message="无权操作此订阅",
             )
 
-        await self._subscription_repo.delete(subscription)
+        if self._delivery_repo is not None:
+            try:
+                await self._delivery_repo.delete_owner(
+                    DeliveryOwner(owner_type="subscription", owner_id=sub_id)
+                )
+            except DeliveryDeletionBlockedError as exc:
+                return BatchUnsubscribeItem(
+                    sub_id=sub_id,
+                    success=False,
+                    message=(
+                        f"可靠投递数据尚未消费，不能取消订阅: {exc.blocker_counts}"
+                    ),
+                )
+        else:
+            await self._subscription_repo.delete(subscription)
 
         return BatchUnsubscribeItem(
             sub_id=sub_id,

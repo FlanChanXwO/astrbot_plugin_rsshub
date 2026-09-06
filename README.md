@@ -21,11 +21,12 @@
 
 ## 项目简介
 
-`astrbot_plugin_rsshub` 为 AstrBot 提供 RSS/Atom 订阅、定时推送、富媒体解析、失败重试、订阅导入导出、AI tool 管理和 Plugin Pages 管理界面。
+`astrbot_plugin_rsshub` 为 AstrBot 提供 RSS/Atom 订阅、定时推送、富媒体解析、卡片模板、多源 Bundle、失败重试、订阅导入导出、AI tool 管理和 Plugin Pages 管理界面。
 
 核心能力：
 
 - RSS/Atom 订阅与多会话推送。
+- 单 Feed 卡片与多 Feed Bundle 聚合：支持内置 Juya AI / 通用 Bundle 模板、handler 后快照和可靠批次投递。
 - 图片、音频、视频、文件、表格图片和平台差异化发送。
 - 订阅级、用户级、会话级配置继承。
 - AI 订阅、查询、配置和 XML 即时推送工具。
@@ -49,6 +50,7 @@ git clone https://github.com/FlanChanXwO/astrbot_plugin_rsshub.git
 
 - 使用文档：[`docs/usage/README.md`](./docs/usage/README.md)
 - 命令说明：[`docs/usage/commands.md`](./docs/usage/commands.md)
+- 卡片与 Bundle 行为：[`docs/project/application.md`](./docs/project/application.md)
 - 配置说明：[`docs/usage/configuration.md`](./docs/usage/configuration.md)
 - 管理界面：[`docs/usage/plugin-pages.md`](./docs/usage/plugin-pages.md)
 - AI tools：[`docs/usage/ai-tools.md`](./docs/usage/ai-tools.md)
@@ -58,7 +60,7 @@ git clone https://github.com/FlanChanXwO/astrbot_plugin_rsshub.git
 
 ## 开发与测试
 
-运行完整测试需要系统 FFmpeg（或已有插件缓存）和测试媒体文件。公网 m3u8 测试需额外设置 `RSSHUB_RUN_NETWORK_TESTS=1`。详见 [`docs/dev/README.md`](./docs/dev/README.md)。
+运行完整测试需要系统 FFmpeg（或已有插件缓存）和测试媒体文件。可靠投递跨层回归位于 `tests/integration/test_delivery_end_to_end.py`；公网 m3u8 测试需额外设置 `RSSHUB_RUN_NETWORK_TESTS=1`。详见 [`docs/dev/README.md`](./docs/dev/README.md)。
 
 `requirements.txt` 只包含插件运行时依赖。运行 pytest 或重新生成帮助图前，请在 AstrBot 根目录安装开发依赖：
 

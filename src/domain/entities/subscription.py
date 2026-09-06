@@ -62,6 +62,12 @@ class Subscription(BaseModel):
     display_entry_tags: int = Field(default=INHERIT_VALUE, description="显示标签")
     style: int = Field(default=INHERIT_VALUE, description="推送排版策略")
     display_media: int = Field(default=INHERIT_VALUE, description="显示媒体")
+    send_card: bool = Field(default=False, description="是否发送模板卡片")
+    template_id: str | None = Field(default=None, description="卡片模板 ID")
+    card_send_original_content: bool = Field(
+        default=False,
+        description="卡片发送成功后是否继续发送原始内容",
+    )
     handlers_mode: str = Field(
         default=HANDLERS_MODE_INHERIT,
         description="handlers 继承模式: inherit/override/disabled",

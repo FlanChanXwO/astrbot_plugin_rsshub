@@ -19,8 +19,17 @@ from itertools import chain
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+from pydantic_core import to_jsonable_python
+
 from ...domain.entities.content_types import AudioContent, FileContent, VideoContent
+from ...domain.entities.delivery import (
+    DeliveryInboxItemDraft,
+    DeliveryOwner,
+    SubscriptionInboxDiscovery,
+)
 from ...domain.entities.feed import Feed, normalize_entry_hashes
+from ...domain.entities.subscription import Subscription
+from ...domain.repositories.delivery_repository import DeliveryRepository
 from ...domain.repositories.feed_repository import FeedRepository
 from ...domain.repositories.subscription_repository import SubscriptionRepository
 from ...infrastructure.config import FeedFetchSettings, RSSSettings
@@ -71,6 +80,19 @@ class FeedReadResult:
 
 
 @dataclass(frozen=True)
+class FeedEntrySnapshot:
+    """供可靠 inbox 使用的 JSON-safe 条目快照。"""
+
+    item_key: str
+    hash_group: list[str]
+    entry_payload: dict[str, Any]
+    raw_xml: str | None
+    media_items: list[dict[str, Any]]
+    published_at: datetime | None
+    entry_updated_at: datetime | None
+
+
+@dataclass(frozen=True)
 class FeedPollingResult:
     """Result of one feed polling run."""
 
@@ -106,8 +128,10 @@ class FeedPollingService:
         fetcher_factory: FeedFetcherFactory | None = None,
         parser: FeedParser | None = None,
         notification_dispatcher: NotificationDispatcher | None = None,
+        delivery_repository: DeliveryRepository | None = None,
         media_fingerprint_service: MediaFingerprintService | None = None,
         history_entry_limit: int = 0,
+        subscription_batch_delivery_service: Any | None = None,
     ) -> None:
         self._feed_repo = feed_repo
         self._subscription_repo = subscription_repo
@@ -116,8 +140,10 @@ class FeedPollingService:
         self._fetcher_factory = fetcher_factory
         self._parser = parser
         self._notification_dispatcher = notification_dispatcher
+        self._delivery_repository = delivery_repository
         self._media_fingerprint_service = media_fingerprint_service
         self._history_entry_limit = max(0, history_entry_limit)
+        self._subscription_batch_delivery_service = subscription_batch_delivery_service
 
     async def fetch_feed_entries(
         self,
@@ -269,6 +295,9 @@ class FeedPollingService:
 
         dispatched = 0
         acknowledged_entries: list[Any] = []
+        card_subscriptions: list[Subscription] = []
+        active_standard_subscriptions: list[Subscription] = []
+        standard_subscription_ids: list[int] | None = subscription_ids
         bootstrap_skipped = bool(
             notify_new_entries
             and new_entries
@@ -279,15 +308,58 @@ class FeedPollingService:
             notify_new_entries
             and new_entries
             and not bootstrap_skipped
+            and self._delivery_repository is not None
+        ):
+            active_subscriptions = await self._subscription_repo.get_active_by_feed_id(
+                feed.id
+            )
+            # Feed 水位由本次抓取共享推进，因此卡片新增必须扇出到所有活跃
+            # card owner；subscription_ids 只约束本轮到期的普通推送目标。
+            card_subscriptions = [
+                subscription
+                for subscription in active_subscriptions
+                if subscription.send_card
+            ]
+            active_standard_subscriptions = [
+                subscription
+                for subscription in active_subscriptions
+                if not subscription.send_card
+            ]
+            standard_subscriptions = list(active_standard_subscriptions)
+            if subscription_ids is not None:
+                selected_ids = set(subscription_ids)
+                standard_subscriptions = [
+                    subscription
+                    for subscription in standard_subscriptions
+                    if subscription.id in selected_ids
+                ]
+            standard_subscription_ids = [
+                subscription.id
+                for subscription in standard_subscriptions
+                if subscription.id is not None
+            ]
+        if (
+            notify_new_entries
+            and new_entries
+            and not bootstrap_skipped
             and self._notification_dispatcher
+            and (standard_subscription_ids is None or standard_subscription_ids)
         ):
             dispatch_result = await self._dispatch_entries(
                 feed,
                 new_entries,
-                subscription_ids=subscription_ids,
+                subscription_ids=standard_subscription_ids,
             )
             dispatched = dispatch_result.dispatched
             acknowledged_entries = dispatch_result.acknowledged_entries
+        # 只剩卡片消费者时才能直接确认全部新条目；未选中的普通订阅仍依赖
+        # 共享 Feed 水位，不能因本轮卡片到期而跳过它们。
+        if (
+            card_subscriptions
+            and not standard_subscription_ids
+            and not active_standard_subscriptions
+        ):
+            acknowledged_entries = list(new_entries)
 
         if notify_new_entries and new_entries and not bootstrap_skipped:
             acknowledged_ids = {id(entry) for entry in acknowledged_entries}
@@ -319,7 +391,24 @@ class FeedPollingService:
             len(entries),
         )
         feed.updated_at = datetime.now(timezone.utc)
-        saved_feed = await self._feed_repo.save(feed)
+        if card_subscriptions:
+            discoveries = self._build_subscription_discoveries(
+                feed,
+                card_subscriptions,
+                new_entries,
+            )
+            saved_feed = await self._delivery_repository.store_subscription_discovery(
+                feed,
+                discoveries,
+            )
+            if self._subscription_batch_delivery_service is not None:
+                for subscription in card_subscriptions:
+                    if subscription.id is not None:
+                        await self._subscription_batch_delivery_service.deliver(
+                            subscription.id
+                        )
+        else:
+            saved_feed = await self._feed_repo.save(feed)
 
         message = f"刷新完成 (ID: {feed_id})，发现 {len(entries)} 个条目"
         if bootstrap_skipped:
@@ -353,6 +442,76 @@ class FeedPollingService:
             bootstrap_skipped=bootstrap_skipped,
             feed=saved_feed,
         )
+
+    def calculate_entry_update(
+        self,
+        old_groups: list[list[str]],
+        entries: list[Any],
+        *,
+        feed_link: str | None = None,
+    ) -> tuple[list[list[str]], list[Any]]:
+        """公开统一的条目去重计算，供 Bundle 私有水位复用。"""
+        return self._calculate_update(old_groups, entries, feed_link=feed_link)
+
+    def merge_entry_hash_history(
+        self,
+        old_groups: list[list[str]],
+        new_groups: list[list[str]],
+        entry_count: int,
+    ) -> list[list[str]] | None:
+        """公开统一的哈希历史合并，沿用现有 RSS 配置。"""
+        return self._merge_hash_history(old_groups, new_groups, entry_count)
+
+    def build_entry_snapshots(
+        self,
+        feed: Feed,
+        entries: list[Any],
+    ) -> list[FeedEntrySnapshot]:
+        """把解析条目转换为可持久化的稳定快照。"""
+        snapshots: list[FeedEntrySnapshot] = []
+        for entry in entries:
+            hash_group = self._hash_entry(entry, feed.link)
+            item_key = hash_group[0]
+            payload = to_jsonable_python(entry)
+            if not isinstance(payload, dict):
+                payload = {
+                    key: to_jsonable_python(self._entry_value(entry, key, None))
+                    for key in (
+                        "id",
+                        "guid",
+                        "entry_id",
+                        "title",
+                        "link",
+                        "author",
+                        "content",
+                        "summary",
+                        "tags",
+                        "enclosures",
+                        "published",
+                        "updated",
+                    )
+                }
+            media_items = to_jsonable_python(
+                self._entry_value(entry, "enclosures", []) or []
+            )
+            if not isinstance(media_items, list):
+                media_items = []
+            snapshots.append(
+                FeedEntrySnapshot(
+                    item_key=item_key,
+                    hash_group=hash_group,
+                    entry_payload=payload,
+                    raw_xml=(
+                        str(self._entry_value(entry, "raw_xml") or "").strip() or None
+                    ),
+                    media_items=[
+                        item for item in media_items if isinstance(item, dict)
+                    ],
+                    published_at=self._entry_value(entry, "published", None),
+                    entry_updated_at=self._entry_value(entry, "updated", None),
+                )
+            )
+        return snapshots
 
     async def poll_feed_group(
         self,
@@ -438,6 +597,53 @@ class FeedPollingService:
             known_hashes.update(entry_hashes)
 
         return new_groups, new_entries
+
+    def _build_subscription_discoveries(
+        self,
+        feed: Feed,
+        subscriptions: list[Subscription],
+        entries: list[Any],
+    ) -> list[SubscriptionInboxDiscovery]:
+        if feed.id is None:
+            raise ValueError("持久化卡片 Subscription inbox 前 Feed 必须已有 ID")
+        snapshots = self.build_entry_snapshots(feed, entries)
+
+        discoveries: list[SubscriptionInboxDiscovery] = []
+        discovered_at = datetime.now(timezone.utc)
+        for subscription in subscriptions:
+            if subscription.id is None:
+                raise ValueError("持久化卡片 Subscription inbox 前订阅必须已有 ID")
+            owner = DeliveryOwner(
+                owner_type="subscription",
+                owner_id=subscription.id,
+            )
+            discovery_material = "\n".join(
+                sorted(snapshot.item_key for snapshot in snapshots)
+            )
+            discovery_digest = hashlib.sha256(
+                f"{owner.owner_id}\n{feed.id}\n{discovery_material}".encode()
+            ).hexdigest()
+            discovery_key = (
+                f"subscription:{owner.owner_id}:feed:{feed.id}:"
+                f"discovery:{discovery_digest}"
+            )
+            items = [
+                DeliveryInboxItemDraft(
+                    feed_id=feed.id,
+                    item_key=snapshot.item_key,
+                    hash_group=snapshot.hash_group,
+                    discovery_key=discovery_key,
+                    entry_payload=snapshot.entry_payload,
+                    raw_xml=snapshot.raw_xml,
+                    media_items=snapshot.media_items,
+                    published_at=snapshot.published_at,
+                    entry_updated_at=snapshot.entry_updated_at,
+                    discovered_at=discovered_at,
+                )
+                for snapshot in snapshots
+            ]
+            discoveries.append(SubscriptionInboxDiscovery(owner=owner, items=items))
+        return discoveries
 
     def _hash_entry(self, entry: Any, feed_link: str | None = None) -> list[str]:
         """Build stable and compatibility fingerprints for one entry."""

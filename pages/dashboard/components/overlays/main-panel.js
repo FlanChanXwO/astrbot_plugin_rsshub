@@ -75,11 +75,39 @@ export const mainPanelTemplate = String.raw`
         <div class="setting-row"><span class="setting-label">排版策略</span><select class="select-input" v-model.number="editForm.style"><option :value="-100">继承</option><option :value="0">自动</option><option :value="1">RSSRT</option><option :value="2">原始顺序</option></select></div>
         <div class="setting-row"><span class="setting-label">显示媒体</span><select class="select-input" v-model.number="editForm.display_media"><option :value="-100">继承</option><option :value="-1">禁用</option><option :value="0">启用</option></select></div>
       </div>
+      <div class="panel-section card-management-section">
+        <h4>卡片输出</h4>
+        <div class="risk-note" role="note"><strong>高信任模板</strong><span>模板作者提供的脚本和网络访问可能带来风险；候选按当前 Feed 严格匹配，不能自由填写模板 ID。</span></div>
+        <div class="setting-row">
+          <span class="setting-label">发送卡片</span>
+          <label class="toggle-switch"><input type="checkbox" v-model="editForm.send_card" /><span class="toggle-slider"></span><span class="toggle-label">{{ editForm.send_card ? '开启' : '关闭' }}</span></label>
+        </div>
+        <div class="form-group">
+          <label for="subscription-template-select">匹配模板</label>
+          <select v-if="subscriptionTemplateOptionsReady()" id="subscription-template-select" class="select-input resource-select" v-model="editForm.template_id" :disabled="!editForm.send_card">
+            <option value="">请选择严格匹配模板</option>
+            <option v-for="template in editForm.template_options" :key="template.id" :value="template.id">{{ template.name }} · v{{ template.version }} · {{ template.author }}</option>
+          </select>
+          <select v-else id="subscription-template-select" class="select-input resource-select" disabled>
+            <option value="">加载候选中...</option>
+          </select>
+          <p v-if="!editForm.template_options_loading && editForm.template_options.length === 0" class="field-help field-warning">当前 Feed 没有可用模板；开启卡片前请先安装匹配模板。</p>
+        </div>
+        <div class="setting-row" v-if="editForm.send_card">
+          <span class="setting-label">卡片后继续原文</span>
+          <label class="toggle-switch"><input type="checkbox" v-model="editForm.card_send_original_content" /><span class="toggle-slider"></span><span class="toggle-label">{{ editForm.card_send_original_content ? '开启' : '关闭' }}</span></label>
+        </div>
+        <p v-if="editForm.card_error" class="field-error" role="alert">{{ editForm.card_error }}</p>
+        <div class="inline-actions">
+          <button type="button" class="btn btn-secondary btn-small" :class="{ 'is-loading': isPending('sub:preview:' + editForm.id) }" :disabled="!subscriptionPreviewConfigurationValid() || isPending('sub:preview:' + editForm.id)" @click="previewSubscriptionCard()">预览卡片</button>
+        </div>
+        <div v-if="editForm.card_preview" class="preview-result"><img :src="editForm.card_preview?.src || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='" alt="订阅卡片预览" /><p>预览包含 {{ editForm.card_preview?.entryCount ?? 0 }} 条处理后条目；不会写入业务状态。</p></div>
+      </div>
       <div class="form-actions">
         <button type="button" class="btn btn-danger" :class="{ 'is-loading': isPending('sub:delete:' + editForm.id) }" :disabled="isPending('sub:delete:' + editForm.id)" @click="handleDeleteSub()">删除订阅</button>
         <div class="center-actions">
           <button type="button" class="btn btn-text" @click="closePanel()">取消</button>
-          <button type="submit" class="btn btn-primary" :class="{ 'is-loading': isPending('sub:save:' + editForm.id) }" :disabled="isPending('sub:save:' + editForm.id)">{{ isPending('sub:save:' + editForm.id) ? '保存中...' : '保存修改' }}</button>
+          <button type="submit" class="btn btn-primary" :class="{ 'is-loading': isPending('sub:save:' + editForm.id) }" :disabled="!subscriptionCardConfigurationValid() || isPending('sub:save:' + editForm.id)">{{ isPending('sub:save:' + editForm.id) ? '保存中...' : '保存修改' }}</button>
         </div>
       </div>
     </form>
@@ -95,6 +123,8 @@ export const mainPanelTemplate = String.raw`
         <div class="detail-row"><span class="detail-label">目标</span><span class="detail-value">{{ detailSub.target_session || '默认' }}</span></div>
         <div class="detail-row"><span class="detail-label">间隔</span><span class="detail-value">{{ detailSub.interval || '默认' }} 分钟</span></div>
         <div class="detail-row"><span class="detail-label">标签</span><span class="detail-value">{{ detailSub.tags || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">卡片</span><span class="detail-value">{{ detailSub.send_card ? (detailSub.template_id || '未选择模板') : '未启用' }}</span></div>
+        <div class="detail-row" v-if="detailSub.send_card"><span class="detail-label">原文</span><span class="detail-value">{{ detailSub.card_send_original_content ? '卡片后继续发送' : '仅发送卡片' }}</span></div>
         <div class="detail-row"><span class="detail-label">创建时间</span><span class="detail-value">{{ formatDate(detailSub.created_at) }}</span></div>
         <div class="detail-row"><span class="detail-label">更新时间</span><span class="detail-value">{{ formatDate(detailSub.updated_at) }}</span></div>
       </div>
@@ -121,25 +151,36 @@ export const mainPanelTemplate = String.raw`
     <div v-else-if="panelMode === 'history-detail' && historyDetail" class="form">
       <div class="panel-section">
         <h4>基础信息</h4>
-        <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="historyDetail.status">{{ historyDetail.status }}</span></span></div>
-        <div class="detail-row"><span class="detail-label">来源</span><span class="detail-value">{{ historyDetail.source_type || 'feed' }} / {{ historyDetail.source_key || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">用户</span><span class="detail-value">{{ historyDetail.user_id }}</span></div>
-        <div class="detail-row"><span class="detail-label">Feed</span><span class="detail-value">{{ historyDetail.feed_title || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">条目</span><span class="detail-value">{{ historyDetail.entry_title || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">链接</span><span class="detail-value cell-wrap">{{ historyDetail.entry_link || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">GUID</span><span class="detail-value cell-wrap">{{ historyDetail.entry_guid || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">目标</span><span class="detail-value">{{ historyDetail.target_session || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">平台</span><span class="detail-value">{{ historyDetail.platform_name || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">重试</span><span class="detail-value">{{ historyDetail.retry_count }}/{{ historyDetail.max_retries }}</span></div>
-        <div class="detail-row"><span class="detail-label">创建时间</span><span class="detail-value">{{ formatDate(historyDetail.created_at) }}</span></div>
-        <div class="detail-row"><span class="detail-label">完成时间</span><span class="detail-value">{{ formatDate(historyDetail.completed_at) }}</span></div>
+        <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="historyDetail?.status">{{ historyDetail?.status }}</span></span></div>
+        <div class="detail-row"><span class="detail-label">来源</span><span class="detail-value">{{ historyDetail?.source_type || 'feed' }} / {{ historyDetail?.source_key || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">用户</span><span class="detail-value">{{ historyDetail?.user_id }}</span></div>
+        <div class="detail-row"><span class="detail-label">Feed</span><span class="detail-value">{{ historyDetail?.feed_title || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">条目</span><span class="detail-value">{{ historyDetail?.entry_title || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">链接</span><span class="detail-value cell-wrap">{{ historyDetail?.entry_link || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">GUID</span><span class="detail-value cell-wrap">{{ historyDetail?.entry_guid || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">目标</span><span class="detail-value">{{ historyDetail?.target_session || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">平台</span><span class="detail-value">{{ historyDetail?.platform_name || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">重试</span><span class="detail-value">{{ historyDetail?.retry_count }}/{{ historyDetail?.max_retries }}</span></div>
+        <div class="detail-row"><span class="detail-label">创建时间</span><span class="detail-value">{{ formatDate(historyDetail?.created_at) }}</span></div>
+        <div class="detail-row"><span class="detail-label">完成时间</span><span class="detail-value">{{ formatDate(historyDetail?.completed_at) }}</span></div>
+      </div>
+      <div class="panel-section" v-if="historyDetail?.batch_id">
+        <h4>可靠投递批次</h4>
+        <div class="detail-row"><span class="detail-label">批次</span><span class="detail-value">#{{ historyDetail?.batch_id }}</span></div>
+        <div class="detail-row"><span class="detail-label">输出</span><span class="detail-value">{{ historyDetail?.output_kind || 'standard' }} · 顺序 {{ historyDetail?.output_order ?? 0 }}</span></div>
+        <div class="detail-row" v-if="historyDetail?.bundle_id"><span class="detail-label">Bundle</span><span class="detail-value">#{{ historyDetail?.bundle_id }}</span></div>
+        <div class="detail-row"><span class="detail-label">模板快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.template_snapshot) }}</span></div>
+        <div class="detail-row"><span class="detail-label">成员快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.source_context?.feeds) }}</span></div>
+        <div class="detail-row"><span class="detail-label">文档快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.document_snapshot) }}</span></div>
+        <div class="detail-row"><span class="detail-label">来源快照</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.source_context) }}</span></div>
       </div>
       <div class="panel-section">
         <h4>正文与来源</h4>
-        <div class="detail-row"><span class="detail-label">正文</span><span class="detail-value cell-wrap">{{ historyDetail.content || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">原始 XML</span><span class="detail-value cell-wrap">{{ historyDetail.raw_xml || '-' }}</span></div>
-        <div class="detail-row"><span class="detail-label">媒体</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail.media_urls) }}</span></div>
-        <div class="detail-row"><span class="detail-label">错误</span><span class="detail-value error-block">{{ historyDetail.fail_reason || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">正文</span><span class="detail-value cell-wrap">{{ historyDetail?.content || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">输入 XML</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.input_xmls || historyDetail?.input_xml || '-') }}</span></div>
+        <div class="detail-row"><span class="detail-label">输出 XML</span><span class="detail-value cell-wrap">{{ historyDetail?.output_xml || historyDetail?.raw_xml || '-' }}</span></div>
+        <div class="detail-row"><span class="detail-label">媒体</span><span class="detail-value cell-wrap">{{ prettyJson(historyDetail?.media_urls) }}</span></div>
+        <div class="detail-row"><span class="detail-label">错误</span><span class="detail-value error-block">{{ historyDetail?.fail_reason || '-' }}</span></div>
       </div>
       <div class="panel-section">
         <h4>调用链</h4>
@@ -153,7 +194,7 @@ export const mainPanelTemplate = String.raw`
           </div>
           <div class="trace-raw-block">
             <div class="trace-raw-title">原始 Trace JSON</div>
-            <pre class="trace-raw-json">{{ prettyJson(historyDetail.handler_trace) }}</pre>
+            <pre class="trace-raw-json">{{ prettyJson(historyDetail?.handler_trace) }}</pre>
           </div>
         </div>
       </div>

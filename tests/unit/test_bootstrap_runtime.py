@@ -33,6 +33,198 @@ class _FakeQueue:
         self.stop_all = AsyncMock()
 
 
+@pytest.mark.asyncio
+async def test_build_dependencies_wires_delivery_repository_into_feed_polling(
+    monkeypatch,
+):
+    repositories = {
+        "feed": object(),
+        "subscription": object(),
+        "user": object(),
+        "history": object(),
+        "delivery": object(),
+    }
+    captured_polling_kwargs: dict[str, object] = {}
+    card_delivery_service = object()
+    bundle_delivery_service = object()
+    bundle_command = object()
+    builtin_dirs = (object(), object())
+    template_repository = MagicMock()
+
+    def build_polling_service(**kwargs):
+        captured_polling_kwargs.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(bootstrap, "get_feed_repository", lambda: repositories["feed"])
+    monkeypatch.setattr(
+        bootstrap,
+        "get_subscription_repository",
+        lambda: repositories["subscription"],
+    )
+    monkeypatch.setattr(bootstrap, "get_user_repository", lambda: repositories["user"])
+    monkeypatch.setattr(
+        bootstrap,
+        "get_push_history_repository",
+        lambda: repositories["history"],
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "get_delivery_repository",
+        lambda: repositories["delivery"],
+        raising=False,
+    )
+    monkeypatch.setattr(bootstrap, "FeedPollingService", build_polling_service)
+    template_repository_factory = MagicMock(return_value=template_repository)
+    monkeypatch.setattr(
+        bootstrap,
+        "CardTemplatePackageRepository",
+        template_repository_factory,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "get_builtin_card_template_dirs",
+        lambda: builtin_dirs,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "SubscriptionBatchDeliveryService",
+        MagicMock(return_value=card_delivery_service),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "BundleBatchDeliveryService",
+        MagicMock(return_value=bundle_delivery_service),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "BundleCommand",
+        MagicMock(return_value=bundle_command),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "build_route_knowledge_source",
+        AsyncMock(return_value=object()),
+    )
+    monkeypatch.setattr(bootstrap, "AstrBotRouteKnowledgeRepository", MagicMock())
+    monkeypatch.setattr(bootstrap, "RouteKnowledgeSyncService", MagicMock())
+
+    deps, _ = await bootstrap._build_dependencies(
+        app_settings=ApplicationSettings(media=MediaSettings()),
+        sender_provider=MagicMock(),
+        push_job_queue=MagicMock(),
+    )
+
+    assert captured_polling_kwargs["delivery_repository"] is repositories["delivery"]
+    assert (
+        captured_polling_kwargs["subscription_batch_delivery_service"]
+        is card_delivery_service
+    )
+    assert deps["bundle_batch_delivery_service"] is bundle_delivery_service
+    assert deps["bundle_cmd"] is bundle_command
+    template_repository_factory.assert_called_once_with(
+        builtin_package_dirs=builtin_dirs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_scheduler_wires_bundle_collection_and_delivery(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeScheduler:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self._running = False
+            self._bg_task = None
+
+        async def start(self):
+            self._running = True
+
+    monkeypatch.setattr(bootstrap, "RSSScheduler", FakeScheduler)
+
+    def create_task(coro):
+        coro.close()
+        return MagicMock()
+
+    monkeypatch.setattr(bootstrap.asyncio, "create_task", create_task)
+    app_settings = SimpleNamespace(
+        scheduler=SimpleNamespace(default_interval=10, history_retention_days=30)
+    )
+    deps = {
+        "polling_service": object(),
+        "subscription_batch_delivery_service": object(),
+        "bundle_repository": object(),
+        "bundle_collection_service": object(),
+        "bundle_batch_delivery_service": object(),
+    }
+
+    scheduler = await bootstrap._start_scheduler(
+        app_settings=app_settings,
+        deps=deps,
+        notification_dispatcher=object(),
+    )
+
+    assert isinstance(scheduler, FakeScheduler)
+    assert captured["bundle_repository"] is deps["bundle_repository"]
+    assert captured["bundle_collection_service"] is deps["bundle_collection_service"]
+    assert (
+        captured["bundle_batch_delivery_service"]
+        is deps["bundle_batch_delivery_service"]
+    )
+
+
+def test_register_web_api_wires_bundle_batch_delivery_service(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeWebApi:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def register_all(self, _context):
+            return None
+
+    monkeypatch.setattr(bootstrap, "WebApiHandler", FakeWebApi)
+    monkeypatch.setattr(bootstrap, "get_user_repository", lambda: object())
+    monkeypatch.setattr(bootstrap, "get_push_history_repository", lambda: object())
+    bundle_batch_delivery_service = object()
+    deps = {
+        key: object()
+        for key in (
+            "subscribe_cmd",
+            "unsubscribe_cmd",
+            "update_sub_cmd",
+            "batch_activate_cmd",
+            "batch_deactivate_cmd",
+            "batch_unsub_cmd",
+            "export_cmd",
+            "import_cmd",
+            "get_user_settings_cmd",
+            "set_user_settings_cmd",
+            "test_sub_cmd",
+            "get_items_query",
+            "polling_service",
+            "feed_repo",
+            "subscription_repo",
+            "notification_dispatcher",
+            "route_knowledge_service",
+            "card_management_service",
+            "template_repository",
+            "template_download_service",
+            "template_management_service",
+            "subscription_batch_delivery_service",
+            "delivery_repository",
+            "bundle_cmd",
+            "bundle_repository",
+            "bundle_card_management_service",
+        )
+    }
+    deps["bundle_batch_delivery_service"] = bundle_batch_delivery_service
+
+    bootstrap._register_web_api(MagicMock(), MagicMock(), deps)
+
+    assert captured["bundle_batch_delivery_service"] is bundle_batch_delivery_service
+
+
 def test_bot_self_id_provider_returns_only_a_unique_connected_account(monkeypatch):
     """多 bot 连接时不应把任意账号误用为合并转发节点 UIN。"""
     providers: dict[str, object] = {}

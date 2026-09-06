@@ -23,6 +23,9 @@ export const panelsModule = {
     this.historyDetail = null;
     this.editForm = createEditFormFromSub(sub);
     this.panelVisible = true;
+    if (typeof this.loadSubscriptionTemplateOptions === 'function') {
+      void this.loadSubscriptionTemplateOptions();
+    }
   },
 
   switchToEdit(sub) {

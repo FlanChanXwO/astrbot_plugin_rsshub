@@ -5,6 +5,7 @@ import {
   deletePushHistory,
   deletePushHistoryBatch,
   retryPushHistory,
+  discardDeliveryBatch,
   cleanupPushHistory,
   clearPushHistory
 } from '../../js/api.js';
@@ -13,6 +14,57 @@ import {
 } from '../helpers.js';
 
 export const pushHistoryModule = {
+  pushHistoryGroups() {
+    const groups = new Map();
+    for (const item of this.pushHistory || []) {
+      const batchId = Number(item?.batch_id || 0);
+      const key = batchId > 0 ? `batch:${batchId}` : `history:${item?.id}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          batchId: batchId > 0 ? batchId : null,
+          bundleId: null,
+          memberCount: 0,
+          items: [],
+          hasUnresolvedOutput: false,
+          template: null,
+          sourceContext: null,
+        });
+      }
+      const group = groups.get(key);
+      group.items.push(item);
+      if (batchId > 0) {
+        const status = String(item?.status || '').toLowerCase();
+        const batchStatus = String(item?.batch_status || '').toLowerCase();
+        if (
+          !['success', 'skipped', 'discarded'].includes(status) ||
+          (batchStatus && !['confirmed', 'discarded'].includes(batchStatus))
+        ) {
+          group.hasUnresolvedOutput = true;
+        }
+        group.template ||= item?.source_context?.template_snapshot || item?.template_snapshot || null;
+        group.sourceContext ||= item?.source_context || null;
+        const bundleId = Number(
+          item?.bundle_id || item?.source_context?.bundle?.id || 0,
+        );
+        if (bundleId > 0) group.bundleId ||= bundleId;
+        const members = item?.source_context?.feeds;
+        if (Array.isArray(members)) {
+          group.memberCount = Math.max(group.memberCount, members.length);
+        }
+      }
+    }
+    for (const group of groups.values()) {
+      if (group.batchId) {
+        group.items.sort((left, right) => {
+          const orderDelta = Number(left?.output_order ?? 0) - Number(right?.output_order ?? 0);
+          return orderDelta || Number(left?.id ?? 0) - Number(right?.id ?? 0);
+        });
+      }
+    }
+    return [...groups.values()];
+  },
+
   async loadPushHistory() {
     this.pushHistoryLoading = true;
     try {
@@ -32,6 +84,7 @@ export const pushHistoryModule = {
         this.pushHistory.some((item) => item.id === id)
       );
       this.pushHistoryTotal = result.total || 0;
+      this.pushHistoryGroupTotal = result.group_total ?? this.pushHistoryTotal;
       if (
         this.pushHistory.length === 0 &&
         this.pushHistoryTotal > 0 &&
@@ -92,6 +145,25 @@ export const pushHistoryModule = {
       this.showToast(`重试失败: ${err.message}`, 'error');
       this.pushHistoryFilter.page = 1;
       return this.loadPushHistory();
+    });
+  },
+
+  async discardPushHistoryBatch(batchId) {
+    const id = Number(batchId || 0);
+    if (!id) return;
+    const confirmed = await this.showConfirm(
+      '丢弃会结束当前批次的未完成输出并消费已认领输入；未认领 backlog 不受影响。',
+      '丢弃投递批次',
+      '确认丢弃',
+      'btn-danger',
+    );
+    if (!confirmed) return;
+    await this.runPending(`delivery-batch:discard:${id}`, async () => {
+      const result = await discardDeliveryBatch(id, 'Dashboard 用户显式丢弃');
+      this.showToast(result.message || `批次 ${id} 已丢弃`);
+      await this.loadPushHistory();
+    }).catch((err) => {
+      this.showToast(`丢弃批次失败: ${err.message}`, 'error');
     });
   },
 
@@ -206,11 +278,13 @@ export const pushHistoryModule = {
 
   pushHistoryTotalPages() {
     const pageSize = this.pushHistoryFilter.pageSize || 20;
-    return Math.max(1, Math.ceil(this.pushHistoryTotal / pageSize));
+    const groupTotal = this.pushHistoryGroupTotal ?? this.pushHistoryTotal;
+    return Math.max(1, Math.ceil(groupTotal / pageSize));
   },
 
   showPushHistoryPagination() {
-    return this.pushHistoryTotal > (this.pushHistoryFilter.pageSize || 20);
+    const groupTotal = this.pushHistoryGroupTotal ?? this.pushHistoryTotal;
+    return groupTotal > (this.pushHistoryFilter.pageSize || 20);
   },
 
   async openPushHistorySubscriptions(item) {

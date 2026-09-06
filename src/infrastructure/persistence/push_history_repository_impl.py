@@ -8,20 +8,36 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import String, cast, delete, func, or_
+from sqlalchemy import (
+    Integer,
+    String,
+    cast,
+    delete,
+    func,
+    literal,
+    or_,
+    text,
+    union_all,
+)
 from sqlmodel import asc, desc, select
 
 from ...domain.entities.push_history import (
     PushHistory,
+    PushHistoryDeletionResult,
+    PushHistoryDeletionSkip,
+    PushHistoryPage,
     normalize_fail_reason,
     normalize_fail_reason_for_status,
 )
 from ...domain.repositories.push_history_repository import PushHistoryRepository
 from ..utils import get_logger
 from .database import get_database
-from .models import PushHistoryORM
+from .models import DeliveryBatchORM, PushHistoryORM
 
 logger = get_logger()
+
+_RESOLVED_BATCH_STATUSES = {"confirmed", "discarded"}
+_RESOLVED_OUTPUT_STATUSES = {"success", "skipped", "discarded"}
 
 
 def _apply_history_keyword_filters(stmt, keywords: list[str] | None):
@@ -65,6 +81,23 @@ def _apply_history_keyword_filters(stmt, keywords: list[str] | None):
     if not clauses:
         return stmt
     return stmt.where(or_(*clauses))
+
+
+def _apply_history_scope_filters(
+    stmt,
+    *,
+    user_id: str | None = None,
+    target_session: str | None = None,
+    status: str | None = None,
+    keywords: list[str] | None = None,
+):
+    if user_id:
+        stmt = stmt.where(PushHistoryORM.user_id == user_id)
+    if target_session is not None:
+        stmt = stmt.where(PushHistoryORM.target_session == target_session)
+    if status:
+        stmt = stmt.where(PushHistoryORM.status == status)
+    return _apply_history_keyword_filters(stmt, keywords)
 
 
 def _history_last_activity_expr():
@@ -143,6 +176,7 @@ class PushHistoryRepositoryImpl:
                 .where(
                     PushHistoryORM.status == "failed",
                     PushHistoryORM.retry_count < PushHistoryORM.max_retries,
+                    PushHistoryORM.batch_id.is_(None),
                 )
                 .order_by(asc(PushHistoryORM.created_at))
                 .limit(limit)
@@ -161,6 +195,7 @@ class PushHistoryRepositoryImpl:
                 .where(
                     PushHistoryORM.status.in_(("failed", "retrying")),
                     PushHistoryORM.retry_count < PushHistoryORM.max_retries,
+                    PushHistoryORM.batch_id.is_(None),
                 )
             )
             result = await session.execute(stmt)
@@ -188,6 +223,7 @@ class PushHistoryRepositoryImpl:
             fallback_stmt = select(PushHistoryORM).where(
                 PushHistoryORM.status == "retrying",
                 PushHistoryORM.updated_at < retrying_cutoff,
+                PushHistoryORM.batch_id.is_(None),
             )
             fallback_result = await session.execute(fallback_stmt)
             stale = list(fallback_result.scalars().all())
@@ -204,6 +240,7 @@ class PushHistoryRepositoryImpl:
                 .where(
                     PushHistoryORM.status == "failed",
                     PushHistoryORM.retry_count < PushHistoryORM.max_retries,
+                    PushHistoryORM.batch_id.is_(None),
                 )
                 .order_by(asc(PushHistoryORM.created_at))
                 .limit(limit)
@@ -238,25 +275,30 @@ class PushHistoryRepositoryImpl:
         """删除指定天数前的历史记录"""
         db = get_database()
         async with db.get_session() as session:
-            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
-            last_activity = _history_last_activity_expr()
-            stmt = (
-                delete(PushHistoryORM)
-                .where(last_activity < cutoff_date)
-                .execution_options(synchronize_session=False)
+            return await self._delete_candidates(
+                session,
+                select(PushHistoryORM, DeliveryBatchORM.status)
+                .outerjoin(
+                    DeliveryBatchORM,
+                    PushHistoryORM.batch_id == DeliveryBatchORM.id,
+                )
+                .where(
+                    _history_last_activity_expr()
+                    < datetime.now(timezone.utc) - timedelta(days=days)
+                ),
             )
-            result = await session.execute(stmt)
-            await session.commit()
-            return result.rowcount or 0
 
     async def delete_all(self) -> int:
         """删除全部推送历史记录。"""
         db = get_database()
         async with db.get_session() as session:
-            stmt = delete(PushHistoryORM).execution_options(synchronize_session=False)
-            result = await session.execute(stmt)
-            await session.commit()
-            return int(result.rowcount or 0)
+            return await self._delete_candidates(
+                session,
+                select(PushHistoryORM, DeliveryBatchORM.status).outerjoin(
+                    DeliveryBatchORM,
+                    PushHistoryORM.batch_id == DeliveryBatchORM.id,
+                ),
+            )
 
     async def get_all(
         self,
@@ -268,14 +310,23 @@ class PushHistoryRepositoryImpl:
         """获取所有推送历史"""
         db = get_database()
         async with db.get_session() as session:
-            stmt = select(PushHistoryORM).order_by(desc(_history_last_activity_expr()))
+            stmt = (
+                select(PushHistoryORM, DeliveryBatchORM.status)
+                .outerjoin(
+                    DeliveryBatchORM,
+                    PushHistoryORM.batch_id == DeliveryBatchORM.id,
+                )
+                .order_by(desc(_history_last_activity_expr()))
+            )
             if status:
                 stmt = stmt.where(PushHistoryORM.status == status)
             stmt = _apply_history_keyword_filters(stmt, keywords)
             stmt = stmt.offset(offset).limit(limit)
             result = await session.execute(stmt)
-            orms = result.scalars().all()
-            return [self._to_entity(orm) for orm in orms]
+            return [
+                self._to_entity(orm, batch_status=batch_status)
+                for orm, batch_status in result.all()
+            ]
 
     async def get_by_user(
         self,
@@ -289,7 +340,14 @@ class PushHistoryRepositoryImpl:
         """获取用户的推送历史"""
         db = get_database()
         async with db.get_session() as session:
-            stmt = select(PushHistoryORM).where(PushHistoryORM.user_id == user_id)
+            stmt = (
+                select(PushHistoryORM, DeliveryBatchORM.status)
+                .outerjoin(
+                    DeliveryBatchORM,
+                    PushHistoryORM.batch_id == DeliveryBatchORM.id,
+                )
+                .where(PushHistoryORM.user_id == user_id)
+            )
             if target_session is not None:
                 stmt = stmt.where(PushHistoryORM.target_session == target_session)
             if status:
@@ -301,8 +359,143 @@ class PushHistoryRepositoryImpl:
                 .limit(limit)
             )
             result = await session.execute(stmt)
-            orms = result.scalars().all()
-            return [self._to_entity(orm) for orm in orms]
+            return [
+                self._to_entity(orm, batch_status=batch_status)
+                for orm, batch_status in result.all()
+            ]
+
+    async def get_grouped_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        user_id: str | None = None,
+        target_session: str | None = None,
+        status: str | None = None,
+        keywords: list[str] | None = None,
+    ) -> PushHistoryPage:
+        """按批次/单条输出分页，避免批次在页面边界产生重复分组。"""
+        db = get_database()
+        async with db.get_session() as session:
+            filtered_stmt = _apply_history_scope_filters(
+                select(
+                    PushHistoryORM.id.label("history_id"),
+                    PushHistoryORM.batch_id.label("batch_id"),
+                    _history_last_activity_expr().label("last_activity"),
+                ),
+                user_id=user_id,
+                target_session=target_session,
+                status=status,
+                keywords=keywords,
+            )
+            filtered_rows = filtered_stmt.subquery("filtered_history")
+
+            total_result = await session.execute(
+                select(func.count()).select_from(filtered_rows)
+            )
+            total = int(total_result.scalar_one() or 0)
+
+            batch_groups = (
+                select(
+                    filtered_rows.c.batch_id,
+                    literal(None).cast(Integer).label("history_id"),
+                    func.max(filtered_rows.c.last_activity).label("last_activity"),
+                    literal(1).label("is_batch"),
+                )
+                .where(filtered_rows.c.batch_id.is_not(None))
+                .group_by(filtered_rows.c.batch_id)
+            )
+            single_groups = select(
+                literal(None).cast(Integer).label("batch_id"),
+                filtered_rows.c.history_id,
+                filtered_rows.c.last_activity,
+                literal(0).label("is_batch"),
+            ).where(filtered_rows.c.batch_id.is_(None))
+            grouped_rows = union_all(batch_groups, single_groups).subquery(
+                "history_groups"
+            )
+
+            group_total_result = await session.execute(
+                select(func.count()).select_from(grouped_rows)
+            )
+            group_total = int(group_total_result.scalar_one() or 0)
+
+            group_offset = (page - 1) * page_size
+            group_page_result = await session.execute(
+                select(
+                    grouped_rows.c.batch_id,
+                    grouped_rows.c.history_id,
+                    grouped_rows.c.is_batch,
+                )
+                .order_by(
+                    grouped_rows.c.last_activity.desc(),
+                    grouped_rows.c.is_batch.desc(),
+                    func.coalesce(
+                        grouped_rows.c.batch_id, grouped_rows.c.history_id
+                    ).desc(),
+                )
+                .offset(group_offset)
+                .limit(page_size)
+            )
+            group_rows = group_page_result.all()
+            if not group_rows:
+                return PushHistoryPage(items=[], total=total, group_total=group_total)
+
+            batch_ids = [
+                int(row.batch_id) for row in group_rows if row.batch_id is not None
+            ]
+            history_ids = [
+                int(row.history_id) for row in group_rows if row.history_id is not None
+            ]
+            group_conditions = []
+            if batch_ids:
+                group_conditions.append(PushHistoryORM.batch_id.in_(batch_ids))
+            if history_ids:
+                group_conditions.append(PushHistoryORM.id.in_(history_ids))
+
+            item_stmt = _apply_history_scope_filters(
+                select(PushHistoryORM, DeliveryBatchORM.status)
+                .outerjoin(
+                    DeliveryBatchORM,
+                    PushHistoryORM.batch_id == DeliveryBatchORM.id,
+                )
+                .where(or_(*group_conditions)),
+                user_id=user_id,
+                target_session=target_session,
+                status=status,
+                keywords=keywords,
+            )
+            item_result = await session.execute(item_stmt)
+            entities = [
+                self._to_entity(orm, batch_status=batch_status)
+                for orm, batch_status in item_result.all()
+            ]
+
+            group_order = {}
+            for index, row in enumerate(group_rows):
+                if row.batch_id is not None:
+                    group_order[("batch", int(row.batch_id))] = index
+                else:
+                    group_order[("history", int(row.history_id))] = index
+
+            def sort_key(history: PushHistory):
+                key = (
+                    ("batch", int(history.batch_id))
+                    if history.batch_id is not None
+                    else ("history", int(history.id or 0))
+                )
+                return (
+                    group_order.get(key, len(group_order)),
+                    history.output_order if history.batch_id is not None else 0,
+                    int(history.id or 0),
+                )
+
+            entities.sort(key=sort_key)
+            return PushHistoryPage(
+                items=entities,
+                total=total,
+                group_total=group_total,
+            )
 
     async def count_by_user(
         self,
@@ -344,14 +537,8 @@ class PushHistoryRepositoryImpl:
 
     async def delete(self, history_id: int) -> bool:
         """删除推送历史"""
-        db = get_database()
-        async with db.get_session() as session:
-            orm = await session.get(PushHistoryORM, history_id)
-            if not orm:
-                return False
-            await session.delete(orm)
-            await session.commit()
-            return True
+        result = await self.delete_many([history_id])
+        return bool(int(result))
 
     async def delete_many(self, history_ids: list[int]) -> int:
         """批量删除推送历史。"""
@@ -359,14 +546,67 @@ class PushHistoryRepositoryImpl:
             {int(history_id) for history_id in history_ids if int(history_id) > 0}
         )
         if not ids:
-            return 0
+            return PushHistoryDeletionResult(0)
 
         db = get_database()
         async with db.get_session() as session:
-            stmt = delete(PushHistoryORM).where(PushHistoryORM.id.in_(ids))
-            result = await session.execute(stmt)
+            return await self._delete_candidates(
+                session,
+                select(PushHistoryORM, DeliveryBatchORM.status)
+                .outerjoin(
+                    DeliveryBatchORM,
+                    PushHistoryORM.batch_id == DeliveryBatchORM.id,
+                )
+                .where(PushHistoryORM.id.in_(ids)),
+            )
+
+    async def _delete_candidates(
+        self,
+        session,
+        statement,
+    ) -> PushHistoryDeletionResult:
+        """在同一写事务内筛选并删除可安全移除的历史行。"""
+        try:
+            await session.execute(text("BEGIN IMMEDIATE"))
+            rows = (await session.execute(statement)).all()
+            deletable_ids: list[int] = []
+            skipped: list[PushHistoryDeletionSkip] = []
+            for history, batch_status in rows:
+                if self._is_unresolved_batch_output(history, batch_status):
+                    skipped.append(
+                        PushHistoryDeletionSkip(
+                            history_id=int(history.id),
+                            batch_id=int(history.batch_id),
+                            status=history.status,
+                        )
+                    )
+                elif history.id is not None:
+                    deletable_ids.append(int(history.id))
+
+            removed_count = 0
+            if deletable_ids:
+                result = await session.execute(
+                    delete(PushHistoryORM).where(PushHistoryORM.id.in_(deletable_ids))
+                )
+                removed_count = int(result.rowcount or 0)
             await session.commit()
-            return int(result.rowcount or 0)
+            return PushHistoryDeletionResult(removed_count, tuple(skipped))
+        except BaseException:
+            await session.rollback()
+            raise
+
+    @staticmethod
+    def _is_unresolved_batch_output(
+        history: PushHistoryORM,
+        batch_status: str | None,
+    ) -> bool:
+        if history.batch_id is None:
+            return False
+        # 批次记录缺失、状态未确认或输出状态异常时都保留审计数据。
+        return not (
+            batch_status in _RESOLVED_BATCH_STATUSES
+            and history.status in _RESOLVED_OUTPUT_STATUSES
+        )
 
     async def delete_by_user(self, user_id: str) -> int:
         """删除指定用户的全部推送历史。"""
@@ -465,11 +705,18 @@ class PushHistoryRepositoryImpl:
             return rows
 
     @staticmethod
-    def _to_entity(orm: PushHistoryORM) -> PushHistory:
+    def _to_entity(
+        orm: PushHistoryORM,
+        *,
+        batch_status: str | None = None,
+    ) -> PushHistory:
         """将 ORM 模型转换为领域实体"""
         return PushHistory(
             id=orm.id,
             sub_id=orm.sub_id,
+            batch_id=orm.batch_id,
+            batch_status=batch_status,
+            bundle_id=orm.bundle_id,
             user_id=orm.user_id,
             feed_id=orm.feed_id,
             source_type=orm.source_type or "feed",
@@ -478,6 +725,9 @@ class PushHistoryRepositoryImpl:
             raw_xml=orm.raw_xml,
             media_urls=orm.media_urls,
             handler_trace=orm.handler_trace,
+            output_kind=orm.output_kind,
+            output_order=orm.output_order,
+            source_context=orm.source_context,
             entry_title=orm.entry_title,
             entry_link=orm.entry_link,
             entry_guid=orm.entry_guid,
@@ -500,6 +750,8 @@ class PushHistoryRepositoryImpl:
         return PushHistoryORM(
             id=history.id,
             sub_id=history.sub_id,
+            batch_id=history.batch_id,
+            bundle_id=history.bundle_id,
             user_id=history.user_id,
             feed_id=history.feed_id,
             source_type=history.source_type or "feed",
@@ -508,6 +760,9 @@ class PushHistoryRepositoryImpl:
             raw_xml=history.raw_xml,
             media_urls=history.media_urls,
             handler_trace=history.handler_trace,
+            output_kind=history.output_kind,
+            output_order=history.output_order,
+            source_context=history.source_context,
             entry_title=history.entry_title,
             entry_link=history.entry_link,
             entry_guid=history.entry_guid,

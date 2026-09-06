@@ -7,18 +7,19 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from quart import Response, jsonify, request
-
 from astrbot.api import AstrBotConfig
 from astrbot.api.star import Context
+from quart import Response, jsonify, request
 
 from ..application.commands.batch_activate_cmd import BatchActivateCommand
 from ..application.commands.batch_deactivate_cmd import BatchDeactivateCommand
@@ -41,12 +42,19 @@ from ..application.services.notification_dispatcher import NotificationDispatche
 from ..application.services.route_knowledge_service import (
     RouteKnowledgeSyncService,
 )
+from ..domain.entities.delivery import DeliveryOwner
 from ..domain.entities.handlers import list_handler_registry
+from ..domain.exceptions import DomainException
+from ..domain.repositories.delivery_repository import (
+    DeliveryBatchNotFoundError,
+    DeliveryBatchNotReadyError,
+    DeliveryConsistencyError,
+    DeliveryDeletionBlockedError,
+)
 from ..domain.repositories.feed_repository import FeedRepository
 from ..domain.repositories.push_history_repository import PushHistoryRepository
 from ..domain.repositories.subscription_repository import SubscriptionRepository
 from ..domain.repositories.user_repository import UserRepository
-from ..shared.constants import INHERIT_VALUE
 from ..infrastructure.config import (
     RsshubPluginConfig,
     build_application_settings,
@@ -54,6 +62,7 @@ from ..infrastructure.config import (
     validate_interval_value,
 )
 from ..infrastructure.utils import get_plugin_cache_dir, get_plugin_export_dir
+from ..shared.constants import INHERIT_VALUE
 
 PLUGIN_NAME = "astrbot_plugin_rsshub"
 USER_ID_REQUIRED_ERROR = "user_id 不能为空"
@@ -71,6 +80,17 @@ SUGGESTION_SCOPES: dict[str, set[str]] = {
     "users": {"user_id", "keyword"},
     "feeds": {"feed_id", "keyword"},
     "push-history": {"feed_link", "keyword"},
+}
+_BUNDLE_FORMATTING_OPTIONS = {
+    "notify",
+    "send_mode",
+    "length_limit",
+    "display_author",
+    "display_via",
+    "display_title",
+    "display_entry_tags",
+    "style",
+    "display_media",
 }
 
 
@@ -103,6 +123,17 @@ class WebApiHandler:
         route_knowledge_service: RouteKnowledgeSyncService | None = None,
         config: RsshubPluginConfig | None = None,
         raw_config: AstrBotConfig | None = None,
+        card_management_service=None,
+        template_repository=None,
+        template_download_service=None,
+        template_management_service=None,
+        subscription_batch_delivery_service=None,
+        delivery_repository=None,
+        bundle_cmd=None,
+        bundle_repository=None,
+        bundle_card_management_service=None,
+        bundle_batch_delivery_service=None,
+        mutation_lock=None,
     ):
         self._sse_clients: list[asyncio.Queue] = []
         self._change_counter: int = 0
@@ -128,6 +159,17 @@ class WebApiHandler:
         self._route_knowledge_service = route_knowledge_service
         self._config = config
         self._raw_config = raw_config
+        self._card_management_service = card_management_service
+        self._template_repository = template_repository
+        self._template_download_service = template_download_service
+        self._template_management_service = template_management_service
+        self._subscription_batch_delivery_service = subscription_batch_delivery_service
+        self._delivery_repository = delivery_repository
+        self._bundle_cmd = bundle_cmd
+        self._bundle_repository = bundle_repository
+        self._bundle_card_management_service = bundle_card_management_service
+        self._bundle_batch_delivery_service = bundle_batch_delivery_service
+        self._mutation_lock = mutation_lock
 
     def register_all(self, context: Context) -> None:
         """注册所有 API 端点到 AstrBot"""
@@ -137,6 +179,45 @@ class WebApiHandler:
             ("GET", "/events", self.handle_events, "SSE 事件推送"),
             ("GET", "/updates", self.handle_updates, "检查更新"),
             ("GET", "/subscriptions", self.handle_list_subscriptions, "列出所有订阅"),
+            ("GET", "/bundles", self.handle_bundles, "列出聚合订阅"),
+            ("GET", "/bundles/detail", self.handle_bundle_detail, "聚合订阅详情"),
+            ("POST", "/bundles/create", self.handle_bundle_create, "创建聚合订阅"),
+            ("POST", "/bundles/update", self.handle_bundle_update, "更新聚合订阅"),
+            ("POST", "/bundles/members", self.handle_bundle_members, "更新聚合成员"),
+            (
+                "POST",
+                "/bundles/handlers",
+                self.handle_bundle_handlers,
+                "更新聚合 handlers",
+            ),
+            ("POST", "/bundles/state", self.handle_bundle_state, "切换聚合状态"),
+            ("POST", "/bundles/test", self.handle_bundle_test, "测试聚合订阅"),
+            ("POST", "/bundles/delete", self.handle_bundle_delete, "删除聚合订阅"),
+            ("GET", "/templates", self.handle_templates, "列出卡片模板"),
+            (
+                "GET",
+                "/templates/options",
+                self.handle_template_options,
+                "列出 owner 可用模板",
+            ),
+            (
+                "POST",
+                "/templates/install",
+                self.handle_template_install,
+                "安装卡片模板",
+            ),
+            (
+                "POST",
+                "/templates/preview",
+                self.handle_template_preview,
+                "预览卡片模板",
+            ),
+            (
+                "POST",
+                "/templates/delete",
+                self.handle_template_delete,
+                "删除卡片模板",
+            ),
             ("GET", "/users", self.handle_users, "列出所有用户"),
             ("GET", "/feeds", self.handle_feeds, "列出所有 Feed"),
             ("GET", "/suggestions", self.handle_suggestions, "Dashboard 智能补全"),
@@ -256,6 +337,12 @@ class WebApiHandler:
                 "/push-history/clear",
                 self.handle_clear_push_history,
                 "清空推送历史",
+            ),
+            (
+                "POST",
+                "/delivery-batches/discard",
+                self.handle_discard_delivery_batch,
+                "丢弃可靠投递批次",
             ),
             ("GET", "/users/detail", self.handle_user_details, "用户详情列表"),
             ("POST", "/users/update", self.handle_update_user, "更新用户配置"),
@@ -401,12 +488,440 @@ class WebApiHandler:
                     "display_entry_tags": s.display_entry_tags,
                     "style": s.style,
                     "display_media": s.display_media,
+                    "send_card": getattr(s, "send_card", False),
+                    "template_id": getattr(s, "template_id", None),
+                    "card_send_original_content": getattr(
+                        s, "card_send_original_content", False
+                    ),
                     "created_at": s.created_at.isoformat() if s.created_at else None,
                     "updated_at": s.updated_at.isoformat() if s.updated_at else None,
                 }
             )
 
         return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_bundle_create(self):
+        """创建停用的 Bundle；成员与配置校验由 BundleCommand 负责。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        name = str(data.get("name", "") or "").strip()
+        user_id = str(data.get("user_id", "") or "").strip()
+        feed_ids = data.get("feed_ids")
+        target_sessions = data.get("target_sessions")
+        if not name or not user_id:
+            return jsonify(_error_payload("name 和 user_id 不能为空"))
+        if not isinstance(feed_ids, list) or not isinstance(target_sessions, list):
+            return jsonify(_error_payload("feed_ids 和 target_sessions 必须是数组"))
+        interval = data.get("interval")
+        if interval is not None:
+            try:
+                interval = int(interval)
+            except (TypeError, ValueError):
+                return jsonify(_error_payload("interval 必须是整数"))
+        result = await self._bundle_cmd.create(
+            user_id=user_id,
+            name=name,
+            feed_ids=feed_ids,
+            target_sessions=target_sessions,
+            interval=interval,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_update(self):
+        """更新 Bundle 配置；格式化字段只接受已声明的安全选项。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        try:
+            bundle_id = int(data.get("id", 0))
+        except (TypeError, ValueError):
+            bundle_id = 0
+        user_id = str(data.get("user_id", "") or "").strip()
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+
+        options: dict[str, Any] = {}
+        for key in (
+            "name",
+            "target_sessions",
+            "interval",
+            "send_card",
+            "template_id",
+            "card_send_original_content",
+        ):
+            if key in data:
+                options[key] = data[key]
+        formatting = data.get("formatting", {})
+        if formatting is None:
+            formatting = {}
+        if not isinstance(formatting, dict):
+            return jsonify(_error_payload("formatting 必须是 JSON 对象"))
+        unsupported = sorted(set(formatting) - _BUNDLE_FORMATTING_OPTIONS)
+        if unsupported:
+            return jsonify(
+                _error_payload(
+                    "formatting 包含不支持的配置项",
+                    "UNSUPPORTED_OPTION",
+                    {"options": unsupported},
+                )
+            )
+        options.update(formatting)
+        if "interval" in options:
+            try:
+                options["interval"] = int(options["interval"])
+            except (TypeError, ValueError):
+                return jsonify(_error_payload("interval 必须是整数"))
+        for key in ("send_card", "card_send_original_content"):
+            if key in options and not isinstance(options[key], bool):
+                return jsonify(_error_payload(f"{key} 必须是 boolean"))
+        result = await self._bundle_cmd.set(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            options=options,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_members(self):
+        """原子替换 Bundle 成员，并保留应用层删除保护。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        feed_ids = data.get("feed_ids")
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        if not isinstance(feed_ids, list):
+            return jsonify(_error_payload("feed_ids 必须是数组"))
+        result = await self._bundle_cmd.replace_members(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            feed_ids=feed_ids,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_handlers(self):
+        """原子替换 Bundle 文档级 handlers。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        handlers = data.get("handlers")
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        if not isinstance(handlers, list):
+            return jsonify(_error_payload("handlers 必须是数组"))
+        result = await self._bundle_cmd.set_handlers(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            handlers=handlers,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_state(self):
+        """切换 Bundle 状态；只有 0/1 才能进入应用命令。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        state = data.get("state")
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        if isinstance(state, bool) or state not in (0, 1, "0", "1"):
+            return jsonify(_error_payload("state 只能是 0 或 1", "INVALID_STATE"))
+        result = await self._bundle_cmd.state(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            enable=int(state) == 1,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundle_delete(self):
+        """删除 Bundle；未解决 inbox/batch 由应用命令和仓储阻止。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        result = await self._bundle_cmd.delete(bundle_id=bundle_id, user_id=user_id)
+        return jsonify(_command_result_payload(result))
+
+    async def handle_bundles(self):
+        """列出当前 Dashboard owner 范围内的 Bundle。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        user_id = str(request.args.get("user_id", "") or "").strip()
+        if user_id:
+            result = await self._bundle_cmd.list(user_id=user_id)
+        elif self._bundle_repository is not None:
+            bundles = await self._bundle_repository.get_all()
+            result = SimpleNamespace(success=True, message="", data=bundles)
+        else:
+            return jsonify(_error_payload("user_id 不能为空"))
+        if not bool(getattr(result, "success", False)):
+            return jsonify(_command_result_payload(result))
+        bundles = list(getattr(result, "data", None) or [])
+        keyword = str(request.args.get("keyword", "") or "").strip().casefold()
+        if keyword:
+            bundles = [
+                bundle
+                for bundle in bundles
+                if keyword in str(getattr(bundle, "name", "") or "").casefold()
+            ]
+        page = request.args.get("page", default=1, type=int) or 1
+        page_size = request.args.get("page_size", default=20, type=int) or 20
+        if page <= 0 or page_size <= 0:
+            return jsonify(_error_payload("page 和 page_size 必须是正整数"))
+        total = len(bundles)
+        start = (page - 1) * page_size
+        items = [
+            _dump_dataclass_like(item) for item in bundles[start : start + page_size]
+        ]
+        return jsonify(
+            {
+                "ok": True,
+                "items": items,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
+
+    async def handle_bundle_detail(self):
+        """查看 Bundle 详情；owner 归属校验由 show 用例执行。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        bundle_id = request.args.get("id", type=int) or 0
+        user_id = str(request.args.get("user_id", "") or "").strip()
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        result = await self._bundle_cmd.show(bundle_id=bundle_id, user_id=user_id)
+        payload = _command_result_payload(result)
+        if payload.get("ok") and self._delivery_repository is not None:
+            owner = DeliveryOwner(owner_type="bundle", owner_id=bundle_id)
+            inbox_items = await self._delivery_repository.list_inbox_items(
+                owner,
+                claimed=False,
+            )
+            pending_batch = await self._delivery_repository.get_pending_batch(owner)
+            data = payload.get("data")
+            if isinstance(data, dict):
+                data["backlog"] = {
+                    "unclaimed_count": len(inbox_items or []),
+                    "items": [_dump_dataclass_like(item) for item in inbox_items or []],
+                }
+                data["pending_batch"] = _delivery_batch_summary(pending_batch)
+        return jsonify(payload)
+
+    async def handle_bundle_test(self):
+        """管理员执行只读 Bundle 测试；不写水位、inbox、批次或历史。"""
+        if self._bundle_cmd is None:
+            return jsonify(
+                _error_payload("Bundle 管理服务未初始化", "SERVICE_UNAVAILABLE")
+            )
+        data = await request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(_error_payload("请求体必须是 JSON 对象"))
+        bundle_id, user_id = _bundle_identity(data)
+        if bundle_id <= 0 or not user_id:
+            return jsonify(_error_payload("id 和 user_id 不能为空"))
+        target_session = data.get("target_session")
+        if target_session is not None:
+            target_session = str(target_session).strip() or None
+        result = await self._bundle_cmd.test(
+            bundle_id=bundle_id,
+            user_id=user_id,
+            is_admin=_dashboard_request_is_admin(),
+            target_session=target_session,
+        )
+        return jsonify(_command_result_payload(result))
+
+    async def handle_templates(self):
+        """列出全部已安装和内置卡片模板。"""
+        if self._template_repository is None:
+            return jsonify({"ok": False, "error": "模板仓储未初始化"})
+        packages = await asyncio.to_thread(self._template_repository.list_packages)
+        items = [package.metadata.model_dump(mode="json") for package in packages]
+        return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_template_options(self):
+        """列出 owner 严格匹配的模板候选。"""
+        owner_type = str(request.args.get("owner_type", "") or "").strip()
+        owner_id = request.args.get("owner_id", type=int)
+        user_id = str(request.args.get("user_id", "") or "").strip()
+        if owner_type not in {"subscription", "bundle"}:
+            return jsonify(
+                {"ok": False, "error": "owner_type 必须是 subscription 或 bundle"}
+            )
+        if owner_type == "subscription" and self._card_management_service is None:
+            return jsonify({"ok": False, "error": "卡片配置服务未初始化"})
+        if owner_type == "bundle" and self._bundle_card_management_service is None:
+            return jsonify({"ok": False, "error": "Bundle 卡片配置服务未初始化"})
+        if not owner_id or not user_id:
+            return jsonify({"ok": False, "error": "owner_id 和 user_id 不能为空"})
+        try:
+            if owner_type == "subscription":
+                options = await self._card_management_service.list_template_options(
+                    subscription_id=owner_id,
+                    user_id=user_id,
+                )
+            else:
+                options = (
+                    await self._bundle_card_management_service.list_template_options(
+                        bundle_id=owner_id,
+                        user_id=user_id,
+                    )
+                )
+        except (ValueError, PermissionError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        items = [_dump_dataclass_like(option) for option in options]
+        return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    async def handle_template_install(self):
+        """从上传 ZIP 或 HTTP(S) URL 安装模板。"""
+        if self._template_repository is None:
+            return jsonify({"ok": False, "error": "模板仓储未初始化"})
+        try:
+            if request.content_type and request.content_type.startswith(
+                "multipart/form-data"
+            ):
+                files = await request.files
+                archive = files.get("archive")
+                if archive is None:
+                    return jsonify({"ok": False, "error": "archive 不能为空"})
+                archive_data = await asyncio.to_thread(archive.read)
+                package = await asyncio.to_thread(
+                    self._template_repository.install_archive,
+                    archive_data,
+                )
+            else:
+                data = await request.get_json()
+                if self._template_download_service is None:
+                    return jsonify({"ok": False, "error": "模板下载服务未初始化"})
+                url = str((data or {}).get("url", "") or "").strip()
+                if not url:
+                    return jsonify({"ok": False, "error": "url 不能为空"})
+                allow_insecure_http = (data or {}).get(
+                    "allow_insecure_http",
+                    False,
+                )
+                if not isinstance(allow_insecure_http, bool):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "allow_insecure_http 必须是 boolean",
+                        }
+                    )
+                package = await self._template_download_service.install_from_url(
+                    url,
+                    allow_insecure_http=allow_insecure_http,
+                )
+        except (DomainException, ValueError, OSError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        self._bump_counter()
+        return jsonify(
+            {"ok": True, "template": package.metadata.model_dump(mode="json")}
+        )
+
+    async def handle_template_preview(self):
+        """零业务副作用生成 Subscription 或 Bundle 卡片 PNG。"""
+        data = await request.get_json()
+        owner_type = str((data or {}).get("owner_type", "") or "").strip()
+        if owner_type == "subscription" and self._card_management_service is None:
+            return jsonify({"ok": False, "error": "卡片预览服务未初始化"})
+        if owner_type == "bundle" and self._bundle_card_management_service is None:
+            return jsonify({"ok": False, "error": "Bundle 卡片预览服务未初始化"})
+        if owner_type not in {"subscription", "bundle"}:
+            return jsonify({"ok": False, "error": "当前仅支持 subscription owner"})
+        try:
+            owner_id = int((data or {}).get("owner_id", 0))
+        except (TypeError, ValueError):
+            owner_id = 0
+        user_id = str((data or {}).get("user_id", "") or "").strip()
+        template_id = str((data or {}).get("template_id", "") or "").strip()
+        if owner_id <= 0 or not user_id or not template_id:
+            return jsonify(
+                {"ok": False, "error": "owner_id、user_id 和 template_id 不能为空"}
+            )
+        try:
+            if owner_type == "subscription":
+                preview = await self._card_management_service.preview(
+                    subscription_id=owner_id,
+                    user_id=user_id,
+                    template_id=template_id,
+                )
+            else:
+                preview = await self._bundle_card_management_service.preview(
+                    bundle_id=owner_id,
+                    user_id=user_id,
+                    template_id=template_id,
+                )
+        except (ValueError, PermissionError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        return jsonify(
+            {
+                "ok": True,
+                "png_base64": base64.b64encode(preview.png).decode("ascii"),
+                "entry_count": preview.entry_count,
+                "template": preview.template,
+                "source_summary": preview.source_summary,
+            }
+        )
+
+    async def handle_template_delete(self):
+        """删除未被 owner 引用的模板。"""
+        if self._template_management_service is None:
+            return jsonify({"ok": False, "error": "模板管理服务未初始化"})
+        data = await request.get_json()
+        template_id = str((data or {}).get("template_id", "") or "").strip()
+        if not template_id:
+            return jsonify({"ok": False, "error": "template_id 不能为空"})
+        try:
+            removed = await self._template_management_service.delete_template(
+                template_id
+            )
+        except DomainException as exc:
+            return jsonify(
+                _error_payload(
+                    exc.message,
+                    exc.code,
+                    getattr(exc, "references", None),
+                )
+            )
+        except (ValueError, OSError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        if removed:
+            self._bump_counter()
+        return jsonify({"ok": removed, "removed": removed})
 
     # ─── 用户列表 ─────────────────────────────────────────────
 
@@ -568,6 +1083,12 @@ class WebApiHandler:
         return jsonify({"ok": result.success, "message": result.message})
 
     async def handle_delete_user(self):
+        if self._mutation_lock is None:
+            return await self._handle_delete_user()
+        async with self._mutation_lock:
+            return await self._handle_delete_user()
+
+    async def _handle_delete_user(self):
         """删除用户"""
         data = await request.get_json()
         user_ids: list[str] = []
@@ -587,8 +1108,43 @@ class WebApiHandler:
         removed_count = 0
         deleted_subscriptions = 0
         deleted_push_history = 0
+        blocked_users: list[dict[str, Any]] = []
         for user_id in user_ids:
-            sub_deleted = await self._sub_repo.delete_all_by_user(user_id)
+            if self._bundle_repository is not None:
+                # Bundle 通过 user_id 外键归属；本端点不做 Bundle 级联事务，
+                # 必须先阻断并让调用方显式删除 Bundle，避免用户删除后留下孤儿 owner。
+                bundles = await self._bundle_repository.get_by_user(user_id)
+                if bundles:
+                    blocked_users.append(
+                        {
+                            "user_id": user_id,
+                            "blockers": {"bundles": len(bundles)},
+                        }
+                    )
+                    continue
+            if self._delivery_repository is not None:
+                subscriptions = await self._sub_repo.get_by_user(user_id)
+                sub_ids = [
+                    int(subscription.id)
+                    for subscription in subscriptions
+                    if getattr(subscription, "id", None) is not None
+                ]
+                try:
+                    sub_deleted = (
+                        await self._delivery_repository.delete_subscription_owners(
+                            sub_ids
+                        )
+                    )
+                except DeliveryDeletionBlockedError as exc:
+                    blocked_users.append(
+                        {
+                            "user_id": user_id,
+                            "blockers": exc.owner_blockers or exc.blocker_counts,
+                        }
+                    )
+                    continue
+            else:
+                sub_deleted = await self._sub_repo.delete_all_by_user(user_id)
             history_deleted = 0
             if delete_push_history:
                 history_deleted = await self._push_history_repo.delete_by_user(user_id)
@@ -598,6 +1154,20 @@ class WebApiHandler:
             if user_deleted or sub_deleted or history_deleted:
                 removed_count += 1
 
+        if blocked_users:
+            if removed_count > 0:
+                self._bump_counter()
+                asyncio.create_task(self._broadcast({"event": "data_changed"}))
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "存在未删除的 Bundle 或未解决可靠投递数据，未删除受阻用户",
+                    "removed_count": removed_count,
+                    "deleted_subscriptions": deleted_subscriptions,
+                    "deleted_push_history": deleted_push_history,
+                    "blocked_users": blocked_users,
+                }
+            )
         if removed_count > 0:
             self._bump_counter()
             asyncio.create_task(self._broadcast({"event": "data_changed"}))
@@ -916,6 +1486,12 @@ class WebApiHandler:
         return feeds
 
     async def handle_delete_feeds(self):
+        if self._mutation_lock is None:
+            return await self._handle_delete_feeds()
+        async with self._mutation_lock:
+            return await self._handle_delete_feeds()
+
+    async def _handle_delete_feeds(self):
         """删除 Feed，并级联删除对应订阅。"""
         data = await request.get_json()
         feed_ids: list[int] = []
@@ -929,8 +1505,75 @@ class WebApiHandler:
         if not feed_ids:
             return jsonify({"ok": False, "error": "feed_id 或 feed_ids 不能为空"})
 
+        if self._bundle_repository is not None:
+            # BundleFeed 对 Feed 使用 ON DELETE RESTRICT；删除前报告成员引用，
+            # 避免订阅已删而 Feed 在外键阶段失败，形成部分删除/不可诊断 500。
+            bundle_member_counts = (
+                await self._bundle_repository.count_members_by_feed_ids(feed_ids)
+            )
+            if bundle_member_counts:
+                blocked_feeds = [
+                    {
+                        "feed_id": feed_id,
+                        "blockers": {"bundle_members": count},
+                    }
+                    for feed_id, count in sorted(bundle_member_counts.items())
+                ]
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "Feed 仍被 Bundle 引用，未删除受阻 Feed",
+                        "removed_count": 0,
+                        "deleted_subscriptions": 0,
+                        "deleted_push_history": 0,
+                        "blocked_feeds": blocked_feeds,
+                    }
+                )
+
         delete_push_history = bool(data.get("delete_push_history")) if data else False
-        deleted_subscriptions = await self._sub_repo.delete_all_by_feed_ids(feed_ids)
+        blocked_feeds: list[dict[str, Any]] = []
+        if self._delivery_repository is not None:
+            subscriptions = await self._sub_repo.list_for_dashboard(feed_ids=feed_ids)
+            sub_ids = [
+                int(subscription.id)
+                for subscription in subscriptions
+                if getattr(subscription, "id", None) is not None
+            ]
+            try:
+                deleted_subscriptions = (
+                    await self._delivery_repository.delete_subscription_owners(sub_ids)
+                )
+            except DeliveryDeletionBlockedError as exc:
+                feed_by_sub_id = {
+                    int(subscription.id): int(subscription.feed_id)
+                    for subscription in subscriptions
+                    if getattr(subscription, "id", None) is not None
+                    and getattr(subscription, "feed_id", None) is not None
+                }
+                blockers_by_feed: dict[int, dict[str, dict[str, int]]] = {}
+                for owner_id, blockers in exc.owner_blockers.items():
+                    feed_id = feed_by_sub_id.get(int(owner_id))
+                    if feed_id is not None:
+                        blockers_by_feed.setdefault(feed_id, {})[owner_id] = blockers
+                blocked_feeds = [
+                    {"feed_id": feed_id, "blockers": blockers}
+                    for feed_id, blockers in sorted(blockers_by_feed.items())
+                ]
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "存在未解决可靠投递数据，未删除受阻 Feed",
+                        "removed_count": 0,
+                        "deleted_subscriptions": 0,
+                        "deleted_push_history": 0,
+                        "blocked_feeds": blocked_feeds
+                        or [{"feed_ids": feed_ids, "blockers": exc.blocker_counts}],
+                    }
+                )
+        else:
+            deleted_subscriptions = await self._sub_repo.delete_all_by_feed_ids(
+                feed_ids
+            )
         deleted_push_history = 0
         if delete_push_history:
             deleted_push_history = await self._push_history_repo.delete_by_feed_ids(
@@ -1101,6 +1744,7 @@ class WebApiHandler:
         result = await self._update_sub_cmd.execute(
             sub_id=int(sub_id),
             user_id=user_id,
+            allow_template_selection=True,
             **options,
         )
         self._bump_counter()
@@ -1751,73 +2395,28 @@ class WebApiHandler:
         keywords.extend(_query_values("feed_link"))
         page = request.args.get("page", 1, type=int)
         page_size = request.args.get("page_size", 20, type=int)
-        offset = (page - 1) * page_size
-
-        if user_id:
-            items = await self._push_history_repo.get_by_user(
-                user_id=user_id,
-                limit=page_size,
-                offset=offset,
-                target_session=target_session,
-                status=status,
-                keywords=keywords or None,
-            )
-            total = await self._push_history_repo.count_by_user(
-                user_id=user_id,
-                target_session=target_session,
-                status=status,
-                keywords=keywords or None,
-            )
-        else:
-            items = await self._push_history_repo.get_all(
-                limit=page_size,
-                offset=offset,
-                status=status,
-                keywords=keywords or None,
-            )
-            total = await self._push_history_repo.count_all(
-                status=status,
-                keywords=keywords or None,
-            )
+        grouped_page = await self._push_history_repo.get_grouped_page(
+            page=page,
+            page_size=page_size,
+            user_id=user_id,
+            target_session=target_session,
+            status=status,
+            keywords=keywords or None,
+        )
+        items = grouped_page.items
+        total = grouped_page.total
+        group_total = grouped_page.group_total
 
         data = []
         for h in items:
-            data.append(
-                {
-                    "id": h.id,
-                    "sub_id": h.sub_id,
-                    "user_id": h.user_id,
-                    "feed_id": h.feed_id,
-                    "source_type": h.source_type,
-                    "source_key": h.source_key,
-                    "content": h.content,
-                    "raw_xml": h.raw_xml,
-                    "media_urls": h.media_urls,
-                    "handler_trace": getattr(h, "handler_trace", None),
-                    "entry_title": h.entry_title,
-                    "entry_link": h.entry_link,
-                    "entry_guid": h.entry_guid,
-                    "feed_title": h.feed_title,
-                    "feed_link": h.feed_link,
-                    "platform_name": h.platform_name,
-                    "target_session": h.target_session,
-                    "status": h.status,
-                    "retry_count": h.retry_count,
-                    "max_retries": h.max_retries,
-                    "fail_reason": h.fail_reason,
-                    "created_at": h.created_at.isoformat() if h.created_at else None,
-                    "updated_at": h.updated_at.isoformat() if h.updated_at else None,
-                    "completed_at": h.completed_at.isoformat()
-                    if h.completed_at
-                    else None,
-                }
-            )
+            data.append(_serialize_push_history_item(h))
 
         return jsonify(
             {
                 "ok": True,
                 "items": data,
                 "total": total,
+                "group_total": group_total,
                 "page": page,
                 "page_size": page_size,
             }
@@ -1841,43 +2440,92 @@ class WebApiHandler:
         if not history_ids:
             return jsonify({"ok": False, "error": "history_id 或 history_ids 不能为空"})
 
-        if len(history_ids) == 1:
-            ok = await self._push_history_repo.delete(history_ids[0])
-            if ok:
-                self._bump_counter()
-            return jsonify(
-                {
-                    "ok": ok,
-                    "removed_count": 1 if ok else 0,
-                    "message": "已删除" if ok else "记录不存在",
-                }
-            )
-
-        removed_count = await self._push_history_repo.delete_many(history_ids)
+        deletion_result = await self._push_history_repo.delete_many(history_ids)
+        removed_count, skipped = _history_deletion_result_payload(deletion_result)
         if removed_count > 0:
             self._bump_counter()
+        if not removed_count and skipped:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "未解决投递批次不能删除，请重试或丢弃批次",
+                    "error_code": "PUSH_HISTORY_DELETE_BLOCKED",
+                    "removed_count": 0,
+                    "skipped_count": len(skipped),
+                    "skipped": skipped,
+                }
+            )
+        message = (
+            f"已删除 {removed_count} 条记录"
+            if removed_count > 0
+            else "没有匹配的记录被删除"
+        )
+        if skipped:
+            message += f"，跳过 {len(skipped)} 条未解决批次记录"
         return jsonify(
             {
                 "ok": removed_count > 0,
                 "removed_count": removed_count,
-                "message": f"已删除 {removed_count} 条记录"
-                if removed_count > 0
-                else "没有匹配的记录被删除",
+                "skipped_count": len(skipped),
+                "skipped": skipped,
+                "message": message,
             }
         )
 
     async def handle_retry_push_history(self):
         """基于单条推送历史重发，并把结果写回原记录。"""
-        if self._notification_dispatcher is None:
-            return jsonify(
-                {"ok": False, "error": "notification dispatcher unavailable"}
-            )
+        if (
+            self._notification_dispatcher is None
+            and self._subscription_batch_delivery_service is None
+            and self._bundle_batch_delivery_service is None
+        ):
+            return jsonify({"ok": False, "error": "retry service unavailable"})
 
         data = await request.get_json()
         history_ids = _coerce_int_values([data.get("history_id")]) if data else []
         history_id = history_ids[0] if history_ids else 0
         if history_id <= 0:
             return jsonify({"ok": False, "error": "history_id 不能为空"})
+
+        history = None
+        if (
+            self._subscription_batch_delivery_service is not None
+            or self._bundle_batch_delivery_service is not None
+        ):
+            history = await self._push_history_repo.get_by_id(history_id)
+            if history is None:
+                return jsonify(_error_payload("推送历史不存在", "HISTORY_NOT_FOUND"))
+        if history is not None and history.batch_id is not None:
+            bundle_id = getattr(history, "bundle_id", None)
+            if bundle_id is not None:
+                if self._bundle_batch_delivery_service is None:
+                    return jsonify({"ok": False, "error": "Bundle 批次重试服务不可用"})
+                result = await self._bundle_batch_delivery_service.retry(bundle_id)
+            else:
+                if (
+                    self._subscription_batch_delivery_service is None
+                    or history.sub_id is None
+                ):
+                    return jsonify({"ok": False, "error": "批次重试服务不可用"})
+                result = await self._subscription_batch_delivery_service.retry(
+                    history.sub_id
+                )
+            self._bump_counter()
+            asyncio.create_task(self._broadcast({"event": "data_changed"}))
+            return jsonify(
+                {
+                    "ok": True,
+                    "message": "批次重试已执行",
+                    "source_history_id": history_id,
+                    "batch_id": result.batch_id,
+                    "ready_to_confirm": result.ready_to_confirm,
+                }
+            )
+
+        if self._notification_dispatcher is None:
+            return jsonify(
+                {"ok": False, "error": "notification dispatcher unavailable"}
+            )
 
         result = await self._notification_dispatcher.retry_push_history_once(history_id)
         self._bump_counter()
@@ -1900,29 +2548,84 @@ class WebApiHandler:
             }
         )
 
+    async def handle_discard_delivery_batch(self):
+        """通过统一事务仓储显式丢弃未解决批次。"""
+        if self._delivery_repository is None:
+            return jsonify({"ok": False, "error": "可靠投递仓储未初始化"})
+        data = await request.get_json()
+        try:
+            batch_id = int((data or {}).get("batch_id", 0))
+        except (TypeError, ValueError):
+            batch_id = 0
+        if batch_id <= 0:
+            return jsonify({"ok": False, "error": "batch_id 不能为空"})
+        reason = str((data or {}).get("reason", "") or "").strip() or None
+        try:
+            batch = await self._delivery_repository.discard_batch(
+                batch_id,
+                reason=reason,
+            )
+        except DeliveryBatchNotFoundError as exc:
+            return jsonify(
+                _error_payload(
+                    str(exc),
+                    "DELIVERY_BATCH_NOT_FOUND",
+                    {"batch_id": batch_id},
+                )
+            )
+        except DeliveryBatchNotReadyError as exc:
+            return jsonify(
+                _error_payload(
+                    str(exc),
+                    "DELIVERY_BATCH_NOT_READY",
+                    {"batch_id": exc.batch_id, "blockers": exc.blocking_statuses},
+                )
+            )
+        except DeliveryConsistencyError as exc:
+            return jsonify(_error_payload(str(exc), "DELIVERY_CONSISTENCY_ERROR"))
+        except (LookupError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        self._bump_counter()
+        asyncio.create_task(self._broadcast({"event": "data_changed"}))
+        return jsonify({"ok": True, "batch_id": batch.id, "status": batch.status})
+
     async def handle_cleanup_push_history(self):
         """清理旧推送历史"""
         data = await request.get_json()
         days = data.get("days", 30) if data else 30
-        count = await self._push_history_repo.delete_old_records(int(days))
-        self._bump_counter()
+        result = await self._push_history_repo.delete_old_records(int(days))
+        count, skipped = _history_deletion_result_payload(result)
+        if count > 0:
+            self._bump_counter()
+        message = f"已清理 {count} 条记录"
+        if skipped:
+            message += f"，跳过 {len(skipped)} 条未解决批次记录"
         return jsonify(
             {
                 "ok": True,
                 "removed_count": count,
-                "message": f"已清理 {count} 条记录",
+                "skipped_count": len(skipped),
+                "skipped": skipped,
+                "message": message,
             }
         )
 
     async def handle_clear_push_history(self):
         """清空推送历史。"""
-        count = await self._push_history_repo.delete_all()
-        self._bump_counter()
+        result = await self._push_history_repo.delete_all()
+        count, skipped = _history_deletion_result_payload(result)
+        if count > 0:
+            self._bump_counter()
+        message = f"已清空 {count} 条记录"
+        if skipped:
+            message += f"，跳过 {len(skipped)} 条未解决批次记录"
         return jsonify(
             {
                 "ok": True,
                 "removed_count": count,
-                "message": f"已清空 {count} 条记录",
+                "skipped_count": len(skipped),
+                "skipped": skipped,
+                "message": message,
             }
         )
 
@@ -1940,7 +2643,10 @@ def _dump_dataclass_like(value: Any) -> dict[str, Any]:
         if isinstance(item, tuple):
             return [_convert(part) for part in item]
         if hasattr(item, "model_dump"):
-            return {key: _convert(part) for key, part in item.model_dump().items()}
+            return {
+                key: _convert(part)
+                for key, part in item.model_dump(by_alias=True).items()
+            }
         if hasattr(item, "__dict__"):
             return {
                 key: _convert(part)
@@ -1950,6 +2656,195 @@ def _dump_dataclass_like(value: Any) -> dict[str, Any]:
         return item
 
     return _convert(value)
+
+
+def _error_payload(
+    message: str,
+    code: str = "REQUEST_ERROR",
+    details: Any | None = None,
+) -> dict[str, Any]:
+    """返回新管理 API 共用的机器可读错误 envelope。"""
+    payload: dict[str, Any] = {
+        "ok": False,
+        "error": message,
+        "error_code": code,
+    }
+    if details is not None:
+        payload["details"] = _dump_dataclass_like(details)
+    return payload
+
+
+def _command_result_payload(result: Any) -> dict[str, Any]:
+    """把应用命令结果转换为稳定的 Web JSON envelope。"""
+    if not bool(getattr(result, "success", False)):
+        message = str(getattr(result, "message", "操作失败"))
+        code = str(getattr(result, "error_code", "") or "") or _infer_error_code(
+            message
+        )
+        return _error_payload(
+            message,
+            code,
+            getattr(result, "details", None),
+        )
+    payload: dict[str, Any] = {
+        "ok": True,
+        "message": str(getattr(result, "message", "") or ""),
+    }
+    data = getattr(result, "data", None)
+    if data is not None:
+        payload["data"] = _dump_dataclass_like(data)
+    return payload
+
+
+def _infer_error_code(message: str) -> str:
+    """兼容尚未结构化的旧命令结果，避免客户端依赖中文文案。"""
+    if "不存在" in message:
+        return "NOT_FOUND"
+    if "无权" in message or "权限" in message:
+        return "FORBIDDEN"
+    if "投递" in message and ("未解决" in message or "阻止" in message):
+        return "DELIVERY_BLOCKED"
+    if "必须" in message or "不能" in message or "无效" in message:
+        return "VALIDATION_ERROR"
+    return "COMMAND_ERROR"
+
+
+def _bundle_identity(data: dict[str, Any]) -> tuple[int, str]:
+    try:
+        bundle_id = int(data.get("id", 0))
+    except (TypeError, ValueError):
+        bundle_id = 0
+    return bundle_id, str(data.get("user_id", "") or "").strip()
+
+
+def _dashboard_request_is_admin() -> bool:
+    """读取 bridge 已完成的 Dashboard 管理权限标记。
+
+    Web API 由宿主 Dashboard bridge 注册并保护；保留显式否决 header 便于
+    集成测试和反向代理传递权限结果，不能用请求体中的任意字段自授予权限。
+    """
+    raw = request.headers.get("X-AstrBot-Admin")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _delivery_batch_summary(batch: Any | None) -> dict[str, Any] | None:
+    if batch is None:
+        return None
+    outputs = list(getattr(batch, "outputs", None) or [])
+    return {
+        "id": getattr(batch, "id", None),
+        "status": getattr(batch, "status", None),
+        "output_count": len(outputs),
+        "output_statuses": [getattr(output, "status", None) for output in outputs],
+    }
+
+
+def _serialize_push_history_item(history: Any) -> dict[str, Any]:
+    """序列化历史行及其批次快照，供页面分组和详情展示。"""
+    source_context = getattr(history, "source_context", None)
+    if not isinstance(source_context, dict):
+        source_context = None
+    document_snapshot = (
+        source_context.get("document_snapshot") if source_context else None
+    )
+    template_snapshot = (
+        source_context.get("template_snapshot") if source_context else None
+    )
+    document = (
+        document_snapshot.get("document")
+        if isinstance(document_snapshot, dict)
+        else None
+    )
+    input_xml = None
+    input_xmls = None
+    if source_context:
+        raw_input_xml = source_context.get("input_xml")
+        if isinstance(raw_input_xml, str):
+            input_xml = raw_input_xml or None
+    if isinstance(document_snapshot, dict):
+        input_document = document_snapshot.get("input_document")
+        input_document_data = (
+            input_document.get("document") if isinstance(input_document, dict) else None
+        )
+        if isinstance(input_document_data, dict):
+            raw_input_xml = input_document_data.get("rss_xml")
+            if isinstance(raw_input_xml, str):
+                input_xml = raw_input_xml or None
+
+        raw_input_entries = document_snapshot.get("input_entries")
+        if isinstance(raw_input_entries, list):
+            input_xmls = [
+                {
+                    "item_key": entry.get("item_key"),
+                    "raw_xml": entry.get("raw_xml"),
+                }
+                for entry in raw_input_entries
+                if isinstance(entry, dict)
+            ] or None
+            if len(input_xmls or []) == 1:
+                raw_input_xml = input_xmls[0].get("raw_xml")
+                if isinstance(raw_input_xml, str):
+                    input_xml = raw_input_xml or None
+
+    output_xml = history.raw_xml
+    if not output_xml and isinstance(document, dict):
+        raw_output_xml = document.get("rss_xml")
+        if isinstance(raw_output_xml, str):
+            output_xml = raw_output_xml or None
+
+    return {
+        "id": history.id,
+        "sub_id": history.sub_id,
+        "batch_id": getattr(history, "batch_id", None),
+        "batch_status": getattr(history, "batch_status", None),
+        "bundle_id": getattr(history, "bundle_id", None),
+        "user_id": history.user_id,
+        "feed_id": history.feed_id,
+        "source_type": history.source_type,
+        "source_key": history.source_key,
+        "content": history.content,
+        "raw_xml": history.raw_xml,
+        "output_xml": output_xml,
+        "input_xml": input_xml,
+        "input_xmls": input_xmls,
+        "media_urls": history.media_urls,
+        "handler_trace": getattr(history, "handler_trace", None),
+        "output_kind": getattr(history, "output_kind", "standard"),
+        "output_order": getattr(history, "output_order", 0),
+        "source_context": source_context,
+        "template_snapshot": template_snapshot,
+        "document_snapshot": document_snapshot,
+        "entry_title": history.entry_title,
+        "entry_link": history.entry_link,
+        "entry_guid": history.entry_guid,
+        "feed_title": history.feed_title,
+        "feed_link": history.feed_link,
+        "platform_name": history.platform_name,
+        "target_session": history.target_session,
+        "status": history.status,
+        "retry_count": history.retry_count,
+        "max_retries": history.max_retries,
+        "fail_reason": history.fail_reason,
+        "created_at": history.created_at.isoformat() if history.created_at else None,
+        "updated_at": history.updated_at.isoformat() if history.updated_at else None,
+        "completed_at": history.completed_at.isoformat()
+        if history.completed_at
+        else None,
+    }
+
+
+def _history_deletion_result_payload(result: Any) -> tuple[int, list[dict[str, Any]]]:
+    """将兼容整数返回值转换为页面可展示的删除报告。"""
+    removed_count = int(result or 0)
+    skipped: list[dict[str, Any]] = []
+    for item in getattr(result, "skipped", ()) or ():
+        if hasattr(item, "as_dict"):
+            skipped.append(item.as_dict())
+        elif isinstance(item, dict):
+            skipped.append(dict(item))
+    return removed_count, skipped
 
 
 def _query_values(name: str) -> list[str]:

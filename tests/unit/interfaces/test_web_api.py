@@ -10,6 +10,16 @@ from astrbot_plugin_rsshub.src.application.dto.subscription_dto import Subscript
 from astrbot_plugin_rsshub.src.application.services.feed_polling_service import (
     FeedPollingResult,
 )
+from astrbot_plugin_rsshub.src.application.services.subscription_card_management_service import (
+    CardTemplateOption,
+)
+from astrbot_plugin_rsshub.src.domain.entities.push_history import (
+    PushHistoryDeletionResult,
+    PushHistoryDeletionSkip,
+)
+from astrbot_plugin_rsshub.src.domain.repositories.delivery_repository import (
+    DeliveryDeletionBlockedError,
+)
 from astrbot_plugin_rsshub.src.infrastructure.config import RsshubPluginConfig
 from astrbot_plugin_rsshub.src.interfaces import web_api
 from astrbot_plugin_rsshub.src.interfaces.web_api import WebApiHandler
@@ -46,6 +56,12 @@ def _handler(
     notification_dispatcher=None,
     sub_repo=None,
     user_repo=None,
+    card_management_service=None,
+    template_repository=None,
+    template_download_service=None,
+    template_management_service=None,
+    subscription_batch_delivery_service=None,
+    delivery_repository=None,
 ):
     return WebApiHandler(
         subscribe_cmd=subscribe_cmd or MagicMock(),
@@ -69,6 +85,12 @@ def _handler(
         route_knowledge_service=route_knowledge_service,
         config=config or MagicMock(),
         raw_config=raw_config,
+        card_management_service=card_management_service,
+        template_repository=template_repository,
+        template_download_service=template_download_service,
+        template_management_service=template_management_service,
+        subscription_batch_delivery_service=subscription_batch_delivery_service,
+        delivery_repository=delivery_repository,
     )
 
 
@@ -353,6 +375,9 @@ async def test_subscriptions_endpoint_uses_dashboard_filters():
                 display_entry_tags=0,
                 style=0,
                 display_media=0,
+                send_card=True,
+                template_id="astrbot_plugin_rsshub_card_juya",
+                card_send_original_content=True,
                 created_at=None,
                 updated_at=None,
             )
@@ -383,6 +408,9 @@ async def test_subscriptions_endpoint_uses_dashboard_filters():
     assert payload["total"] == 1
     assert payload["items"][0]["id"] == 3
     assert payload["items"][0]["feed_title"] == "Pixiv Feed"
+    assert payload["items"][0]["send_card"] is True
+    assert payload["items"][0]["template_id"] == "astrbot_plugin_rsshub_card_juya"
+    assert payload["items"][0]["card_send_original_content"] is True
     sub_repo.list_for_dashboard.assert_awaited_once_with(
         user_ids=["alice", "bob"],
         feed_ids=[12, 15],
@@ -422,45 +450,48 @@ async def test_subscriptions_endpoint_accepts_array_style_filter_params():
 @pytest.mark.asyncio
 async def test_push_history_endpoint_filters_by_user_session_and_status():
     push_history_repo = MagicMock()
-    push_history_repo.get_by_user = AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                id=11,
-                user_id="alice",
-                feed_id=None,
-                source_type="agent",
-                source_key="daily:ai-news",
-                content="hello",
-                raw_xml="<entry><p>Hello</p></entry>",
-                media_urls=["https://example.com/a.jpg"],
-                handler_trace=[
-                    {
-                        "id": "builtin.ai_filter.default",
-                        "name": "ai_filter",
-                        "status": "ok",
-                        "allow": False,
-                        "reason": "广告",
-                    }
-                ],
-                entry_title="日报",
-                entry_link="https://example.com/post",
-                entry_guid="guid-11",
-                feed_title="AI Daily",
-                feed_link="https://example.com/feed",
-                platform_name="aiocqhttp",
-                target_session="default:GroupMessage:1",
-                status="failed",
-                retry_count=1,
-                max_retries=3,
-                fail_reason="boom",
-                created_at=None,
-                updated_at=None,
-                completed_at=None,
-                sub_id=None,
-            )
-        ]
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    id=11,
+                    user_id="alice",
+                    feed_id=None,
+                    source_type="agent",
+                    source_key="daily:ai-news",
+                    content="hello",
+                    raw_xml="<entry><p>Hello</p></entry>",
+                    media_urls=["https://example.com/a.jpg"],
+                    handler_trace=[
+                        {
+                            "id": "builtin.ai_filter.default",
+                            "name": "ai_filter",
+                            "status": "ok",
+                            "allow": False,
+                            "reason": "广告",
+                        }
+                    ],
+                    entry_title="日报",
+                    entry_link="https://example.com/post",
+                    entry_guid="guid-11",
+                    feed_title="AI Daily",
+                    feed_link="https://example.com/feed",
+                    platform_name="aiocqhttp",
+                    target_session="default:GroupMessage:1",
+                    status="failed",
+                    retry_count=1,
+                    max_retries=3,
+                    fail_reason="boom",
+                    created_at=None,
+                    updated_at=None,
+                    completed_at=None,
+                    sub_id=None,
+                )
+            ],
+            total=1,
+            group_total=1,
+        )
     )
-    push_history_repo.count_by_user = AsyncMock(return_value=1)
     handler = WebApiHandler(
         subscribe_cmd=MagicMock(),
         unsubscribe_cmd=MagicMock(),
@@ -494,19 +525,14 @@ async def test_push_history_endpoint_filters_by_user_session_and_status():
     payload = await response.get_json()
     assert payload["ok"] is True
     assert payload["total"] == 1
+    assert payload["group_total"] == 1
     assert payload["items"][0]["raw_xml"] == "<entry><p>Hello</p></entry>"
     assert payload["items"][0]["handler_trace"][0]["name"] == "ai_filter"
     assert payload["items"][0]["fail_reason"] == "boom"
     assert payload["items"][0]["sub_id"] is None
-    push_history_repo.get_by_user.assert_awaited_once_with(
-        user_id="alice",
-        limit=20,
-        offset=0,
-        target_session="default:GroupMessage:1",
-        status="failed",
-        keywords=["https://example.com/feed"],
-    )
-    push_history_repo.count_by_user.assert_awaited_once_with(
+    push_history_repo.get_grouped_page.assert_awaited_once_with(
+        page=1,
+        page_size=20,
         user_id="alice",
         target_session="default:GroupMessage:1",
         status="failed",
@@ -517,37 +543,40 @@ async def test_push_history_endpoint_filters_by_user_session_and_status():
 @pytest.mark.asyncio
 async def test_push_history_endpoint_keeps_empty_fail_reason_empty_for_success():
     push_history_repo = MagicMock()
-    push_history_repo.get_by_user = AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                id=12,
-                user_id="alice",
-                feed_id=1,
-                source_type="feed",
-                source_key=None,
-                content="ok",
-                raw_xml=None,
-                media_urls=None,
-                handler_trace=None,
-                entry_title="成功记录",
-                entry_link="https://example.com/post",
-                entry_guid="guid-12",
-                feed_title="AI Daily",
-                feed_link="https://example.com/feed",
-                platform_name="aiocqhttp",
-                target_session="default:GroupMessage:1",
-                status="success",
-                retry_count=0,
-                max_retries=3,
-                fail_reason=None,
-                created_at=None,
-                updated_at=None,
-                completed_at=None,
-                sub_id=1,
-            )
-        ]
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    id=12,
+                    user_id="alice",
+                    feed_id=1,
+                    source_type="feed",
+                    source_key=None,
+                    content="ok",
+                    raw_xml=None,
+                    media_urls=None,
+                    handler_trace=None,
+                    entry_title="成功记录",
+                    entry_link="https://example.com/post",
+                    entry_guid="guid-12",
+                    feed_title="AI Daily",
+                    feed_link="https://example.com/feed",
+                    platform_name="aiocqhttp",
+                    target_session="default:GroupMessage:1",
+                    status="success",
+                    retry_count=0,
+                    max_retries=3,
+                    fail_reason=None,
+                    created_at=None,
+                    updated_at=None,
+                    completed_at=None,
+                    sub_id=1,
+                )
+            ],
+            total=1,
+            group_total=1,
+        )
     )
-    push_history_repo.count_by_user = AsyncMock(return_value=1)
     handler = WebApiHandler(
         subscribe_cmd=MagicMock(),
         unsubscribe_cmd=MagicMock(),
@@ -582,6 +611,252 @@ async def test_push_history_endpoint_keeps_empty_fail_reason_empty_for_success()
     assert payload["ok"] is True
     assert payload["items"][0]["fail_reason"] is None
     assert payload["items"][0]["sub_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_push_history_endpoint_serializes_batch_output_snapshot():
+    push_history_repo = MagicMock()
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    id=31,
+                    sub_id=None,
+                    batch_id=23,
+                    bundle_id=7,
+                    user_id="alice",
+                    feed_id=None,
+                    source_type="bundle",
+                    source_key="bundle:7",
+                    content="聚合内容",
+                    raw_xml="<rss><item>after</item></rss>",
+                    media_urls=["https://example.com/card.png"],
+                    handler_trace=[{"name": "ai_filter", "status": "ok"}],
+                    output_kind="card",
+                    output_order=0,
+                    source_context={
+                        "template_snapshot": {"id": "card-demo", "version": "1.0.0"},
+                        "document_snapshot": {
+                            "input_document": {
+                                "document": {
+                                    "rss_xml": "<rss><item>before</item></rss>"
+                                }
+                            },
+                            "document": {"rss_xml": "<rss><item>after</item></rss>"},
+                        },
+                        "feeds": [{"id": 1, "position": 0}],
+                    },
+                    entry_title="聚合卡片",
+                    entry_link="https://example.com/bundle",
+                    entry_guid=None,
+                    feed_title="Bundle",
+                    feed_link="https://example.com/one",
+                    platform_name="aiocqhttp",
+                    target_session="default:GroupMessage:1",
+                    status="waiting",
+                    batch_status="pending",
+                    retry_count=0,
+                    max_retries=3,
+                    fail_reason=None,
+                    created_at=None,
+                    updated_at=None,
+                    completed_at=None,
+                )
+            ],
+            total=1,
+            group_total=1,
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history?page=1&page_size=20",
+        method="GET",
+    ):
+        response = await handler.handle_push_history()
+
+    item = (await response.get_json())["items"][0]
+    assert item["batch_id"] == 23
+    assert item["bundle_id"] == 7
+    assert item["output_kind"] == "card"
+    assert item["output_order"] == 0
+    assert item["batch_status"] == "pending"
+    assert item["source_context"]["template_snapshot"]["id"] == "card-demo"
+    assert item["source_context"]["feeds"][0]["position"] == 0
+    assert item["input_xml"] == "<rss><item>before</item></rss>"
+    assert item["output_xml"] == "<rss><item>after</item></rss>"
+
+
+@pytest.mark.asyncio
+async def test_push_history_endpoint_returns_grouped_page_contract_for_large_batch():
+    def build_history(output_order):
+        return SimpleNamespace(
+            id=100 + output_order,
+            sub_id=None,
+            batch_id=77,
+            bundle_id=9,
+            user_id="alice",
+            feed_id=None,
+            source_type="bundle",
+            source_key="bundle:9",
+            content=f"output-{output_order}",
+            raw_xml=None,
+            media_urls=None,
+            handler_trace=None,
+            output_kind="card" if output_order == 0 else "standard",
+            output_order=output_order,
+            source_context={"bundle": {"id": 9}, "feeds": [{"id": 1}, {"id": 2}]},
+            entry_title=f"输出 {output_order}",
+            entry_link="https://example.com/bundle",
+            entry_guid=None,
+            feed_title="Bundle",
+            feed_link="https://example.com/feed",
+            platform_name="aiocqhttp",
+            target_session=(
+                "default:GroupMessage:1"
+                if output_order % 2 == 0
+                else "default:GroupMessage:2"
+            ),
+            status="waiting" if output_order == 0 else "success",
+            batch_status="pending",
+            retry_count=0,
+            max_retries=3,
+            fail_reason=None,
+            created_at=None,
+            updated_at=None,
+            completed_at=None,
+        )
+
+    items = [build_history(output_order) for output_order in range(21)]
+    push_history_repo = MagicMock()
+    push_history_repo.get_grouped_page = AsyncMock(
+        return_value=SimpleNamespace(items=items, total=21, group_total=1)
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history?page=1&page_size=20",
+        method="GET",
+    ):
+        response = await handler.handle_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["total"] == 21
+    assert payload["group_total"] == 1
+    assert len(payload["items"]) == 21
+    assert [item["output_order"] for item in payload["items"]] == list(range(21))
+    push_history_repo.get_grouped_page.assert_awaited_once_with(
+        page=1,
+        page_size=20,
+        user_id=None,
+        target_session=None,
+        status=None,
+        keywords=None,
+    )
+
+
+def test_push_history_serializer_preserves_multiple_subscription_input_xmls() -> None:
+    history = SimpleNamespace(
+        id=32,
+        sub_id=7,
+        batch_id=24,
+        bundle_id=None,
+        user_id="alice",
+        feed_id=3,
+        source_type="feed",
+        source_key="feed:3:sub:7",
+        content="聚合卡片",
+        raw_xml=None,
+        media_urls=None,
+        handler_trace=None,
+        output_kind="card",
+        output_order=0,
+        source_context={
+            "document_snapshot": {
+                "input_entries": [
+                    {"item_key": "one", "raw_xml": "<item>one</item>"},
+                    {"item_key": "two", "raw_xml": "<item>two</item>"},
+                ],
+                "document": {"text": "card", "rss_xml": ""},
+            }
+        },
+        entry_title="卡片",
+        entry_link="https://example.com/feed",
+        entry_guid=None,
+        feed_title="Feed",
+        feed_link="https://example.com/feed",
+        platform_name="test",
+        target_session="test:Group:1",
+        status="waiting",
+        retry_count=0,
+        max_retries=3,
+        fail_reason=None,
+        created_at=None,
+        updated_at=None,
+        completed_at=None,
+    )
+
+    item = web_api._serialize_push_history_item(history)
+
+    assert item["input_xml"] is None
+    assert item["input_xmls"] == [
+        {"item_key": "one", "raw_xml": "<item>one</item>"},
+        {"item_key": "two", "raw_xml": "<item>two</item>"},
+    ]
+    assert item["output_xml"] is None
+
+
+def test_push_history_serializer_does_not_call_legacy_output_input_xml() -> None:
+    history = SimpleNamespace(
+        id=33,
+        sub_id=None,
+        batch_id=25,
+        bundle_id=7,
+        user_id="alice",
+        feed_id=None,
+        source_type="bundle",
+        source_key="bundle:7",
+        content="legacy",
+        raw_xml="<rss><item>after</item></rss>",
+        media_urls=None,
+        handler_trace=None,
+        output_kind="standard",
+        output_order=0,
+        source_context={
+            "document_snapshot": {
+                "document": {"rss_xml": "<rss><item>after</item></rss>"}
+            }
+        },
+        entry_title="legacy",
+        entry_link="https://example.com/bundle",
+        entry_guid=None,
+        feed_title="Bundle",
+        feed_link="https://example.com/feed",
+        platform_name="test",
+        target_session="test:Group:1",
+        status="success",
+        retry_count=0,
+        max_retries=3,
+        fail_reason=None,
+        created_at=None,
+        updated_at=None,
+        completed_at=None,
+    )
+
+    item = web_api._serialize_push_history_item(history)
+
+    assert item["input_xml"] is None
+    assert item["input_xmls"] is None
+    assert item["output_xml"] == "<rss><item>after</item></rss>"
 
 
 @pytest.mark.asyncio
@@ -623,6 +898,46 @@ async def test_delete_push_history_endpoint_supports_batch_delete():
     assert payload["ok"] is True
     assert payload["removed_count"] == 2
     push_history_repo.delete_many.assert_awaited_once_with([11, 12])
+
+
+@pytest.mark.asyncio
+async def test_delete_push_history_endpoint_reports_skipped_pending_batch_rows():
+    push_history_repo = MagicMock()
+    push_history_repo.delete_many = AsyncMock(
+        return_value=PushHistoryDeletionResult(
+            1,
+            (
+                PushHistoryDeletionSkip(
+                    history_id=12,
+                    batch_id=9,
+                    status="waiting",
+                ),
+            ),
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/delete",
+        method="POST",
+        json={"history_ids": [11, 12]},
+    ):
+        response = await handler.handle_delete_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["removed_count"] == 1
+    assert payload["skipped_count"] == 1
+    assert payload["skipped"][0] == {
+        "history_id": 12,
+        "batch_id": 9,
+        "status": "waiting",
+        "reason": "未解决投递批次不能删除，请重试或丢弃批次",
+    }
 
 
 @pytest.mark.asyncio
@@ -730,6 +1045,42 @@ async def test_clear_push_history_endpoint_deletes_all_history_rows():
     assert payload["removed_count"] == 9607
     assert payload["message"] == "已清空 9607 条记录"
     push_history_repo.delete_all.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_clear_push_history_endpoint_reports_preserved_pending_batch_rows():
+    push_history_repo = MagicMock()
+    push_history_repo.delete_all = AsyncMock(
+        return_value=PushHistoryDeletionResult(
+            0,
+            (
+                PushHistoryDeletionSkip(
+                    history_id=19,
+                    batch_id=4,
+                    status="failed",
+                ),
+            ),
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=push_history_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/clear",
+        method="POST",
+        json={},
+    ):
+        response = await handler.handle_clear_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["removed_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert payload["skipped"][0]["batch_id"] == 4
+    assert "跳过 1 条" in payload["message"]
 
 
 @pytest.mark.asyncio
@@ -1633,6 +1984,89 @@ async def test_delete_feeds_endpoint_ok_when_only_related_data_was_removed():
 
 
 @pytest.mark.asyncio
+async def test_delete_feeds_endpoint_uses_guarded_subscription_deletion():
+    feed_repo = MagicMock()
+    feed_repo.delete_many = AsyncMock(return_value=1)
+    sub_repo = MagicMock()
+    sub_repo.list_for_dashboard = AsyncMock(
+        return_value=[
+            SimpleNamespace(id=21, feed_id=9),
+            SimpleNamespace(id=22, feed_id=9),
+        ]
+    )
+    sub_repo.delete_all_by_feed_ids = AsyncMock()
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_feed_ids = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(return_value=2)
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+    handler._feed_repo = feed_repo
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/feeds/delete",
+        method="POST",
+        json={"feed_id": 9},
+    ):
+        response = await handler.handle_delete_feeds()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["deleted_subscriptions"] == 2
+    delivery_repository.delete_subscription_owners.assert_awaited_once_with([21, 22])
+    sub_repo.delete_all_by_feed_ids.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_feeds_endpoint_reports_blockers_without_mutating_feed():
+    feed_repo = MagicMock()
+    feed_repo.delete_many = AsyncMock()
+    sub_repo = MagicMock()
+    sub_repo.list_for_dashboard = AsyncMock(
+        return_value=[SimpleNamespace(id=21, feed_id=9)]
+    )
+    sub_repo.delete_all_by_feed_ids = AsyncMock()
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_feed_ids = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(
+        side_effect=DeliveryDeletionBlockedError(
+            {"subscription:21:claimed_inbox": 1},
+            owner_blockers={"21": {"claimed_inbox": 1}},
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+    handler._feed_repo = feed_repo
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/feeds/delete",
+        method="POST",
+        json={"feed_id": 9, "delete_push_history": True},
+    ):
+        response = await handler.handle_delete_feeds()
+
+    payload = await response.get_json()
+    assert payload["ok"] is False
+    assert payload["blocked_feeds"] == [
+        {"feed_id": 9, "blockers": {"21": {"claimed_inbox": 1}}}
+    ]
+    feed_repo.delete_many.assert_not_awaited()
+    push_history_repo.delete_by_feed_ids.assert_not_awaited()
+    sub_repo.delete_all_by_feed_ids.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delete_user_endpoint_supports_batch_delete():
     sub_repo = MagicMock()
     sub_repo.delete_all_by_user = AsyncMock(return_value=1)
@@ -1740,6 +2174,130 @@ async def test_delete_user_endpoint_cleans_orphan_user_resources():
     assert payload["deleted_subscriptions"] == 1
     assert payload["message"] == "已清理用户 orphan 的关联数据"
     push_history_repo.delete_by_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_endpoint_uses_guarded_subscription_deletion():
+    sub_repo = MagicMock()
+    sub_repo.get_by_user = AsyncMock(
+        return_value=[SimpleNamespace(id=11, user_id="alice")]
+    )
+    sub_repo.delete_all_by_user = AsyncMock()
+    user_repo = MagicMock()
+    user_repo.delete = AsyncMock(return_value=True)
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_user = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(return_value=1)
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        user_repo=user_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/users/delete",
+        method="POST",
+        json={"user_id": "alice"},
+    ):
+        response = await handler.handle_delete_user()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["deleted_subscriptions"] == 1
+    delivery_repository.delete_subscription_owners.assert_awaited_once_with([11])
+    sub_repo.delete_all_by_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_endpoint_reports_blockers_without_mutating_target():
+    sub_repo = MagicMock()
+    sub_repo.get_by_user = AsyncMock(
+        return_value=[SimpleNamespace(id=11, user_id="alice")]
+    )
+    sub_repo.delete_all_by_user = AsyncMock()
+    user_repo = MagicMock()
+    user_repo.delete = AsyncMock()
+    push_history_repo = MagicMock()
+    push_history_repo.delete_by_user = AsyncMock()
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(
+        side_effect=DeliveryDeletionBlockedError(
+            {"subscription:11:unclaimed_inbox": 1},
+            owner_blockers={"11": {"unclaimed_inbox": 1}},
+        )
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        user_repo=user_repo,
+        push_history_repo=push_history_repo,
+        delivery_repository=delivery_repository,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/users/delete",
+        method="POST",
+        json={"user_id": "alice", "delete_push_history": True},
+    ):
+        response = await handler.handle_delete_user()
+
+    payload = await response.get_json()
+    assert payload["ok"] is False
+    assert payload["blocked_users"] == [
+        {"user_id": "alice", "blockers": {"11": {"unclaimed_inbox": 1}}}
+    ]
+    user_repo.delete.assert_not_awaited()
+    push_history_repo.delete_by_user.assert_not_awaited()
+    sub_repo.delete_all_by_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_endpoint_broadcasts_successful_batch_members_when_blocked():
+    sub_repo = MagicMock()
+    sub_repo.get_by_user = AsyncMock(
+        side_effect=[
+            [SimpleNamespace(id=11, user_id="blocked")],
+            [SimpleNamespace(id=12, user_id="ok")],
+        ]
+    )
+    user_repo = MagicMock()
+    user_repo.delete = AsyncMock(return_value=True)
+    delivery_repository = MagicMock()
+    delivery_repository.delete_subscription_owners = AsyncMock(
+        side_effect=[
+            DeliveryDeletionBlockedError(
+                {"subscription:11:unclaimed_inbox": 1},
+                owner_blockers={"11": {"unclaimed_inbox": 1}},
+            ),
+            1,
+        ]
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        sub_repo=sub_repo,
+        user_repo=user_repo,
+        delivery_repository=delivery_repository,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/users/delete",
+        method="POST",
+        json={"user_ids": ["blocked", "ok"]},
+    ):
+        response = await handler.handle_delete_user()
+
+    payload = await response.get_json()
+    assert payload["ok"] is False
+    assert payload["removed_count"] == 1
+    assert payload["deleted_subscriptions"] == 1
+    assert handler._change_counter == 1
+    user_repo.delete.assert_awaited_once_with("ok")
 
 
 @pytest.mark.asyncio
@@ -1901,9 +2459,232 @@ async def test_update_subscription_passes_real_user_id():
     command.execute.assert_awaited_once_with(
         sub_id=12,
         user_id="alice",
+        allow_template_selection=True,
         handlers_mode="override",
         notify=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_template_options_endpoint_uses_owned_subscription_candidates():
+    service = AsyncMock()
+    service.list_template_options.return_value = [
+        CardTemplateOption(
+            id="astrbot_plugin_rsshub_card_juya",
+            name="Juya",
+            version="1.0.0",
+            author="tester",
+            description="desc",
+            repository="https://example.com/template",
+        )
+    ]
+    handler = _handler(
+        polling_service=MagicMock(),
+        card_management_service=service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/options?"
+        "owner_type=subscription&owner_id=7&user_id=alice",
+        method="GET",
+    ):
+        response = await handler.handle_template_options()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["items"][0]["id"] == "astrbot_plugin_rsshub_card_juya"
+    service.list_template_options.assert_awaited_once_with(
+        subscription_id=7,
+        user_id="alice",
+    )
+
+
+@pytest.mark.asyncio
+async def test_template_preview_endpoint_returns_base64_png():
+    service = AsyncMock()
+    service.preview.return_value = SimpleNamespace(
+        png=b"png-bytes",
+        entry_count=2,
+        template={
+            "id": "astrbot_plugin_rsshub_card_juya",
+            "name": "Juya",
+            "version": "1.0.0",
+            "author": "tester",
+        },
+        source_summary={
+            "feed_id": 3,
+            "feed_title": "Juya AI",
+            "entry_count": 2,
+        },
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        card_management_service=service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/preview",
+        method="POST",
+        json={
+            "owner_type": "subscription",
+            "owner_id": 7,
+            "user_id": "alice",
+            "template_id": "astrbot_plugin_rsshub_card_juya",
+        },
+    ):
+        response = await handler.handle_template_preview()
+
+    payload = await response.get_json()
+    assert payload == {
+        "ok": True,
+        "png_base64": "cG5nLWJ5dGVz",
+        "entry_count": 2,
+        "template": {
+            "id": "astrbot_plugin_rsshub_card_juya",
+            "name": "Juya",
+            "version": "1.0.0",
+            "author": "tester",
+        },
+        "source_summary": {
+            "feed_id": 3,
+            "feed_title": "Juya AI",
+            "entry_count": 2,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_template_preview_endpoint_returns_template_and_source_summary():
+    service = AsyncMock()
+    service.preview.return_value = SimpleNamespace(
+        png=b"png-bytes",
+        entry_count=2,
+        template={
+            "id": "astrbot_plugin_rsshub_card_juya",
+            "name": "Juya",
+            "version": "1.0.0",
+            "author": "tester",
+        },
+        source_summary={
+            "feed_id": 3,
+            "feed_title": "Juya AI",
+            "entry_count": 2,
+        },
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        card_management_service=service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/preview",
+        method="POST",
+        json={
+            "owner_type": "subscription",
+            "owner_id": 7,
+            "user_id": "alice",
+            "template_id": "astrbot_plugin_rsshub_card_juya",
+        },
+    ):
+        response = await handler.handle_template_preview()
+
+    payload = await response.get_json()
+    assert payload["template"]["id"] == "astrbot_plugin_rsshub_card_juya"
+    assert payload["source_summary"] == {
+        "feed_id": 3,
+        "feed_title": "Juya AI",
+        "entry_count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_template_install_rejects_string_http_confirmation():
+    download_service = AsyncMock()
+    handler = _handler(
+        polling_service=MagicMock(),
+        template_repository=MagicMock(),
+        template_download_service=download_service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/templates/install",
+        method="POST",
+        json={
+            "url": "http://example.com/template.zip",
+            "allow_insecure_http": "false",
+        },
+    ):
+        response = await handler.handle_template_install()
+
+    payload = await response.get_json()
+    assert payload == {
+        "ok": False,
+        "error": "allow_insecure_http 必须是 boolean",
+    }
+    download_service.install_from_url.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retry_push_history_endpoint_uses_subscription_batch_path():
+    history_repo = MagicMock()
+    history_repo.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(id=12, batch_id=5, sub_id=7)
+    )
+    batch_service = AsyncMock()
+    batch_service.retry.return_value = SimpleNamespace(
+        batch_id=5,
+        ready_to_confirm=True,
+    )
+    dispatcher = AsyncMock()
+    handler = _handler(
+        polling_service=MagicMock(),
+        push_history_repo=history_repo,
+        notification_dispatcher=dispatcher,
+        subscription_batch_delivery_service=batch_service,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/push-history/retry",
+        method="POST",
+        json={"history_id": 12},
+    ):
+        response = await handler.handle_retry_push_history()
+
+    payload = await response.get_json()
+    assert payload["ok"] is True
+    assert payload["batch_id"] == 5
+    batch_service.retry.assert_awaited_once_with(7)
+    dispatcher.retry_push_history_once.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_discard_delivery_batch_endpoint_uses_transactional_repository():
+    delivery_repo = AsyncMock()
+    delivery_repo.discard_batch.return_value = SimpleNamespace(
+        id=5,
+        status="discarded",
+    )
+    handler = _handler(
+        polling_service=MagicMock(),
+        delivery_repository=delivery_repo,
+    )
+
+    app = Quart(__name__)
+    async with app.test_request_context(
+        "/astrbot_plugin_rsshub/delivery-batches/discard",
+        method="POST",
+        json={"batch_id": 5, "reason": "用户确认"},
+    ):
+        response = await handler.handle_discard_delivery_batch()
+
+    payload = await response.get_json()
+    assert payload == {"ok": True, "batch_id": 5, "status": "discarded"}
+    delivery_repo.discard_batch.assert_awaited_once_with(5, reason="用户确认")
 
 
 @pytest.mark.asyncio

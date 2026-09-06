@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from astrbot_plugin_rsshub.src.application.services.feed_polling_service import (
     FeedPollingResult,
 )
+from astrbot_plugin_rsshub.src.domain.entities.bundle import Bundle
 from astrbot_plugin_rsshub.src.infrastructure.persistence.models import SubORM
 from astrbot_plugin_rsshub.src.infrastructure.schedule.rss_scheduler import RSSScheduler
 
@@ -121,13 +123,17 @@ async def test_scheduler_groups_due_subscriptions_by_feed_and_triggers_polling(
         "failed": 0,
         "skipped": 0,
     }
+    card_delivery_service = AsyncMock()
 
     scheduler = RSSScheduler(
         feed_polling_service=polling_service,
         notification_dispatcher=dispatcher,
+        subscription_batch_delivery_service=card_delivery_service,
         default_interval=10,
     )
     await scheduler.run_periodic_task()
+
+    card_delivery_service.retry_active_batches.assert_awaited_once_with()
 
     calls = polling_service.poll_feed_group.await_args_list
     assert len(calls) == 2
@@ -300,3 +306,91 @@ async def test_scheduler_cleanup_uses_configured_retention_days():
     await scheduler._cleanup_old_records()
 
     dispatcher.cleanup_old_records.assert_awaited_once_with(days=7)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_collects_due_bundles_before_retry_and_keeps_rolling_schedule(
+    monkeypatch,
+):
+    fake_db = _FakeDatabase([])
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.schedule.rss_scheduler.get_database",
+        lambda: fake_db,
+    )
+    previous = datetime.now(timezone.utc) - timedelta(minutes=31)
+    bundle = Bundle(
+        id=7,
+        user_id="user-1",
+        name="Daily",
+        target_sessions=["test:Group:1"],
+        interval=30,
+        state=1,
+        next_check_time=previous,
+    )
+    events: list[str] = []
+
+    async def collect(bundle_id: int) -> None:
+        assert bundle_id == 7
+        events.append("collect")
+
+    async def retry() -> None:
+        events.append("retry")
+        raise RuntimeError("send is still blocked")
+
+    bundle_repository = MagicMock()
+    bundle_repository.list_due = AsyncMock(return_value=[bundle])
+
+    async def update_next_check_time(bundle_id, next_check_time):
+        assert bundle_id == bundle.id
+        assert next_check_time == previous + timedelta(minutes=60)
+        events.append("update_next_check_time")
+
+    bundle_repository.update_next_check_time = AsyncMock(
+        side_effect=update_next_check_time
+    )
+    scheduler = RSSScheduler(
+        feed_polling_service=AsyncMock(),
+        bundle_repository=bundle_repository,
+        bundle_collection_service=SimpleNamespace(collect_bundle=collect),
+        bundle_batch_delivery_service=SimpleNamespace(
+            retry_active_batches=retry,
+        ),
+    )
+
+    await scheduler.run_periodic_task()
+
+    assert events == ["collect", "update_next_check_time", "retry"]
+    assert bundle.next_check_time == previous + timedelta(minutes=60)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_does_not_collect_or_reschedule_disabled_bundle(monkeypatch):
+    fake_db = _FakeDatabase([])
+    monkeypatch.setattr(
+        "astrbot_plugin_rsshub.src.infrastructure.schedule.rss_scheduler.get_database",
+        lambda: fake_db,
+    )
+    bundle = Bundle(
+        id=8,
+        user_id="user-1",
+        name="Disabled",
+        target_sessions=["test:Group:1"],
+        interval=30,
+        state=0,
+    )
+    bundle_repository = MagicMock()
+    bundle_repository.list_due = AsyncMock(return_value=[bundle])
+    bundle_repository.update_next_check_time = AsyncMock()
+    collection = SimpleNamespace(collect_bundle=AsyncMock())
+    delivery = SimpleNamespace(retry_active_batches=AsyncMock())
+    scheduler = RSSScheduler(
+        feed_polling_service=AsyncMock(),
+        bundle_repository=bundle_repository,
+        bundle_collection_service=collection,
+        bundle_batch_delivery_service=delivery,
+    )
+
+    await scheduler.run_periodic_task()
+
+    collection.collect_bundle.assert_not_awaited()
+    bundle_repository.update_next_check_time.assert_not_awaited()

@@ -22,10 +22,18 @@ from ..utils import get_logger
 from ..utils.lock import locked
 
 if TYPE_CHECKING:
+    from ...application.services.bundle_batch_delivery_service import (
+        BundleBatchDeliveryService,
+    )
+    from ...application.services.bundle_collection_service import (
+        BundleCollectionService,
+    )
     from ...application.services.feed_polling_service import FeedPollingService
     from ...application.services.notification_dispatcher import NotificationDispatcher
+    from ...domain.entities.bundle import Bundle
     from ...domain.entities.feed import Feed
     from ...domain.entities.subscription import Subscription
+    from ...domain.repositories.bundle_repository import BundleRepository
 
 logger = get_logger()
 
@@ -150,6 +158,10 @@ class RSSScheduler:
         feed_polling_service: FeedPollingService | None = None,
         notification_dispatcher: NotificationDispatcher | None = None,
         notification_service: NotificationService | None = None,
+        subscription_batch_delivery_service: Any | None = None,
+        bundle_repository: BundleRepository | None = None,
+        bundle_collection_service: BundleCollectionService | None = None,
+        bundle_batch_delivery_service: BundleBatchDeliveryService | None = None,
         default_interval: int = 10,
         history_retention_days: int = 30,
         **_: Any,
@@ -157,6 +169,10 @@ class RSSScheduler:
         self._feed_polling_service = feed_polling_service
         self._notification_dispatcher = notification_dispatcher
         self._legacy_notification_service = notification_service
+        self._subscription_batch_delivery_service = subscription_batch_delivery_service
+        self._bundle_repository = bundle_repository
+        self._bundle_collection_service = bundle_collection_service
+        self._bundle_batch_delivery_service = bundle_batch_delivery_service
         self._stats = SchedulerStats()
         self._running = False
         self._bg_task: asyncio.Task | None = None
@@ -191,14 +207,17 @@ class RSSScheduler:
         if now.minute == 0:
             await self._cleanup_old_records()
 
+        await self._process_due_bundles(now)
+        await self._retry_subscription_batches()
+        await self._retry_bundle_batches()
         await self._dispatch_pending_retries()
 
         try:
             due_by_feed = await self._load_due_subscriptions(now)
             for feed_id, due_subs in due_by_feed.items():
                 await self._process_feed_group(feed_id, due_subs)
-        except Exception as ex:
-            logger.error("执行定时任务失败: %s", ex, exc_info=True)
+        except Exception:
+            logger.exception("执行定时任务失败")
 
     async def _dispatch_pending_retries(self) -> None:
         if self._notification_dispatcher is None:
@@ -219,7 +238,86 @@ class RSSScheduler:
             if _is_database_unavailable_error(e):
                 logger.warning("数据库未初始化，跳过重试推送")
                 return
-            logger.error("处理重试推送失败: %s", e, exc_info=True)
+            logger.exception("处理重试推送失败")
+
+    async def _retry_subscription_batches(self) -> None:
+        if self._subscription_batch_delivery_service is None:
+            return
+        try:
+            await self._subscription_batch_delivery_service.retry_active_batches()
+        except Exception as exc:
+            if _is_database_unavailable_error(exc):
+                logger.warning("数据库未初始化，跳过卡片 Subscription 批次重试")
+                return
+            logger.exception("处理卡片 Subscription 批次重试失败")
+
+    async def _retry_bundle_batches(self) -> None:
+        if self._bundle_batch_delivery_service is None:
+            return
+        try:
+            await self._bundle_batch_delivery_service.retry_active_batches()
+        except Exception as exc:
+            if _is_database_unavailable_error(exc):
+                logger.warning("数据库未初始化，跳过 Bundle 批次重试")
+                return
+            logger.exception("处理 Bundle 批次重试失败")
+
+    async def _process_due_bundles(self, now: datetime) -> None:
+        if self._bundle_repository is None or self._bundle_collection_service is None:
+            return
+        try:
+            due_bundles = await self._bundle_repository.list_due(now)
+        except Exception as exc:
+            if _is_database_unavailable_error(exc):
+                logger.warning("数据库未初始化，跳过 Bundle 到期采集")
+                return
+            logger.exception("加载 Bundle 到期列表失败")
+            return
+
+        for bundle in due_bundles:
+            if bundle.id is None or bundle.state != 1:
+                continue
+            try:
+                await self._bundle_collection_service.collect_bundle(bundle.id)
+            except Exception as exc:
+                if _is_database_unavailable_error(exc):
+                    logger.warning("数据库未初始化，跳过 Bundle 采集: %s", bundle.id)
+                else:
+                    logger.exception("Bundle 定时采集失败: bundle_id=%s", bundle.id)
+            try:
+                await self._update_bundle_next_check_time(bundle, now)
+            except Exception as exc:
+                if _is_database_unavailable_error(exc):
+                    logger.warning("数据库未初始化，跳过 Bundle 下次检查时间更新")
+                else:
+                    logger.exception(
+                        "Bundle 下次检查时间更新失败: bundle_id=%s",
+                        bundle.id,
+                    )
+
+    async def _update_bundle_next_check_time(
+        self,
+        bundle: Bundle,
+        now: datetime,
+    ) -> None:
+        if self._bundle_repository is None or bundle.id is None:
+            return
+        interval = timedelta(minutes=self._resolve_interval(bundle.interval))
+        previous = bundle.next_check_time
+        if previous is None:
+            next_check = now + interval
+        else:
+            if previous.tzinfo is None:
+                previous = previous.replace(tzinfo=timezone.utc)
+            else:
+                previous = previous.astimezone(timezone.utc)
+            if previous > now:
+                next_check = previous
+            else:
+                elapsed_intervals = (now - previous) // interval + 1
+                next_check = previous + interval * elapsed_intervals
+        bundle.next_check_time = next_check
+        await self._bundle_repository.update_next_check_time(bundle.id, next_check)
 
     async def _cleanup_old_records(self) -> None:
         """清理指定天数前的推送历史记录"""
@@ -240,7 +338,7 @@ class RSSScheduler:
             if _is_database_unavailable_error(e):
                 logger.warning("数据库未初始化，跳过清理推送历史记录")
                 return
-            logger.error("清理推送历史记录失败: %s", e, exc_info=True)
+            logger.exception("清理推送历史记录失败")
 
     async def _load_due_subscriptions(
         self,
@@ -304,14 +402,12 @@ class RSSScheduler:
                 notify_new_entries=True,
             )
             self._record_polling_result(result)
-        except Exception as ex:
+        except Exception:
             self._stats.failed()
-            logger.error(
-                "Feed 定时轮询失败: feed_id=%s, subs=%s, err=%s",
+            logger.exception(
+                "Feed 定时轮询失败: feed_id=%s, subs=%s",
                 feed_id,
                 [sub.id for sub in due_subs],
-                ex,
-                exc_info=True,
             )
         finally:
             await self._update_next_check_times(due_subs)

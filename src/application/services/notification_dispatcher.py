@@ -434,6 +434,57 @@ class NotificationDispatcher:
             ),
         )
 
+    async def prepare_subscription_entry(
+        self,
+        *,
+        subscription: Any,
+        user: Any,
+        entry: EntryContentContext,
+        handler_trace: list[dict[str, Any]] | None = None,
+    ) -> PreparedSubscriptionDispatch:
+        """解析一条已运行 handler 的稳定 entry，不创建或发送历史。"""
+        options = self._resolve_effective_push_options(subscription, user)
+        content = await self._format_effective_entry_content(
+            fallback_content=entry.content,
+            raw_entry=entry,
+            entry_title=entry.title,
+            entry_link=entry.link,
+            feed_title=entry.feed_title,
+            feed_link=entry.feed_link,
+            options=options,
+        )
+        send_mode = self._resolve_send_mode(subscription, user)
+        media_items = list(entry.media_items) if options.display_media else None
+        media_urls = list(entry.media_urls) if options.display_media else None
+        layout = list(entry.layout) if options.display_media and entry.layout else None
+        if send_mode == SEND_MODE_LINK_ONLY:
+            content = self._build_link_only_content(
+                entry_title=entry.title,
+                entry_link=entry.link,
+            )
+            media_items = None
+            media_urls = None
+            layout = None
+        layout = self._limit_original_layout_text(
+            layout,
+            style=options.style,
+            length_limit=options.length_limit,
+        )
+        return PreparedSubscriptionDispatch(
+            subscription=subscription,
+            processed_entry=entry,
+            handler_trace=handler_trace,
+            effective_title=entry.title,
+            effective_link=entry.link,
+            effective_content=content,
+            effective_send_mode=send_mode,
+            effective_style=options.style,
+            effective_media_urls=media_urls,
+            effective_media_items=media_items,
+            effective_layout=layout,
+            persisted_media_urls=([url for _kind, url in (media_items or [])] or None),
+        )
+
     @staticmethod
     def _resolve_option(
         key: str,
@@ -1455,6 +1506,12 @@ class NotificationDispatcher:
         history = await self._push_history_repo.get_by_id(history_id)
         if history is None:
             return {"ok": False, "error": "Push history not found"}
+        if history.batch_id is not None:
+            return {
+                "ok": False,
+                "error": "Batch output must be retried through its delivery batch",
+                "history": history,
+            }
 
         history.content = strip_appended_media_links_from_text(
             history.content,

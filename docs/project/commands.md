@@ -122,6 +122,12 @@ URL 和 ID 兼容是为了迁移旧用法，同时满足批量清理。
 
 ## 订阅链的完整分层
 
+## Bundle 命令链
+
+`/bundle` 与 `/聚合订阅` 共享同一组子命令：`create`、`list`、`show`、`add`、`remove`、`move`、`set`、`state`、`test`、`retry`、`discard`、`delete`。入口只负责解析引号名称和整段参数，实际 owner 校验、模板匹配、成员 position、删除保护和可靠批次操作由 `BundleCommand` 与应用服务完成。`test` 只做管理员只读抓取；`retry`/`discard` 是高风险操作，不注册为 LLM tool。
+
+Bundle 卡片开启后固定使用 `template_id` 与 `card_send_original_content` 的应用层校验；聊天命令可以传入 `template_id`，但不能绕过模板存在、owner 和全部成员 Feed 匹配校验，模板候选和预览走 Plugin Pages/Web API。
+
 1. `main.py`：命令装饰器和参数入口
 2. `src/interfaces/handlers/*.py`：命令解析与对话语义
 3. `application/commands/*.py`：业务编排

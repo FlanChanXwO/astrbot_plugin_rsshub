@@ -73,6 +73,24 @@ flowchart TD
 
 ## push history 生命周期
 
+### 卡片 Subscription 可靠批次
+
+`send_card=true` 的 Subscription 不再复用普通逐条 history 创建路径。一次 Feed 发现的完整新增集合会先写入 owner 私有 inbox，再由 `SubscriptionBatchDeliveryService`：
+
+1. 认领最旧的完整 discovery；
+2. 对每个 entry 运行当前生效的 handlers；
+3. 固化 handler 后 entries、handler trace、模板包和生效配置；
+4. 创建一条 card history，并在 `card_send_original_content=true` 时按 `history_entry_limit` 创建逐条 standard histories；
+5. 通过公共输出编排器严格按 card → standard 顺序发送。
+
+card 失败时 standard 保持 `waiting`，不会回退成普通推送。card 成功后，各 standard 输出独立成功或失败；重试只执行未完成输出，并复用已固化模板、文档、排版、媒体和卡片 HTML/PNG 产物，不重新运行 handlers。
+
+批次 history 由批次服务按现有 scheduler 周期恢复，不进入普通 history 重试查询，避免 card 被错误当成文本重发。只有全部配置输出达到 `success|skipped` 才确认批次并消费已认领 inbox；后续 discovery 在此期间继续进入未认领 backlog。
+
+### Bundle 可靠批次
+
+Bundle 在 `BundleBatchDeliveryService` 中先把多个成员的 inbox 构造成 RSS 2.0 文档，再运行 Bundle 文档级 handlers，最后固化 document/template/send 快照并创建每个 target 的输出历史。`BundleOutputExecutor` 与 Subscription 共用 `OutputOrchestrator` 的 card 前置门：card 失败或停止时同 target 的 standard 保持 `waiting`，其他 target 仍可独立执行。人工 retry/discard 只作用于当前 pending batch，已完成输出不会重发，未认领 backlog 不会被 discard 消费。
+
 ### 正常 feed 分发
 
 每条订阅分发都会先创建一条 `pending` history，然后根据结果更新：

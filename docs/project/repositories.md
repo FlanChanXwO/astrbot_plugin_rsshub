@@ -8,6 +8,8 @@
 
 - `FeedRepositoryImpl`
 - `SubscriptionRepositoryImpl`
+- `BundleRepositoryImpl`
+- `DeliveryRepositoryImpl`
 - `UserRepositoryImpl`
 - `PushHistoryRepositoryImpl`
 
@@ -41,6 +43,26 @@
 ### `delete_many(feed_ids)`
 
 删除一批 Feed。这个方法只负责 Feed 表自身删除；Dashboard 删除 Feed 的级联订阅和可选推送历史清理由 Web API 编排对应仓储完成。
+
+## Bundle 与可靠投递仓储
+
+`BundleRepositoryImpl` 负责 Bundle owner 和有序 `BundleFeed` 成员：
+
+- `get_all_active()` / `list_due()` 只返回启用且满足调度条件的 Bundle；
+- `list_members()` 始终按 `position` 返回成员；
+- `add_member()`、移除、替换和重排在同一写事务中维护连续 position；
+- 移除成员、删除 Bundle 前委托 `DeliveryRepositoryImpl` 检查未认领/已认领 inbox 和 pending batch。
+
+`DeliveryRepositoryImpl` 是 inbox、batch 和批次 output manifest 的持久化边界，并与 `PushHistoryRepositoryImpl` 协作保存输出 history：
+
+- `store_subscription_discovery()` 在一个事务中完成卡片 Subscription 的多 owner 扇出与 Feed 水位提交；
+- `store_bundle_discovery()` 在一个事务中完成成员 inbox、水位和检查状态提交；
+- `claim_batch()` 原子认领输入并创建完整 output manifest；
+- `confirm_batch()` 只接受所有输出为 `success|skipped`，然后消费本批 inbox；
+- `discard_batch()` 原子标记未完成 history、结束批次并消费已认领输入；
+- `get_pending_batch()`、`reconcile_batch()` 保证重试复用原快照，而不是重新运行 handler 或读取新模板。
+
+数据库唯一键和 partial unique index 负责跨进程的 owner/batch 并发约束；应用层锁只负责减少同一进程内的重复工作。
 
 ## Subscription 仓储
 

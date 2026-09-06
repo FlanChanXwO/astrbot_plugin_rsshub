@@ -94,6 +94,9 @@ class GetSubscriptionsQuery:
                     target_session=sub.target_session,
                     platform_name=sub.platform_name,
                     state=sub.state,
+                    send_card=sub.send_card,
+                    template_id=sub.template_id,
+                    card_send_original_content=sub.card_send_original_content,
                     created_at=sub.created_at,
                     updated_at=sub.updated_at,
                 )

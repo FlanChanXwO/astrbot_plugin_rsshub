@@ -1,0 +1,10 @@
+id: astrbot_plugin_rsshub_card_juya
+name: Juya AI 日报
+version: 1.0.0
+author: FlanChanXwO
+description: 适用于 RSSHub Juya AI 日报的单 Feed 卡片模板
+repository: https://github.com/FlanChanXwO/astrbot_plugin_rsshub
+targets:
+  - feed
+feed_patterns:
+  - rsshub\.app/juya/ai$

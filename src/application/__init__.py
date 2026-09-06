@@ -5,7 +5,14 @@ from .commands import (
     UnsubscribeFeedCommand,
     UpdateSubscriptionCommand,
 )
-from .dto import CommandResult, FeedDTO, ItemDTO, SubscriptionDTO
+from .dto import (
+    BundleDTO,
+    BundleMemberDTO,
+    CommandResult,
+    FeedDTO,
+    ItemDTO,
+    SubscriptionDTO,
+)
 from .queries import (
     FeedItemsResult,
     FeedListResult,
@@ -24,28 +31,25 @@ from .services import (
 )
 
 __all__ = [
-    # Commands
-    "SubscribeFeedCommand",
-    "UnsubscribeFeedCommand",
-    "UpdateSubscriptionCommand",
-    # Queries
-    "GetFeedListQuery",
-    "GetFeedItemsQuery",
-    "GetSubscriptionsQuery",
-    "SearchFeedsQuery",
-    # Query Results
-    "FeedListResult",
-    "FeedItemsResult",
-    "SubscriptionsResult",
-    "SearchFeedsResult",
-    # DTOs
+    "AgentXmlPushService",
+    "BundleDTO",
+    "BundleMemberDTO",
     "CommandResult",
     "FeedDTO",
-    "ItemDTO",
-    "SubscriptionDTO",
-    # Services
-    "AgentXmlPushService",
+    "FeedItemsResult",
+    "FeedListResult",
     "FeedPollingResult",
     "FeedPollingService",
+    "GetFeedItemsQuery",
+    "GetFeedListQuery",
+    "GetSubscriptionsQuery",
+    "ItemDTO",
     "NotificationDispatcher",
+    "SearchFeedsQuery",
+    "SearchFeedsResult",
+    "SubscribeFeedCommand",
+    "SubscriptionDTO",
+    "SubscriptionsResult",
+    "UnsubscribeFeedCommand",
+    "UpdateSubscriptionCommand",
 ]

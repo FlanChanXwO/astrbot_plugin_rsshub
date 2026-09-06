@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import registry
 from sqlmodel import SQLModel
@@ -36,10 +37,17 @@ logger = get_logger()
 _plugin_registry = registry()
 
 
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    """为每个 SQLite 连接启用已声明的外键约束。"""
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
+
+
 class RSSHubBaseModel(SQLModel, registry=_plugin_registry):
     """插件基础模型，共享注册表。"""
-
-    pass
 
 
 class DatabaseManager:
@@ -82,20 +90,32 @@ class DatabaseManager:
             f"sqlite+aiosqlite:///{db_path}",
             echo=False,
         )
+        event.listen(
+            self._engine.sync_engine,
+            "connect",
+            _enable_sqlite_foreign_keys,
+        )
         self._session_maker = async_sessionmaker(
             self._engine,
             class_=AsyncSession,
             expire_on_commit=False,
         )
 
-        # 创建表（如果不存在）并运行迁移
-        async with self._engine.begin() as conn:
-            await conn.run_sync(RSSHubBaseModel.metadata.create_all)
-            await run_migrations(conn)
-            await cleanup_legacy_translation_tables(conn)
-            await ensure_profile_schema(conn)
-            await ensure_push_history_schema(conn)
-            await ensure_user_rows(conn)
+        # 创建表（如果不存在）并运行迁移；失败时恢复为可重试状态。
+        try:
+            async with self._engine.begin() as conn:
+                await conn.run_sync(RSSHubBaseModel.metadata.create_all)
+                await run_migrations(conn)
+                await cleanup_legacy_translation_tables(conn)
+                await ensure_profile_schema(conn)
+                await ensure_push_history_schema(conn)
+                await ensure_user_rows(conn)
+        except BaseException:
+            await self._engine.dispose()
+            self._engine = None
+            self._session_maker = None
+            self._db_path = None
+            raise
 
         logger.info("RSS 数据库初始化完成: %s", db_path)
 

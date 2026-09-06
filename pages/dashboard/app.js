@@ -18,6 +18,10 @@ ready()
       if (!changed) return;
       if (store.activeTab === 'overview') {
         store.loadOverview();
+      } else if (store.activeTab === 'bundles') {
+        store.loadBundles(false);
+      } else if (store.activeTab === 'templates') {
+        store.loadTemplates();
       } else {
         store.loadData(false);
       }

@@ -5,12 +5,52 @@
 不包含任何 ORM 或持久化逻辑。
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
 MAX_FAIL_REASON_LENGTH = 512
+
+
+@dataclass(frozen=True, slots=True)
+class PushHistoryDeletionSkip:
+    """一条因可靠批次尚未解决而被保留的历史记录。"""
+
+    history_id: int
+    batch_id: int
+    status: str | None
+    reason: str = "未解决投递批次不能删除，请重试或丢弃批次"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "history_id": self.history_id,
+            "batch_id": self.batch_id,
+            "status": self.status,
+            "reason": self.reason,
+        }
+
+
+class PushHistoryDeletionResult(int):
+    """兼容旧整数返回值，同时携带批量删除的跳过明细。"""
+
+    def __new__(
+        cls,
+        removed_count: int,
+        skipped: tuple[PushHistoryDeletionSkip, ...] = (),
+    ) -> Self:
+        result = int.__new__(cls, removed_count)
+        result.skipped = tuple(skipped)
+        return result
+
+    @property
+    def removed_count(self) -> int:
+        return int(self)
+
+    @property
+    def skipped_count(self) -> int:
+        return len(self.skipped)
 
 
 def normalize_fail_reason(
@@ -43,7 +83,7 @@ def normalize_fail_reason_for_status(
     max_length: int = MAX_FAIL_REASON_LENGTH,
 ) -> str | None:
     """Normalize stored/displayed fail reason according to push status."""
-    if status in {"failed", "stopped", "retrying", "skipped"}:
+    if status in {"failed", "stopped", "retrying", "skipped", "discarded"}:
         return normalize_display_fail_reason(reason, max_length=max_length)
     return None
 
@@ -57,6 +97,12 @@ class PushHistory(BaseModel):
 
     id: int | None = Field(default=None, description="数据库ID")
     sub_id: int | None = Field(default=None, description="订阅ID")
+    batch_id: int | None = Field(default=None, description="投递批次 ID")
+    batch_status: str | None = Field(
+        default=None,
+        description="查询时关联的投递批次状态，不落库",
+    )
+    bundle_id: int | None = Field(default=None, description="Bundle ID")
     user_id: str = Field(..., description="用户ID")
     feed_id: int | None = Field(default=None, description="FeedID")
     source_type: str = Field(
@@ -72,6 +118,16 @@ class PushHistory(BaseModel):
     handler_trace: list[dict[str, Any]] | None = Field(
         default=None,
         description="内容 handler 执行摘要",
+    )
+    output_kind: str = Field(
+        default="standard",
+        max_length=16,
+        description="批次输出类型: card/standard",
+    )
+    output_order: int = Field(default=0, ge=0, description="批次内输出顺序")
+    source_context: dict[str, Any] | None = Field(
+        default=None,
+        description="来源不可变快照",
     )
 
     entry_title: str = Field(default="", max_length=1024, description="条目标题")
@@ -91,7 +147,9 @@ class PushHistory(BaseModel):
     status: str | None = Field(
         default=None,
         max_length=16,
-        description="状态: pending/success/failed/stopped/skipped",
+        description=(
+            "状态: waiting/pending/retrying/success/failed/stopped/skipped/discarded"
+        ),
     )
     retry_count: int = Field(default=0, description="重试次数")
     max_retries: int = Field(default=3, description="最大重试次数")
@@ -169,6 +227,15 @@ class PushHistory(BaseModel):
         self.fail_reason = normalize_display_fail_reason(reason)
         return self
 
+    def mark_discarded(self, reason: str | None = None) -> "PushHistory":
+        """标记为随可靠批次被显式丢弃，不再参与重试。"""
+        self.status = "discarded"
+        self.completed_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
+        self.max_retries = 0
+        self.fail_reason = normalize_display_fail_reason(reason)
+        return self
+
     def is_pending(self) -> bool:
         """检查是否处于待推送状态"""
         return self.status == "pending"
@@ -180,3 +247,16 @@ class PushHistory(BaseModel):
     def is_failed(self) -> bool:
         """检查是否推送失败"""
         return self.status == "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class PushHistoryPage:
+    """按 Dashboard 展示单元分页的推送历史结果。
+
+    ``total`` 继续表示历史记录行数；``group_total`` 表示可翻页的逻辑
+    展示单元数量。可靠批次是一组展示单元，普通历史记录各自占一个展示单元。
+    """
+
+    items: list[PushHistory]
+    total: int
+    group_total: int

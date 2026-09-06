@@ -117,3 +117,23 @@
     margin-top: 0;
   }
 }
+
+@media (max-width: 768px) {
+  .resource-grid { grid-template-columns: 1fr; }
+  .resource-page-header { flex-direction: column; gap: 6px; }
+  .resource-toolbar .search-input,
+  .resource-toolbar .resource-user-filter { flex-basis: 100%; max-width: none; }
+  .resource-toolbar .btn { flex: 1 1 auto; }
+  .template-install-toolbar { align-items: stretch; }
+  .template-install-toolbar .btn { flex: 0 0 auto; }
+  .bundle-detail-header { padding: 16px; }
+  .bundle-detail-content { padding: 16px 16px 28px; }
+  .detail-section { padding: 14px; }
+  .detail-summary-grid { grid-template-columns: 1fr; }
+  .bundle-member-row { grid-template-columns: 28px minmax(0, 1fr); }
+  .bundle-member-actions { grid-column: 2; justify-content: flex-start; }
+  .bundle-member-add { align-items: stretch; flex-direction: column; }
+  .bundle-member-add .btn { width: 100%; }
+  .history-batch-heading { align-items: stretch; flex-direction: column; }
+  .history-batch-heading .btn { width: 100%; }
+}

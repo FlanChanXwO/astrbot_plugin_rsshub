@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 from astrbot_plugin_rsshub.src.application.commands.export_subscriptions_cmd import (
     ExportSubscriptionsCommand,
@@ -159,7 +161,28 @@ class TestTOMLRoundtrip:
             "title": "Configured",
             "handlers": '[{"id":"builtin.ai_transform.default","type":"builtin","name":"ai_transform","status":1,"config":{"prompt":"总结为三条要点","scope":"plaintext"}}]',
             "handlers_mode": "override",
+            "send_card": False,
+            "card_send_original_content": False,
         }
+
+    def test_roundtrip_preserves_subscription_card_options(self) -> None:
+        record = make_export_record(
+            send_card=True,
+            template_id="astrbot_plugin_rsshub_card_example",
+            card_send_original_content=True,
+        )
+
+        content = serialize_subscriptions_to_toml(
+            user_id="user-001",
+            records=[record],
+        )
+        payload = parse_subscriptions_toml(content)
+
+        assert payload.errors == []
+        options = payload.records[0].options
+        assert options["send_card"] is True
+        assert options["template_id"] == "astrbot_plugin_rsshub_card_example"
+        assert options["card_send_original_content"] is True
 
     def test_parse_legacy_send_mode_telegraph_is_migrated_to_auto(self) -> None:
         payload = parse_subscriptions_toml(
@@ -452,6 +475,109 @@ class TestImportCommand:
 
         assert result.success is True
         assert user_repo.calls == ["user-001"]
+
+    @pytest.mark.asyncio
+    async def test_import_validates_card_configuration_before_save(self) -> None:
+        saved: list[Subscription] = []
+
+        class SubscriptionRepo:
+            async def get_by_user_feed_session(self, *_args) -> None:
+                return None
+
+            async def save(self, subscription: Subscription) -> Subscription:
+                saved.append(subscription)
+                subscription.id = 7
+                return subscription
+
+        feed = Feed(
+            id=1,
+            link="https://example.com/feed.xml",
+            title="Example Feed",
+        )
+
+        class FeedRepo:
+            async def get_by_link(self, _link: str) -> Feed:
+                return feed
+
+        card_management_service = AsyncMock()
+        command = ImportSubscriptionsCommand(
+            subscription_repo=SubscriptionRepo(),
+            feed_repo=FeedRepo(),
+            card_management_service=card_management_service,
+        )
+
+        result = await command.execute(
+            """
+            format = "astrbot-rsshub-subscriptions"
+            version = 2
+            [[subscriptions]]
+            link = "https://example.com/feed.xml"
+            send_card = true
+            template_id = "astrbot_plugin_rsshub_card_example"
+            card_send_original_content = true
+            """,
+            user_id="user-001",
+        )
+
+        assert result.success is True
+        candidate = (
+            card_management_service.validate_owner_configuration.await_args.args[0]
+        )
+        assert candidate.send_card is True
+        assert candidate.template_id == "astrbot_plugin_rsshub_card_example"
+        assert candidate.card_send_original_content is True
+        assert saved == [candidate]
+        card_management_service.validate_owner_configuration.assert_awaited_once_with(
+            candidate,
+            feed,
+        )
+
+    @pytest.mark.asyncio
+    async def test_import_reports_card_configuration_errors_as_configuration_errors(
+        self,
+    ) -> None:
+        from astrbot_plugin_rsshub.src.application.services.subscription_card_management_service import (
+            SubscriptionCardConfigurationError,
+        )
+
+        class SubscriptionRepo:
+            async def get_by_user_feed_session(self, *_args) -> None:
+                return None
+
+            async def save(self, subscription: Subscription) -> Subscription:
+                raise AssertionError("invalid card configuration must not be saved")
+
+        feed = Feed(id=1, link="https://example.com/feed.xml", title="Example Feed")
+
+        class FeedRepo:
+            async def get_by_link(self, _link: str) -> Feed:
+                return feed
+
+        card_management_service = AsyncMock()
+        card_management_service.validate_owner_configuration.side_effect = (
+            SubscriptionCardConfigurationError("卡片模板配置无效")
+        )
+        command = ImportSubscriptionsCommand(
+            subscription_repo=SubscriptionRepo(),
+            feed_repo=FeedRepo(),
+            card_management_service=card_management_service,
+        )
+
+        result = await command.execute(
+            """
+            format = "astrbot-rsshub-subscriptions"
+            version = 2
+            [[subscriptions]]
+            link = "https://example.com/feed.xml"
+            send_card = true
+            template_id = "astrbot_plugin_rsshub_card_missing"
+            """,
+            user_id="user-001",
+        )
+
+        assert result.success is False
+        assert "卡片配置" in result.data.items[0].message
+        assert "无效的 URL" not in result.data.items[0].message
 
 
 def test_subscription_model_dump_does_not_include_feed_relation() -> None:

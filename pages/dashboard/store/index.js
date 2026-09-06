@@ -7,6 +7,8 @@ import { lifecycleModule } from './modules/lifecycle.js';
 import { filterModule } from './modules/filters.js';
 import { overviewModule } from './modules/overview.js';
 import { subscriptionsModule } from './modules/subscriptions.js';
+import { bundlesModule } from './modules/bundles.js';
+import { templatesModule } from './modules/templates.js';
 import { usersModule } from './modules/users.js';
 import { feedsModule } from './modules/feeds.js';
 import { pushHistoryModule } from './modules/push-history.js';
@@ -26,6 +28,8 @@ export function createDashboardStore(PetiteVue) {
     ...filterModule,
     ...overviewModule,
     ...subscriptionsModule,
+    ...bundlesModule,
+    ...templatesModule,
     ...usersModule,
     ...feedsModule,
     ...pushHistoryModule,

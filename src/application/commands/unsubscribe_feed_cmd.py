@@ -4,6 +4,8 @@
 处理用户取消订阅 RSS 源的业务用例。
 """
 
+from ...domain.entities.delivery import DeliveryOwner
+from ...domain.repositories.delivery_repository import DeliveryDeletionBlockedError
 from ...domain.repositories.feed_repository import FeedRepository
 from ...domain.repositories.subscription_repository import SubscriptionRepository
 from ..dto.result_dto import CommandResult
@@ -20,9 +22,11 @@ class UnsubscribeFeedCommand:
         self,
         subscription_repo: SubscriptionRepository,
         feed_repo: FeedRepository,
+        delivery_repo=None,
     ):
         self._subscription_repo = subscription_repo
         self._feed_repo = feed_repo
+        self._delivery_repo = delivery_repo
 
     async def execute(
         self,
@@ -68,7 +72,18 @@ class UnsubscribeFeedCommand:
         feed_link = feed.link if feed else ""
         custom_title = f" ({subscription.title})" if subscription.title else ""
 
-        await self._subscription_repo.delete(subscription)
+        if self._delivery_repo is not None:
+            try:
+                await self._delivery_repo.delete_owner(
+                    DeliveryOwner(owner_type="subscription", owner_id=sub_id)
+                )
+            except DeliveryDeletionBlockedError as exc:
+                return CommandResult(
+                    success=False,
+                    message=f"可靠投递数据尚未消费，不能取消订阅: {exc.blocker_counts}",
+                )
+        else:
+            await self._subscription_repo.delete(subscription)
 
         lines = [
             "已取消的订阅列表（当前会话）:",
@@ -113,7 +128,15 @@ class UnsubscribeFeedCommand:
                 )
                 if not (is_owner or is_current_session):
                     continue
-            await self._subscription_repo.delete(sub)
+            if self._delivery_repo is not None:
+                try:
+                    await self._delivery_repo.delete_owner(
+                        DeliveryOwner(owner_type="subscription", owner_id=sub.id)
+                    )
+                except DeliveryDeletionBlockedError:
+                    continue
+            else:
+                await self._subscription_repo.delete(sub)
             deleted += 1
 
         if deleted == 0:

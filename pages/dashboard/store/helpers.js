@@ -149,6 +149,13 @@ export function createEmptyEditForm() {
     display_media: -100,
     handlers_mode: 'inherit',
     handlers_json: '[]',
+    send_card: false,
+    template_id: '',
+    card_send_original_content: false,
+    template_options: [],
+    template_options_loading: false,
+    card_error: '',
+    card_preview: null,
   };
 }
 
@@ -176,6 +183,13 @@ export function createEditFormFromSub(sub) {
     style: sub.style ?? -100,
     display_media: sub.display_media ?? -100,
     handlers_mode: sub.handlers_mode || 'inherit',
+    send_card: Boolean(sub.send_card),
+    template_id: sub.template_id || '',
+    card_send_original_content: Boolean(sub.card_send_original_content),
+    template_options: [],
+    template_options_loading: false,
+    card_error: '',
+    card_preview: null,
     ...handlersToEditorState(sub.handlers),
   };
 }

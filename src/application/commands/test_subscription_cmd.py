@@ -158,6 +158,9 @@ class TestSubscriptionCommand:
             target_session=subscription.target_session,
             platform_name=subscription.platform_name,
             state=subscription.state,
+            send_card=subscription.send_card,
+            template_id=subscription.template_id,
+            card_send_original_content=subscription.card_send_original_content,
             created_at=subscription.created_at,
             updated_at=subscription.updated_at,
         )
